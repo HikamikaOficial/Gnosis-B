@@ -4,7 +4,7 @@ the Director expects, or round-tripped as JSON for a future MCP transport."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -17,7 +17,7 @@ class ReportStatus(str, Enum):
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 @dataclass(frozen=True)
@@ -64,7 +64,7 @@ class EngineerReport:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "EngineerReport":
+    def from_dict(cls, data: dict[str, Any]) -> EngineerReport:
         return cls(
             task_id=data["task_id"],
             run_id=data["run_id"],

@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, json, os, re, subprocess
+
+import argparse
+import json
+import os
+import re
+import subprocess
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -14,10 +19,10 @@ def norm_remote(url: str | None) -> str | None:
     if not url:
         return None
     u = url.strip()
-    m = re.match(r"(?:ssh://)?git@github\.com[:/](.+?)(?:\.git)?$", u, re.I)
+    m = re.match(r"(?:ssh://)?git@github\.com[:/](.+?)(?:\.git)?$", u, re.IGNORECASE)
     if m:
         return "github.com/" + m.group(1).removesuffix(".git").strip("/").lower()
-    m = re.search(r"github\.com/(.+)", u, re.I)
+    m = re.search(r"github\.com/(.+)", u, re.IGNORECASE)
     if m:
         tail = m.group(1).split("#",1)[0].split("?",1)[0].removesuffix(".git").strip("/")
         return "github.com/" + tail.lower()

@@ -1,11 +1,9 @@
-import shutil
 import unittest
 from pathlib import Path
 
 from gnosis.kernel.code_intelligence import (
     CodeIntelligenceUnavailable,
     ImpactResult,
-    IndexStatus,
     NullCodeIntelligenceProvider,
     SymbolLocation,
 )

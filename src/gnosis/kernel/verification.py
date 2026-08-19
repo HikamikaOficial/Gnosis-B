@@ -11,10 +11,10 @@ import shlex
 import subprocess
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Sequence, Union
 
 from .redaction import redact
 
@@ -23,11 +23,11 @@ from .redaction import redact
 class VerificationResult:
     name: str
     passed: bool
-    exit_code: "int | None"
+    exit_code: int | None
     duration_s: float
     stdout_excerpt: str
     stderr_excerpt: str
-    ts: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    ts: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def to_dict(self) -> dict:
         return {
@@ -48,7 +48,7 @@ class Verifier(ABC):
 class CommandVerifier(Verifier):
     """Runs a shell command and treats a zero exit code as passing."""
 
-    def __init__(self, name: str, command: Union[Sequence[str], str], timeout_s: float = 300.0,
+    def __init__(self, name: str, command: Sequence[str] | str, timeout_s: float = 300.0,
                  excerpt_chars: int = 2000):
         self.name = name
         self.command = command

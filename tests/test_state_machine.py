@@ -1,7 +1,11 @@
 import unittest
 
 from gnosis.kernel.state_machine import (
-    IllegalTransitionError, RunState, RunStateMachine, TaskState, TaskStateMachine,
+    IllegalTransitionError,
+    RunState,
+    RunStateMachine,
+    TaskState,
+    TaskStateMachine,
 )
 
 

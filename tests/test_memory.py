@@ -1,3 +1,4 @@
+import time
 import unittest
 
 from gnosis.kernel.memory import (
@@ -9,8 +10,6 @@ from gnosis.kernel.memory import (
     NullMemoryProvider,
     validate_memory_transition,
 )
-import time
-
 from gnosis.kernel.memory_reference import InMemoryMemoryProvider
 from gnosis.kernel.memory_router import MemoryRouter
 

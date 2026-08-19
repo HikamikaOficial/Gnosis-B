@@ -9,19 +9,19 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any
 
 
 @dataclass(frozen=True)
 class GitEvidence:
     is_repo: bool
-    head_sha: Optional[str]
-    branch: Optional[str]
+    head_sha: str | None
+    branch: str | None
     status_porcelain: str
     diff_stat: str
-    ts: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    ts: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -30,7 +30,7 @@ class GitEvidence:
         }
 
 
-def _run_git(repo_path: Path, args: list[str]) -> Tuple[int, str]:
+def _run_git(repo_path: Path, args: list[str]) -> tuple[int, str]:
     try:
         proc = subprocess.run(
             ["git", *args], cwd=str(repo_path), capture_output=True, text=True, timeout=30,

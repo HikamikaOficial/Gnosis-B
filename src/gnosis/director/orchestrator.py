@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from ..contracts.engineer_report import EngineerReport, ReportStatus
 from ..kernel.engine import TaskEngine, TaskExecutionOutcome
@@ -34,11 +33,11 @@ from .inbox import DirectorInbox
 
 @dataclass(frozen=True)
 class IngestOutcome:
-    brief_id: Optional[str]
-    task_id: Optional[str]
+    brief_id: str | None
+    task_id: str | None
     accepted: bool
     reason: str
-    execution: Optional[TaskExecutionOutcome] = None
+    execution: TaskExecutionOutcome | None = None
 
 
 class DirectorOrchestrator:
@@ -47,7 +46,7 @@ class DirectorOrchestrator:
         director_root: Path,
         run_store: RunStore,
         repo_path: Path,
-        task_engine: Optional[TaskEngine] = None,
+        task_engine: TaskEngine | None = None,
         prompt_builder=None,
     ):
         self.inbox = DirectorInbox(director_root)
@@ -60,7 +59,7 @@ class DirectorOrchestrator:
         # rendering good enough for M1 plumbing tests.
         self.prompt_builder = prompt_builder or _default_prompt_builder
 
-    def run_pending(self, verifier: Optional[Verifier] = None) -> list[IngestOutcome]:
+    def run_pending(self, verifier: Verifier | None = None) -> list[IngestOutcome]:
         outcomes: list[IngestOutcome] = []
         for path in self.inbox.list_pending():
             claim = self.inbox.claim(path)
@@ -70,7 +69,7 @@ class DirectorOrchestrator:
             outcomes.append(self._execute_brief(claim.brief, verifier=verifier))
         return outcomes
 
-    def _execute_brief(self, brief, verifier: Optional[Verifier]) -> IngestOutcome:
+    def _execute_brief(self, brief, verifier: Verifier | None) -> IngestOutcome:
         task_id = new_task_id()
         self.records.create(brief.brief_id, task_id, BriefRecordState.ASSIGNED)
         self.records.update(brief.brief_id, state=BriefRecordState.IN_PROGRESS)

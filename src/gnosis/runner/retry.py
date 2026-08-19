@@ -3,8 +3,9 @@ retry loops" rule at the type level: max_attempts is required and finite."""
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Generic, Optional, TypeVar
+from typing import Generic, TypeVar
 
 T = TypeVar("T")
 
@@ -36,7 +37,7 @@ def execute_with_retry(
     attempt_fn: Callable[[int], T],
     should_retry: Callable[[T], bool],
     policy: RetryPolicy,
-    on_attempt: Optional[Callable[["AttemptRecord[T]"], None]] = None,
+    on_attempt: Callable[[AttemptRecord[T]], None] | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> list:
     """Call attempt_fn(attempt_number) up to policy.max_attempts times.

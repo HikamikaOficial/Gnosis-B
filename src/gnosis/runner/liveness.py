@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import platform
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 _STALE_TOLERANCE_S = 2.0
 
@@ -24,13 +24,13 @@ _STALE_TOLERANCE_S = 2.0
 @dataclass(frozen=True)
 class ProcessFingerprint:
     pid: int
-    start_time: Optional[float]
+    start_time: float | None
 
     def to_dict(self) -> dict[str, Any]:
         return {"pid": self.pid, "start_time": self.start_time}
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ProcessFingerprint":
+    def from_dict(cls, data: dict[str, Any]) -> ProcessFingerprint:
         return cls(pid=data["pid"], start_time=data.get("start_time"))
 
 
@@ -53,7 +53,7 @@ def is_alive(fingerprint: ProcessFingerprint) -> bool:
     return abs(current_start - fingerprint.start_time) < _STALE_TOLERANCE_S
 
 
-def _process_start_time(pid: int) -> Optional[float]:
+def _process_start_time(pid: int) -> float | None:
     if platform.system() == "Windows":
         return _windows_process_start_time(pid)
     return _posix_process_start_time(pid)
@@ -88,7 +88,7 @@ def _windows_pid_exists(pid: int) -> bool:
         return False
 
 
-def _windows_process_start_time(pid: int) -> Optional[float]:
+def _windows_process_start_time(pid: int) -> float | None:
     try:
         import ctypes
         from ctypes import wintypes
@@ -120,7 +120,7 @@ def _windows_process_start_time(pid: int) -> Optional[float]:
         return None
 
 
-def _posix_process_start_time(pid: int) -> Optional[float]:
+def _posix_process_start_time(pid: int) -> float | None:
     try:
         with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as fh:
             fields = fh.read().split()
@@ -134,7 +134,7 @@ def _posix_process_start_time(pid: int) -> Optional[float]:
         return None
 
 
-def _posix_boot_time() -> Optional[float]:
+def _posix_boot_time() -> float | None:
     try:
         with open("/proc/stat", "r", encoding="utf-8") as fh:
             for line in fh:

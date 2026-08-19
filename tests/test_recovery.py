@@ -1,9 +1,7 @@
 import json
-import subprocess
-import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from gnosis.kernel.run_store import RunStore
@@ -28,7 +26,7 @@ class TestRecoveryManager(unittest.TestCase):
         # "alive", it is really this test process, so staleness must be
         # the signal that trips here.
         fp = current_fingerprint()
-        stale_ts = (datetime.now(timezone.utc) - timedelta(seconds=999)).isoformat()
+        stale_ts = (datetime.now(UTC) - timedelta(seconds=999)).isoformat()
         payload = {"ts": stale_ts, **fp.to_dict()}
         self.store.paths_for("RUN-1").heartbeat.write_text(json.dumps(payload))
 
@@ -46,7 +44,7 @@ class TestRecoveryManager(unittest.TestCase):
         # A PID far outside any plausible live range: no process, so the
         # fresh timestamp alone must not save it from being flagged.
         dead_fp = ProcessFingerprint(pid=999_999_999, start_time=None)
-        fresh_ts = datetime.now(timezone.utc).isoformat()
+        fresh_ts = datetime.now(UTC).isoformat()
         self.store.paths_for("RUN-1").heartbeat.write_text(
             json.dumps({"ts": fresh_ts, **dead_fp.to_dict()})
         )
@@ -65,7 +63,7 @@ class TestRecoveryManager(unittest.TestCase):
         # match, simulating the PID having been reused by a different
         # process than the one that actually owned this run.
         mismatched = ProcessFingerprint(pid=fp.pid, start_time=(fp.start_time or 0) - 99999)
-        fresh_ts = datetime.now(timezone.utc).isoformat()
+        fresh_ts = datetime.now(UTC).isoformat()
         self.store.paths_for("RUN-1").heartbeat.write_text(
             json.dumps({"ts": fresh_ts, **mismatched.to_dict()})
         )

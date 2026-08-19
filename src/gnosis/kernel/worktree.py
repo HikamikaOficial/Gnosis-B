@@ -16,9 +16,8 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 from .git_evidence import GitEvidence, capture_git_evidence
 
@@ -30,7 +29,7 @@ class WorktreeError(RuntimeError):
 @dataclass(frozen=True)
 class WorktreeHandle:
     task_id: str
-    run_id: Optional[str]
+    run_id: str | None
     source_repo: str
     path: str
     branch: str
@@ -43,7 +42,7 @@ class WorktreeHandle:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "WorktreeHandle":
+    def from_dict(cls, data: dict) -> WorktreeHandle:
         return cls(**data)
 
 
@@ -61,7 +60,7 @@ class WorktreeManager:
         self.worktrees_root = Path(worktrees_root)
         self.worktrees_root.mkdir(parents=True, exist_ok=True)
 
-    def create(self, task_id: str, run_id: Optional[str] = None, base_ref: str = "HEAD") -> WorktreeHandle:
+    def create(self, task_id: str, run_id: str | None = None, base_ref: str = "HEAD") -> WorktreeHandle:
         evidence = capture_git_evidence(self.source_repo)
         if not evidence.is_repo:
             raise WorktreeError(f"{self.source_repo} is not a git repository")
@@ -78,7 +77,7 @@ class WorktreeManager:
         handle = WorktreeHandle(
             task_id=task_id, run_id=run_id, source_repo=str(self.source_repo),
             path=str(target), branch=branch,
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
         )
         # The handle marker lives *outside* the checked-out tree
         # (worktrees_root/<task_id>.json), not inside it, so writing it

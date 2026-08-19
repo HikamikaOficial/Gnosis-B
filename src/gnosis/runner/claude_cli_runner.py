@@ -12,10 +12,10 @@ import json
 import subprocess
 import threading
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, Optional, Sequence
 
 from .capture import ExecutionResult
 
@@ -71,13 +71,13 @@ class CLIRunner:
         stdout_path: Path,
         stderr_path: Path,
         timeout_s: float,
-        cancellation_token: Optional[CancellationToken] = None,
-        heartbeat_fn: Optional[Callable[[int], None]] = None,
+        cancellation_token: CancellationToken | None = None,
+        heartbeat_fn: Callable[[int], None] | None = None,
         heartbeat_interval_s: float = 5.0,
     ) -> ExecutionResult:
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
         stderr_path.parent.mkdir(parents=True, exist_ok=True)
-        started_at = datetime.now(timezone.utc).isoformat()
+        started_at = datetime.now(UTC).isoformat()
         start_monotonic = time.monotonic()
 
         with stdout_path.open("wb") as out_fh, stderr_path.open("wb") as err_fh:
@@ -114,7 +114,7 @@ class CLIRunner:
                             proc.wait()
                         break
 
-        ended_at = datetime.now(timezone.utc).isoformat()
+        ended_at = datetime.now(UTC).isoformat()
         duration = time.monotonic() - start_monotonic
 
         return ExecutionResult(
@@ -127,19 +127,19 @@ class CLIRunner:
 class ClaudeCodeCLIRunner:
     """Invokes the local Claude Code CLI in non-interactive print mode."""
 
-    def __init__(self, binary: str = "claude", cli_runner: Optional[CLIRunner] = None):
+    def __init__(self, binary: str = "claude", cli_runner: CLIRunner | None = None):
         self.binary = binary
         self._cli_runner = cli_runner or CLIRunner()
 
     def build_argv(
         self,
         prompt: str,
-        session_id: Optional[str] = None,
+        session_id: str | None = None,
         permission_mode: str = "plan",
         output_format: str = "json",
-        model: Optional[str] = None,
-        mcp: Optional[McpRunnerConfig] = None,
-        extra_args: Optional[Sequence[str]] = None,
+        model: str | None = None,
+        mcp: McpRunnerConfig | None = None,
+        extra_args: Sequence[str] | None = None,
     ) -> list[str]:
         argv = [self.binary, "-p", prompt, "--output-format", output_format]
         if session_id:
@@ -163,13 +163,13 @@ class ClaudeCodeCLIRunner:
         stdout_path: Path,
         stderr_path: Path,
         timeout_s: float = DEFAULT_TIMEOUT_S,
-        session_id: Optional[str] = None,
+        session_id: str | None = None,
         permission_mode: str = "plan",
-        model: Optional[str] = None,
-        mcp: Optional[McpRunnerConfig] = None,
-        extra_args: Optional[Sequence[str]] = None,
-        cancellation_token: Optional[CancellationToken] = None,
-        heartbeat_fn: Optional[Callable[[int], None]] = None,
+        model: str | None = None,
+        mcp: McpRunnerConfig | None = None,
+        extra_args: Sequence[str] | None = None,
+        cancellation_token: CancellationToken | None = None,
+        heartbeat_fn: Callable[[int], None] | None = None,
     ) -> ExecutionResult:
         argv = self.build_argv(
             prompt, session_id=session_id, permission_mode=permission_mode,

@@ -16,8 +16,8 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Callable, Optional, Sequence, Tuple
 
 from .code_intelligence import (
     CodeIntelligenceProvider,
@@ -48,7 +48,7 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
-def _parse_symbol_entries(text: str) -> Tuple[SymbolLocation, ...]:
+def _parse_symbol_entries(text: str) -> tuple[SymbolLocation, ...]:
     """Shared parser for callers/callees/query output (all three use the
     same "<kind>  <name>" + indented "<file>:<line>" two-line shape, with
     an optional ignored third line). Non-symbol kinds ("file", "import")
@@ -70,11 +70,11 @@ def _parse_symbol_entries(text: str) -> Tuple[SymbolLocation, ...]:
     return tuple(results)
 
 
-def _parse_impact_entries(text: str) -> Tuple[SymbolLocation, ...]:
+def _parse_impact_entries(text: str) -> tuple[SymbolLocation, ...]:
     """Parses `impact` output: a file-path header line followed by one or
     more "<kind>    <name>:<line>" lines."""
     results: list = []
-    current_file: Optional[str] = None
+    current_file: str | None = None
     for raw_line in _strip_ansi(text).splitlines():
         line = raw_line.rstrip()
         if not line:
@@ -123,7 +123,7 @@ def _parse_status(text: str) -> IndexStatus:
     )
 
 
-def _extract_related_symbols(explore_text: str) -> Tuple[str, ...]:
+def _extract_related_symbols(explore_text: str) -> tuple[str, ...]:
     """Best-effort extraction of symbol names mentioned in an `explore`
     response's "Blast radius" bullet list (backtick-quoted names). The
     text itself remains authoritative; this is a convenience index."""
@@ -139,7 +139,7 @@ class CodegraphMcpAdapter(CodeIntelligenceProvider):
         repo_path: Path,
         node_binary: str = "node",
         codegraph_js: str = "codegraph",
-        command_runner: Optional[CommandRunner] = None,
+        command_runner: CommandRunner | None = None,
         timeout_s: float = 120.0,
     ):
         self.repo_path = repo_path
@@ -172,13 +172,13 @@ class CodegraphMcpAdapter(CodeIntelligenceProvider):
         except CodeIntelligenceUnavailable:
             return IndexStatus(available=False, stale=True, detail="Provider unavailable.")
 
-    def find(self, query: str) -> Tuple[SymbolLocation, ...]:
+    def find(self, query: str) -> tuple[SymbolLocation, ...]:
         return _parse_symbol_entries(self._run(["query", query]))
 
-    def callers(self, symbol: str) -> Tuple[SymbolLocation, ...]:
+    def callers(self, symbol: str) -> tuple[SymbolLocation, ...]:
         return _parse_symbol_entries(self._run(["callers", symbol]))
 
-    def callees(self, symbol: str) -> Tuple[SymbolLocation, ...]:
+    def callees(self, symbol: str) -> tuple[SymbolLocation, ...]:
         return _parse_symbol_entries(self._run(["callees", symbol]))
 
     def impact(self, symbol: str) -> ImpactResult:

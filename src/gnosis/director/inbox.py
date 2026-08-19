@@ -28,7 +28,6 @@ import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from ..contracts.director_brief import DirectorBrief
 
@@ -47,7 +46,7 @@ class DirectorInboxLayout:
 
 @dataclass(frozen=True)
 class ClaimResult:
-    brief: Optional[DirectorBrief]
+    brief: DirectorBrief | None
     accepted: bool
     reason: str
 

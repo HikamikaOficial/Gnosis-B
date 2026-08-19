@@ -21,7 +21,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import IO
 
 if sys.platform == "win32":
     import msvcrt
@@ -47,7 +47,7 @@ class FileLock:
         self.path = path
         self.timeout_s = timeout_s
         self.poll_interval_s = poll_interval_s
-        self._fh = None
+        self._fh: IO[bytes] | None = None
 
     def acquire(self) -> None:
         if self._fh is not None:
@@ -77,7 +77,7 @@ class FileLock:
             self._fh.close()
             self._fh = None
 
-    def __enter__(self) -> "FileLock":
+    def __enter__(self) -> FileLock:
         self.acquire()
         return self
 

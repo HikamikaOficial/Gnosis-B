@@ -4,7 +4,7 @@ at construction rather than drifting silently through the kernel."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -15,7 +15,7 @@ class BriefSource(str, Enum):
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 @dataclass(frozen=True)
@@ -60,7 +60,7 @@ class DirectorBrief:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "DirectorBrief":
+    def from_dict(cls, data: dict[str, Any]) -> DirectorBrief:
         return cls(
             brief_id=data["brief_id"],
             title=data["title"],

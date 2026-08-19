@@ -5,8 +5,7 @@ import unittest
 from pathlib import Path
 
 from gnosis.contracts.director_brief import BriefSource, DirectorBrief
-from gnosis.contracts.engineer_report import ReportStatus
-from gnosis.director.brief_record import BriefRecordState, BriefRecordStore
+from gnosis.director.brief_record import BriefRecordState
 from gnosis.director.orchestrator import DirectorOrchestrator
 from gnosis.kernel.engine import TaskEngine
 from gnosis.kernel.run_store import RunStore

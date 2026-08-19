@@ -17,11 +17,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from datetime import UTC, datetime
 
 from .memory import (
-    MemoryEvidence,
     MemoryInfluence,
     MemoryProvider,
     MemoryQuery,
@@ -35,7 +33,7 @@ from .memory import (
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _new_id(prefix: str, counter: int) -> str:
@@ -44,9 +42,9 @@ def _new_id(prefix: str, counter: int) -> str:
 
 class InMemoryMemoryProvider(MemoryProvider):
     def __init__(self):
-        self._records: Dict[str, MemoryRecord] = {}
-        self._history: Dict[str, List[MemoryRevision]] = {}
-        self._influences: Dict[str, MemoryInfluence] = {}
+        self._records: dict[str, MemoryRecord] = {}
+        self._history: dict[str, list[MemoryRevision]] = {}
+        self._influences: dict[str, MemoryInfluence] = {}
         self._counter = 0
 
     def _next_id(self, prefix: str) -> str:
@@ -133,7 +131,7 @@ class InMemoryMemoryProvider(MemoryProvider):
         return record
 
     def query(self, query):
-        candidates: List[MemoryRecord] = []
+        candidates: list[MemoryRecord] = []
         for record in self._records.values():
             if record.status == MemoryStatus.REVOKED:
                 continue  # never surfaced, even historically -- see why()/history() for audit

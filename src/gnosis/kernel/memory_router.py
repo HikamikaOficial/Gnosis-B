@@ -11,8 +11,8 @@ be clever about ranking -- ranking is each provider's job.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 from .memory import MemoryProvider, MemoryQuery, MemoryResult, MemoryUnavailable
 
@@ -20,8 +20,8 @@ from .memory import MemoryProvider, MemoryQuery, MemoryResult, MemoryUnavailable
 @dataclass(frozen=True)
 class MemoryRouterResult:
     query_text: str
-    results_by_role: Dict[str, MemoryResult]
-    failures_by_role: Dict[str, str]
+    results_by_role: dict[str, MemoryResult]
+    failures_by_role: dict[str, str]
     total_records_included: int
 
     def to_dict(self) -> dict:
@@ -34,8 +34,8 @@ class MemoryRouterResult:
 
 
 class MemoryRouter:
-    def __init__(self, providers: Optional[Dict[str, MemoryProvider]] = None):
-        self.providers: Dict[str, MemoryProvider] = dict(providers or {})
+    def __init__(self, providers: dict[str, MemoryProvider] | None = None):
+        self.providers: dict[str, MemoryProvider] = dict(providers or {})
 
     def register(self, role: str, provider: MemoryProvider) -> None:
         self.providers[role] = provider
@@ -43,10 +43,10 @@ class MemoryRouter:
     def gather_context(
         self,
         query_text: str,
-        roles: Optional[Sequence[str]] = None,
+        roles: Sequence[str] | None = None,
         max_records_per_role: int = 3,
         max_total_records: int = 8,
-        as_of: Optional[str] = None,
+        as_of: str | None = None,
     ) -> MemoryRouterResult:
         """Never raises: a provider failure is recorded per-role and does
         not prevent the other roles from contributing. Total records
@@ -55,8 +55,8 @@ class MemoryRouter:
         task-integration layer can drive with a smarter number, exactly
         like max_context_chars in the code-intelligence path."""
         selected_roles = list(roles) if roles is not None else list(self.providers.keys())
-        results: Dict[str, MemoryResult] = {}
-        failures: Dict[str, str] = {}
+        results: dict[str, MemoryResult] = {}
+        failures: dict[str, str] = {}
         total_included = 0
 
         for role in selected_roles:

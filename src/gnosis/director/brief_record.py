@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from ..kernel.atomic_io import atomic_write_text
 from ..kernel.file_lock import FileLock, lock_path_for
@@ -37,8 +37,8 @@ class BriefRecord:
     created_at: str
     updated_at: str
     run_ids: list = field(default_factory=list)
-    report_path: Optional[str] = None
-    error: Optional[str] = None
+    report_path: str | None = None
+    error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -48,7 +48,7 @@ class BriefRecord:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "BriefRecord":
+    def from_dict(cls, data: dict[str, Any]) -> BriefRecord:
         return cls(
             brief_id=data["brief_id"], task_id=data["task_id"], state=data["state"],
             created_at=data["created_at"], updated_at=data["updated_at"],
@@ -72,7 +72,7 @@ class BriefRecordStore:
         return self._path(brief_id).exists()
 
     def create(self, brief_id: str, task_id: str, state: BriefRecordState) -> BriefRecord:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         record = BriefRecord(
             brief_id=brief_id, task_id=task_id, state=state.value,
             created_at=now, updated_at=now,
@@ -90,7 +90,7 @@ class BriefRecordStore:
             record = self.get(brief_id)
             for key, value in changes.items():
                 setattr(record, key, value.value if isinstance(value, Enum) else value)
-            record.updated_at = datetime.now(timezone.utc).isoformat()
+            record.updated_at = datetime.now(UTC).isoformat()
             self._write(record)
             return record
 

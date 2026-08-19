@@ -23,8 +23,7 @@ need task-level context.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from ..kernel.run_store import RunStore
 from ..kernel.state_machine import RunState
@@ -35,9 +34,9 @@ from .liveness import ProcessFingerprint, is_alive
 class CrashReport:
     run_id: str
     task_id: str
-    last_heartbeat_ts: Optional[str]
-    stale_for_s: Optional[float]
-    process_alive: Optional[bool]
+    last_heartbeat_ts: str | None
+    stale_for_s: float | None
+    process_alive: bool | None
     reason: str
 
 
@@ -80,14 +79,14 @@ class RecoveryManager:
                 ))
         return crashed
 
-    def _staleness(self, heartbeat: Optional[dict]) -> Optional[float]:
+    def _staleness(self, heartbeat: dict | None) -> float | None:
         if not heartbeat or not heartbeat.get("ts"):
             return None
         ts = datetime.fromisoformat(heartbeat["ts"])
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         return (now - ts).total_seconds()
 
-    def _process_alive(self, heartbeat: Optional[dict]) -> Optional[bool]:
+    def _process_alive(self, heartbeat: dict | None) -> bool | None:
         if not heartbeat or "pid" not in heartbeat:
             return None
         fingerprint = ProcessFingerprint.from_dict(heartbeat)

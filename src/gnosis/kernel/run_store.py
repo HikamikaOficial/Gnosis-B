@@ -23,9 +23,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from .atomic_io import atomic_write_text
 from .file_lock import FileLock, lock_path_for
@@ -49,7 +49,7 @@ class RunMeta:
         return d
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "RunMeta":
+    def from_dict(cls, data: dict[str, Any]) -> RunMeta:
         return cls(**data)
 
 
@@ -79,7 +79,7 @@ class RunStore:
         paths.root.mkdir(parents=True, exist_ok=False)
         paths.raw_dir.mkdir(parents=True, exist_ok=True)
         paths.git_dir.mkdir(parents=True, exist_ok=True)
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         meta = RunMeta(
             run_id=run_id, task_id=task_id, state=RunState.PENDING.value,
             created_at=now, updated_at=now,
@@ -93,7 +93,7 @@ class RunStore:
         self._write_meta_locked(paths, meta)
 
     def _write_meta_locked(self, paths: RunPaths, meta: RunMeta) -> None:
-        meta.updated_at = datetime.now(timezone.utc).isoformat()
+        meta.updated_at = datetime.now(UTC).isoformat()
         with FileLock(lock_path_for(paths.meta)):
             atomic_write_text(paths.meta, json.dumps(meta.to_dict(), indent=2, sort_keys=True))
 
@@ -109,19 +109,19 @@ class RunStore:
         with FileLock(lock_path_for(paths.meta)):
             meta = RunMeta.from_dict(json.loads(paths.meta.read_text(encoding="utf-8")))
             meta.state = state.value
-            meta.updated_at = datetime.now(timezone.utc).isoformat()
+            meta.updated_at = datetime.now(UTC).isoformat()
             atomic_write_text(paths.meta, json.dumps(meta.to_dict(), indent=2, sort_keys=True))
             return meta
 
-    def heartbeat(self, run_id: str, fingerprint: Optional[Any] = None) -> None:
+    def heartbeat(self, run_id: str, fingerprint: Any | None = None) -> None:
         from ..runner.liveness import ProcessFingerprint, current_fingerprint
 
         paths = self.paths_for(run_id)
         fp: ProcessFingerprint = fingerprint or current_fingerprint()
-        payload = {"ts": datetime.now(timezone.utc).isoformat(), **fp.to_dict()}
+        payload = {"ts": datetime.now(UTC).isoformat(), **fp.to_dict()}
         atomic_write_text(paths.heartbeat, json.dumps(payload))
 
-    def read_heartbeat(self, run_id: str) -> Optional[dict[str, Any]]:
+    def read_heartbeat(self, run_id: str) -> dict[str, Any] | None:
         paths = self.paths_for(run_id)
         if not paths.heartbeat.exists():
             return None

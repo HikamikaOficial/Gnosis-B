@@ -8,16 +8,14 @@ from gnosis.kernel.code_intelligence import (
     CodeIntelligenceProvider,
     CodeIntelligenceUnavailable,
     CompactContext,
-    ImpactResult,
     IndexStatus,
-    SymbolLocation,
 )
 from gnosis.kernel.engine import TaskEngine
-from gnosis.runner.claude_cli_runner import McpRunnerConfig
 from gnosis.kernel.run_store import RunStore
 from gnosis.kernel.state_machine import RunState, TaskState
 from gnosis.kernel.verification import CommandVerifier
 from gnosis.runner.capture import ExecutionResult
+from gnosis.runner.claude_cli_runner import McpRunnerConfig
 from gnosis.runner.retry import RetryPolicy
 
 _FAST_RETRY = RetryPolicy(max_attempts=3, backoff_base_s=0.01, backoff_factor=2.0, max_backoff_s=0.02)

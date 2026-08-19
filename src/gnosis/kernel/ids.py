@@ -9,14 +9,14 @@ database.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 _TASK_PREFIX = "TASK"
 _RUN_PREFIX = "RUN"
 
 
 def _new_id(prefix: str) -> str:
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")[:-3] + "Z"
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")[:-3] + "Z"
     rand = os.urandom(4).hex()
     return f"{prefix}-{ts}-{rand}"
 

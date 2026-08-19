@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any
 
 from ..contracts.engineer_report import EngineerReport, ReportStatus
 from ..runner.capture import ExecutionResult
@@ -25,7 +26,7 @@ from .ids import new_run_id
 from .redaction import redact
 from .run_store import RunStore
 from .state_machine import RunState, TaskState, TaskStateMachine
-from .verification import Verifier, VerificationResult
+from .verification import VerificationResult, Verifier
 
 
 def _gather_code_intelligence_context(
@@ -101,8 +102,8 @@ class TaskExecutionOutcome:
     task_id: str
     run_ids: list
     final_task_state: TaskState
-    verification: Optional[VerificationResult]
-    execution_result: Optional[ExecutionResult]
+    verification: VerificationResult | None
+    execution_result: ExecutionResult | None
     report: EngineerReport
 
 
@@ -114,7 +115,7 @@ class TaskEngine:
         self,
         run_store: RunStore,
         cli_runner: Any = None,
-        retry_policy: Optional[RetryPolicy] = None,
+        retry_policy: RetryPolicy | None = None,
     ):
         self.run_store = run_store
         self.cli_runner = cli_runner or ClaudeCodeCLIRunner()
@@ -126,12 +127,12 @@ class TaskEngine:
         objective: str,
         prompt: str,
         repo_path: Path,
-        verifier: Optional[Verifier] = None,
+        verifier: Verifier | None = None,
         timeout_s: float = 1800.0,
-        cancellation_token: Optional[CancellationToken] = None,
-        mcp: Optional[McpRunnerConfig] = None,
-        code_intelligence: Optional[CodeIntelligenceProvider] = None,
-        focus_symbols: Optional[Sequence[str]] = None,
+        cancellation_token: CancellationToken | None = None,
+        mcp: McpRunnerConfig | None = None,
+        code_intelligence: CodeIntelligenceProvider | None = None,
+        focus_symbols: Sequence[str] | None = None,
         max_context_chars: int = 12000,
     ) -> TaskExecutionOutcome:
         task_sm = TaskStateMachine(TaskState.CREATED)
@@ -140,9 +141,9 @@ class TaskEngine:
 
         pre_git = capture_git_evidence(repo_path)
         run_ids: list = []
-        last_result: Optional[ExecutionResult] = None
+        last_result: ExecutionResult | None = None
 
-        ci_evidence: Optional[dict] = None
+        ci_evidence: dict | None = None
         effective_prompt = prompt
         if code_intelligence is not None and focus_symbols:
             context_block, ci_evidence = _gather_code_intelligence_context(
@@ -208,7 +209,7 @@ class TaskEngine:
             (git_dir / "post.json").write_text(json.dumps(post_git.to_dict(), indent=2), encoding="utf-8")
 
         cli_succeeded = bool(last_result and last_result.succeeded)
-        verification_result: Optional[VerificationResult] = None
+        verification_result: VerificationResult | None = None
 
         if cli_succeeded:
             task_sm.transition(TaskState.VERIFYING)

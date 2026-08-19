@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import json, os, platform, re, shutil, subprocess, sys
+
+import json
+import platform
+import re
+import shutil
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]

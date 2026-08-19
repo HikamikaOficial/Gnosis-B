@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from .file_lock import FileLock, lock_path_for
 
@@ -47,7 +48,7 @@ class LedgerEvent:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "LedgerEvent":
+    def from_dict(cls, data: dict[str, Any]) -> LedgerEvent:
         return cls(
             seq=data["seq"],
             ts=data["ts"],
@@ -73,7 +74,7 @@ class RunLedger:
             next_seq = self._last_seq_locked() + 1
             event = LedgerEvent(
                 seq=next_seq,
-                ts=datetime.now(timezone.utc).isoformat(),
+                ts=datetime.now(UTC).isoformat(),
                 run_id=run_id,
                 event_type=event_type,
                 data=data or {},

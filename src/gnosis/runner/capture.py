@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional, Tuple
+from typing import Any
 
 
 @dataclass(frozen=True)
 class ExecutionResult:
-    command: Tuple[str, ...]
-    exit_code: Optional[int]
+    command: tuple[str, ...]
+    exit_code: int | None
     timed_out: bool
     cancelled: bool
     duration_s: float
@@ -16,7 +16,7 @@ class ExecutionResult:
     stderr_path: str
     started_at: str
     ended_at: str
-    parsed_json: Optional[dict] = None
+    parsed_json: dict | None = None
 
     @property
     def succeeded(self) -> bool:

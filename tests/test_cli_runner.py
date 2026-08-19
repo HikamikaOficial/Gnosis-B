@@ -5,7 +5,7 @@ import time
 import unittest
 from pathlib import Path
 
-from gnosis.runner.claude_cli_runner import CancellationToken, CLIRunner, ClaudeCodeCLIRunner
+from gnosis.runner.claude_cli_runner import CancellationToken, ClaudeCodeCLIRunner, CLIRunner
 
 
 class TestCLIRunner(unittest.TestCase):

@@ -1,8 +1,7 @@
+import tempfile
 import threading
 import unittest
 from pathlib import Path
-
-import tempfile
 
 from gnosis.kernel.ledger import LedgerCorruptionError, RunLedger
 

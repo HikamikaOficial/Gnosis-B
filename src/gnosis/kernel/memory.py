@@ -20,13 +20,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Optional, Tuple
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 class MemoryStatus(str, Enum):
@@ -78,8 +77,8 @@ class MemoryEvidence:
     authored content is trusted enough to skip quarantine)."""
 
     source_kind: str  # "human" | "system" | "tool" | "document" | "agent" | "import"
-    source_uri: Optional[str] = None
-    actor_uri: Optional[str] = None
+    source_uri: str | None = None
+    actor_uri: str | None = None
     confidence: float = 1.0
 
     def to_dict(self) -> dict:
@@ -104,11 +103,11 @@ class MemoryRecord:
     evidence: MemoryEvidence
     created_at: str = field(default_factory=_utc_now_iso)
     updated_at: str = field(default_factory=_utc_now_iso)
-    valid_from: Optional[str] = None
-    valid_to: Optional[str] = None
-    supersedes: Optional[str] = None
-    superseded_by: Optional[str] = None
-    labels: Tuple[str, ...] = field(default_factory=tuple)
+    valid_from: str | None = None
+    valid_to: str | None = None
+    supersedes: str | None = None
+    superseded_by: str | None = None
+    labels: tuple[str, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict:
         return {
@@ -128,8 +127,8 @@ class MemoryQuery:
     Director's T1-vs-current temporal-truth scenario)."""
 
     text: str
-    as_of: Optional[str] = None
-    scope: Optional[str] = None
+    as_of: str | None = None
+    scope: str | None = None
     include_superseded: bool = False
     limit: int = 10
 
@@ -137,7 +136,7 @@ class MemoryQuery:
 @dataclass(frozen=True)
 class MemoryResult:
     query: MemoryQuery
-    records: Tuple[MemoryRecord, ...]
+    records: tuple[MemoryRecord, ...]
     stale: bool = False
 
     def to_dict(self) -> dict:
@@ -155,9 +154,9 @@ class MemoryInfluence:
     root; other providers may leave this None)."""
 
     action_id: str
-    memory_ids: Tuple[str, ...]
+    memory_ids: tuple[str, ...]
     created_at: str = field(default_factory=_utc_now_iso)
-    proof: Optional[str] = None
+    proof: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -176,7 +175,7 @@ class MemoryRevision:
     new_status: MemoryStatus
     reason: str
     changed_at: str = field(default_factory=_utc_now_iso)
-    changed_by: Optional[str] = None
+    changed_by: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -205,7 +204,7 @@ class MemoryProvider(ABC):
     @abstractmethod
     def remember(
         self, content: str, memory_type: str, evidence: MemoryEvidence,
-        valid_from: Optional[str] = None, labels: Tuple[str, ...] = (),
+        valid_from: str | None = None, labels: tuple[str, ...] = (),
     ) -> MemoryRecord:
         """Store a trusted memory; goes ACTIVE immediately."""
         raise NotImplementedError
@@ -213,7 +212,7 @@ class MemoryProvider(ABC):
     @abstractmethod
     def propose(
         self, content: str, memory_type: str, evidence: MemoryEvidence,
-        valid_from: Optional[str] = None, labels: Tuple[str, ...] = (),
+        valid_from: str | None = None, labels: tuple[str, ...] = (),
     ) -> MemoryRecord:
         """Propose a memory that is not yet authorized to influence
         actions; starts QUARANTINED pending promote()/reject()."""
@@ -262,7 +261,7 @@ class MemoryProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def history(self, memory_id: str) -> Tuple[MemoryRevision, ...]:
+    def history(self, memory_id: str) -> tuple[MemoryRevision, ...]:
         """Full status-change audit trail for one memory."""
         raise NotImplementedError
 

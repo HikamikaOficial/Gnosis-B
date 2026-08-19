@@ -20,14 +20,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Tuple
 
 
 @dataclass(frozen=True)
 class SymbolLocation:
     qualified_name: str
     file: str
-    line: Optional[int] = None
+    line: int | None = None
 
     def to_dict(self) -> dict:
         return {"qualified_name": self.qualified_name, "file": self.file, "line": self.line}
@@ -36,7 +35,7 @@ class SymbolLocation:
 @dataclass(frozen=True)
 class ImpactResult:
     changed_symbol: str
-    impacted_symbols: Tuple[SymbolLocation, ...]
+    impacted_symbols: tuple[SymbolLocation, ...]
 
     def to_dict(self) -> dict:
         return {
@@ -75,7 +74,7 @@ class CompactContext:
 
     query: str
     text: str
-    related_symbols: Tuple[str, ...] = field(default_factory=tuple)
+    related_symbols: tuple[str, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict:
         return {"query": self.query, "text": self.text, "related_symbols": list(self.related_symbols)}
@@ -107,17 +106,17 @@ class CodeIntelligenceProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def find(self, query: str) -> Tuple[SymbolLocation, ...]:
+    def find(self, query: str) -> tuple[SymbolLocation, ...]:
         """Symbol/definition lookup by name or fuzzy query."""
         raise NotImplementedError
 
     @abstractmethod
-    def callers(self, symbol: str) -> Tuple[SymbolLocation, ...]:
+    def callers(self, symbol: str) -> tuple[SymbolLocation, ...]:
         """Functions/methods that call `symbol` (reference lookup)."""
         raise NotImplementedError
 
     @abstractmethod
-    def callees(self, symbol: str) -> Tuple[SymbolLocation, ...]:
+    def callees(self, symbol: str) -> tuple[SymbolLocation, ...]:
         """Functions/methods that `symbol` calls (dependency relationships)."""
         raise NotImplementedError
 
@@ -147,13 +146,13 @@ class NullCodeIntelligenceProvider(CodeIntelligenceProvider):
     def status(self) -> IndexStatus:
         return IndexStatus(available=False, stale=True, detail="No CodeIntelligenceProvider is configured.")
 
-    def find(self, query: str) -> Tuple[SymbolLocation, ...]:
+    def find(self, query: str) -> tuple[SymbolLocation, ...]:
         raise CodeIntelligenceUnavailable("No CodeIntelligenceProvider is configured.")
 
-    def callers(self, symbol: str) -> Tuple[SymbolLocation, ...]:
+    def callers(self, symbol: str) -> tuple[SymbolLocation, ...]:
         raise CodeIntelligenceUnavailable("No CodeIntelligenceProvider is configured.")
 
-    def callees(self, symbol: str) -> Tuple[SymbolLocation, ...]:
+    def callees(self, symbol: str) -> tuple[SymbolLocation, ...]:
         raise CodeIntelligenceUnavailable("No CodeIntelligenceProvider is configured.")
 
     def impact(self, symbol: str) -> ImpactResult:
