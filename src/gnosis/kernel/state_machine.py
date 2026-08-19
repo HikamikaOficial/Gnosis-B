@@ -9,13 +9,23 @@ and "auditable actions" principles at the state level.
 from __future__ import annotations
 
 from enum import Enum
+from types import MappingProxyType
 
 
 class IllegalTransitionError(RuntimeError):
-    def __init__(self, current: Enum, target: Enum, kind: str):
-        super().__init__(f"Illegal {kind} transition: {current.value} -> {target.value}")
+    """Carries (current, target, allowed_next) so every surface — CLI,
+    transport, adapter — can report the same complete verdict without
+    re-deriving the rules (archaeology Directive 3)."""
+
+    def __init__(self, current: Enum, target: Enum, kind: str, allowed_next: frozenset[Enum]):
+        allowed = ", ".join(sorted(state.value for state in allowed_next)) or "(terminal)"
+        super().__init__(
+            f"Illegal {kind} transition: {current.value} -> {target.value}; "
+            f"allowed next: {allowed}"
+        )
         self.current = current
         self.target = target
+        self.allowed_next = allowed_next
 
 
 class TaskState(str, Enum):
@@ -30,7 +40,9 @@ class TaskState(str, Enum):
     CANCELLED = "CANCELLED"
 
 
-TASK_TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
+# The transition tables live once, as immutable data (MappingProxyType of
+# frozensets): every surface imports them, none can mutate them.
+TASK_TRANSITIONS: MappingProxyType[TaskState, frozenset[TaskState]] = MappingProxyType({
     TaskState.CREATED: frozenset({TaskState.PLANNED, TaskState.CANCELLED}),
     TaskState.PLANNED: frozenset({TaskState.IN_PROGRESS, TaskState.BLOCKED, TaskState.CANCELLED}),
     TaskState.IN_PROGRESS: frozenset({
@@ -43,7 +55,7 @@ TASK_TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
     TaskState.COMPLETED: frozenset(),
     TaskState.FAILED: frozenset(),
     TaskState.CANCELLED: frozenset(),
-}
+})
 
 TASK_TERMINAL_STATES = frozenset({TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELLED})
 
@@ -58,7 +70,7 @@ class RunState(str, Enum):
     CRASHED = "CRASHED"
 
 
-RUN_TRANSITIONS: dict[RunState, frozenset[RunState]] = {
+RUN_TRANSITIONS: MappingProxyType[RunState, frozenset[RunState]] = MappingProxyType({
     RunState.PENDING: frozenset({RunState.RUNNING, RunState.CANCELLED}),
     RunState.RUNNING: frozenset({
         RunState.SUCCEEDED, RunState.FAILED, RunState.TIMED_OUT,
@@ -69,7 +81,7 @@ RUN_TRANSITIONS: dict[RunState, frozenset[RunState]] = {
     RunState.TIMED_OUT: frozenset(),
     RunState.CANCELLED: frozenset(),
     RunState.CRASHED: frozenset(),
-}
+})
 
 RUN_TERMINAL_STATES = frozenset({
     RunState.SUCCEEDED, RunState.FAILED, RunState.TIMED_OUT,
@@ -80,11 +92,11 @@ RUN_TERMINAL_STATES = frozenset({
 # Generic over the concrete state enum so TaskStateMachine/RunStateMachine
 # get back their own state type from _transition, not a bare Enum.
 def _transition[StateT: Enum](
-    current: StateT, target: StateT, table: dict[StateT, frozenset[StateT]], kind: str,
+    current: StateT, target: StateT, table: MappingProxyType[StateT, frozenset[StateT]], kind: str,
 ) -> StateT:
     allowed = table.get(current, frozenset())
     if target not in allowed:
-        raise IllegalTransitionError(current, target, kind)
+        raise IllegalTransitionError(current, target, kind, frozenset(allowed))
     return target
 
 

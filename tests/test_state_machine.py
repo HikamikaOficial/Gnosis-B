@@ -50,5 +50,40 @@ class TestRunStateMachine(unittest.TestCase):
             sm.transition(RunState.SUCCEEDED)
 
 
+class TestTransitionTableHardening(unittest.TestCase):
+    """Directive 3: the allow-list is immutable data, and the typed error
+    carries (from, to, allowed_next) so every surface reports the same
+    complete verdict."""
+
+    def test_transition_tables_are_immutable(self):
+        from gnosis.kernel.state_machine import RUN_TRANSITIONS, TASK_TRANSITIONS
+        with self.assertRaises(TypeError):
+            TASK_TRANSITIONS[TaskState.COMPLETED] = frozenset({TaskState.CREATED})
+        with self.assertRaises(TypeError):
+            RUN_TRANSITIONS[RunState.SUCCEEDED] = frozenset({RunState.PENDING})
+
+    def test_illegal_transition_error_carries_allowed_next(self):
+        sm = TaskStateMachine()
+        try:
+            sm.transition(TaskState.COMPLETED)
+        except IllegalTransitionError as exc:
+            self.assertEqual(exc.current, TaskState.CREATED)
+            self.assertEqual(exc.target, TaskState.COMPLETED)
+            self.assertEqual(exc.allowed_next, frozenset({TaskState.PLANNED, TaskState.CANCELLED}))
+            self.assertIn("allowed next:", str(exc))
+        else:
+            self.fail("expected IllegalTransitionError")
+
+    def test_terminal_state_error_reports_terminal(self):
+        sm = RunStateMachine(initial=RunState.SUCCEEDED)
+        try:
+            sm.transition(RunState.RUNNING)
+        except IllegalTransitionError as exc:
+            self.assertEqual(exc.allowed_next, frozenset())
+            self.assertIn("(terminal)", str(exc))
+        else:
+            self.fail("expected IllegalTransitionError")
+
+
 if __name__ == "__main__":
     unittest.main()
