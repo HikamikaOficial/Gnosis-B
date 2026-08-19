@@ -81,7 +81,7 @@ class TaskEngine:
             result = self.cli_runner.run(
                 prompt=prompt, cwd=repo_path, stdout_path=paths.stdout, stderr_path=paths.stderr,
                 timeout_s=timeout_s, cancellation_token=cancellation_token,
-                heartbeat_fn=lambda pid: self.run_store.heartbeat(run_id, pid),
+                heartbeat_fn=lambda pid: self.run_store.heartbeat(run_id),
             )
 
             if result.succeeded:

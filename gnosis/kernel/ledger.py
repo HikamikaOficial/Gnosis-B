@@ -3,18 +3,30 @@
 Each run gets one JSONL file. Events are the only way state changes are
 recorded for audit/replay; the API intentionally exposes no update/delete
 so callers cannot silently rewrite history. (Filesystem-level immutability
-is a hardening step left for a later milestone; see the M0 engineer
-report limitations section.)
+is a hardening step left for a later milestone.)
+
+Appends are serialized through a FileLock (kernel.file_lock) rather than a
+plain threading.Lock: the read-last-seq-then-write critical section must
+be atomic across processes too, not just threads in one process, or two
+writers can race and silently drop an event. Reads tolerate a truncated
+final line (the signature of a process killed mid-write) by dropping it
+rather than raising, since fsync'd earlier lines remain intact evidence;
+a malformed *non-final* line is treated as real corruption and raises.
 """
 from __future__ import annotations
 
 import json
 import os
-import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
+
+from .file_lock import FileLock, lock_path_for
+
+
+class LedgerCorruptionError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -46,18 +58,19 @@ class LedgerEvent:
 
 
 class RunLedger:
-    """Append-only JSONL ledger for a single run."""
+    """Append-only JSONL ledger for a single run. Safe for concurrent
+    writers, in-process threads or separate processes, via FileLock."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, lock_timeout_s: float = 30.0):
         self.path = path
-        self._lock = threading.Lock()
+        self._lock = FileLock(lock_path_for(path), timeout_s=lock_timeout_s)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
             self.path.touch()
 
     def append(self, run_id: str, event_type: str, data: dict[str, Any] | None = None) -> LedgerEvent:
         with self._lock:
-            next_seq = self._last_seq() + 1
+            next_seq = self._last_seq_locked() + 1
             event = LedgerEvent(
                 seq=next_seq,
                 ts=datetime.now(timezone.utc).isoformat(),
@@ -71,21 +84,30 @@ class RunLedger:
                 os.fsync(fh.fileno())
             return event
 
-    def _last_seq(self) -> int:
+    def _last_seq_locked(self) -> int:
         last = 0
-        for event in self.read_all():
+        for event in self._iter_events(tolerant=True):
             last = event.seq
         return last
 
-    def read_all(self) -> list[LedgerEvent]:
-        return list(self._iter_events())
+    def read_all(self, tolerant: bool = True) -> list[LedgerEvent]:
+        return list(self._iter_events(tolerant=tolerant))
 
-    def _iter_events(self) -> Iterator[LedgerEvent]:
+    def _iter_events(self, tolerant: bool) -> Iterator[LedgerEvent]:
         if not self.path.exists():
             return
         with self.path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
+            raw_lines = [line.strip() for line in fh]
+        raw_lines = [line for line in raw_lines if line]
+        last_index = len(raw_lines) - 1
+        for index, line in enumerate(raw_lines):
+            try:
                 yield LedgerEvent.from_dict(json.loads(line))
+            except (json.JSONDecodeError, KeyError) as exc:
+                if tolerant and index == last_index:
+                    # Truncated final write (process killed mid-append).
+                    # Earlier fsync'd lines remain intact evidence.
+                    return
+                raise LedgerCorruptionError(
+                    f"Corrupt ledger line {index + 1} in {self.path}: {exc}"
+                ) from exc

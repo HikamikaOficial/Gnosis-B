@@ -2,7 +2,26 @@ __pycache__/
 *.pyc
 .venv/
 venv/
-runs/*
-!runs/.gitkeep
 .pytest_cache/
 *.egg-info/
+
+runs/*
+!runs/.gitkeep
+
+# .gnosis/state/baselines.json IS tracked (milestone evidence); only the
+# operational Director inbox/outbox/worktree contents below are runtime
+# data and excluded.
+.gnosis/director/inbox/*
+!.gnosis/director/inbox/.gitkeep
+.gnosis/director/processed/*
+!.gnosis/director/processed/.gitkeep
+.gnosis/director/rejected/*
+!.gnosis/director/rejected/.gitkeep
+.gnosis/director/outbox/*
+!.gnosis/director/outbox/.gitkeep
+.gnosis/director/escalations/*
+!.gnosis/director/escalations/.gitkeep
+.gnosis/director/state/briefs/*
+!.gnosis/director/state/briefs/.gitkeep
+.gnosis/worktrees/*
+!.gnosis/worktrees/.gitkeep

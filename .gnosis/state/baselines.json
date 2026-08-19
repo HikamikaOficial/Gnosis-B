@@ -1,0 +1,7 @@
+{
+  "M0": {
+    "commit": "b8da2c8ab749d98cef7166717ea1d471760647a1",
+    "recorded_at": "2026-08-19T01:31:47.405221+00:00",
+    "summary": "Bootstrap kernel baseline: typed contracts, kernel primitives, Claude CLI runner, transport. 66 tests."
+  }
+}

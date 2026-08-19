@@ -3,7 +3,7 @@
 Layout per run:
   runs/<run_id>/
     meta.json          RunMeta snapshot (state, task_id, timestamps)
-    heartbeat.json      liveness signal updated while the run is active
+    heartbeat.json      liveness signal: ts + a ProcessFingerprint
     ledger.jsonl         append-only RunLedger
     raw/stdout.log         immutable raw stdout capture
     raw/stderr.log         immutable raw stderr capture
@@ -12,7 +12,12 @@ Layout per run:
 
 This directory *is* the durable state, no external database. Restarting
 the kernel process is safe: everything needed to audit or reason about a
-run is on disk.
+run is on disk. meta.json/heartbeat.json are written via atomic_write_text
+(write-tmp + os.replace) so a reader never observes a torn write; the
+meta.json read-modify-write cycle (update_state) is additionally guarded
+by a FileLock so two concurrent updaters cannot silently drop one
+another's transition, single-writer-per-run is enforced structurally, not
+by convention.
 """
 from __future__ import annotations
 
@@ -22,6 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from .atomic_io import atomic_write_text
+from .file_lock import FileLock, lock_path_for
 from .ledger import RunLedger
 from .state_machine import RunState
 
@@ -77,29 +84,42 @@ class RunStore:
             run_id=run_id, task_id=task_id, state=RunState.PENDING.value,
             created_at=now, updated_at=now,
         )
-        self.write_meta(run_id, meta)
+        self._write_meta_locked(paths, meta)
         RunLedger(paths.ledger)
         return paths
 
     def write_meta(self, run_id: str, meta: RunMeta) -> None:
         paths = self.paths_for(run_id)
+        self._write_meta_locked(paths, meta)
+
+    def _write_meta_locked(self, paths: RunPaths, meta: RunMeta) -> None:
         meta.updated_at = datetime.now(timezone.utc).isoformat()
-        paths.meta.write_text(json.dumps(meta.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
+        with FileLock(lock_path_for(paths.meta)):
+            atomic_write_text(paths.meta, json.dumps(meta.to_dict(), indent=2, sort_keys=True))
 
     def read_meta(self, run_id: str) -> RunMeta:
         paths = self.paths_for(run_id)
         return RunMeta.from_dict(json.loads(paths.meta.read_text(encoding="utf-8")))
 
     def update_state(self, run_id: str, state: RunState) -> RunMeta:
-        meta = self.read_meta(run_id)
-        meta.state = state.value
-        self.write_meta(run_id, meta)
-        return meta
-
-    def heartbeat(self, run_id: str, pid: Optional[int] = None) -> None:
+        """Atomic read-modify-write of a run's state, guarded by the same
+        lock write_meta uses, so two concurrent callers cannot race and
+        silently overwrite each other's transition."""
         paths = self.paths_for(run_id)
-        payload = {"ts": datetime.now(timezone.utc).isoformat(), "pid": pid}
-        paths.heartbeat.write_text(json.dumps(payload), encoding="utf-8")
+        with FileLock(lock_path_for(paths.meta)):
+            meta = RunMeta.from_dict(json.loads(paths.meta.read_text(encoding="utf-8")))
+            meta.state = state.value
+            meta.updated_at = datetime.now(timezone.utc).isoformat()
+            atomic_write_text(paths.meta, json.dumps(meta.to_dict(), indent=2, sort_keys=True))
+            return meta
+
+    def heartbeat(self, run_id: str, fingerprint: Optional[Any] = None) -> None:
+        from ..runner.liveness import ProcessFingerprint, current_fingerprint
+
+        paths = self.paths_for(run_id)
+        fp: ProcessFingerprint = fingerprint or current_fingerprint()
+        payload = {"ts": datetime.now(timezone.utc).isoformat(), **fp.to_dict()}
+        atomic_write_text(paths.heartbeat, json.dumps(payload))
 
     def read_heartbeat(self, run_id: str) -> Optional[dict[str, Any]]:
         paths = self.paths_for(run_id)
