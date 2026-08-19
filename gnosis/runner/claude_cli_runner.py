@@ -12,6 +12,7 @@ import json
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional, Sequence
@@ -30,6 +31,30 @@ class CancellationToken:
 
     def is_cancelled(self) -> bool:
         return self._event.is_set()
+
+
+@dataclass(frozen=True)
+class McpRunnerConfig:
+    """Optional, explicit MCP server configuration for one Claude Code CLI
+    invocation (M2.0). Disabled by default: pass None (the default
+    everywhere it is accepted) and a run's argv is byte-for-byte what M0/M1
+    already produced. Not tied to any specific MCP server implementation,
+    `config_paths` are handed verbatim to `claude --mcp-config`, so this
+    is how Gnosis exposes *any* local engineering tool (a code-intelligence
+    server, or anything else) to a Claude Code session, without the kernel
+    depending on which one. This is unrelated to, and does not implement,
+    a ChatGPT/Director MCP transport (see gnosis.transport.mcp_transport).
+    """
+
+    config_paths: tuple[str, ...]
+    strict: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.config_paths:
+            raise ValueError("McpRunnerConfig.config_paths must be non-empty")
+
+    def to_dict(self) -> dict:
+        return {"config_paths": list(self.config_paths), "strict": self.strict}
 
 
 class CLIRunner:
@@ -113,6 +138,7 @@ class ClaudeCodeCLIRunner:
         permission_mode: str = "plan",
         output_format: str = "json",
         model: Optional[str] = None,
+        mcp: Optional[McpRunnerConfig] = None,
         extra_args: Optional[Sequence[str]] = None,
     ) -> list[str]:
         argv = [self.binary, "-p", prompt, "--output-format", output_format]
@@ -122,6 +148,10 @@ class ClaudeCodeCLIRunner:
             argv += ["--permission-mode", permission_mode]
         if model:
             argv += ["--model", model]
+        if mcp is not None:
+            argv += ["--mcp-config", *mcp.config_paths]
+            if mcp.strict:
+                argv.append("--strict-mcp-config")
         if extra_args:
             argv += list(extra_args)
         return argv
@@ -136,13 +166,14 @@ class ClaudeCodeCLIRunner:
         session_id: Optional[str] = None,
         permission_mode: str = "plan",
         model: Optional[str] = None,
+        mcp: Optional[McpRunnerConfig] = None,
         extra_args: Optional[Sequence[str]] = None,
         cancellation_token: Optional[CancellationToken] = None,
         heartbeat_fn: Optional[Callable[[int], None]] = None,
     ) -> ExecutionResult:
         argv = self.build_argv(
             prompt, session_id=session_id, permission_mode=permission_mode,
-            model=model, extra_args=extra_args,
+            model=model, mcp=mcp, extra_args=extra_args,
         )
         result = self._cli_runner.run(
             argv, cwd=cwd, stdout_path=stdout_path, stderr_path=stderr_path,

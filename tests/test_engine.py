@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from gnosis.kernel.engine import TaskEngine
+from gnosis.runner.claude_cli_runner import McpRunnerConfig
 from gnosis.kernel.run_store import RunStore
 from gnosis.kernel.state_machine import TaskState
 from gnosis.kernel.verification import CommandVerifier
@@ -89,6 +90,25 @@ class TestTaskEngine(unittest.TestCase):
         )
         self.assertEqual(outcome.final_task_state, TaskState.FAILED)
         self.assertFalse(outcome.verification.passed)
+
+    def test_mcp_config_forwarded_and_audited_in_ledger(self):
+        cfg = McpRunnerConfig(config_paths=("tool.json",))
+        engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
+        outcome = engine.execute_task(
+            task_id="TASK-MCP", objective="Demo", prompt="do it", repo_path=self.repo, mcp=cfg,
+        )
+        events = self.store.ledger_for(outcome.run_ids[-1]).read_all()
+        started = next(e for e in events if e.event_type == "run.attempt_started")
+        self.assertEqual(started.data["mcp"], {"config_paths": ["tool.json"], "strict": False})
+
+    def test_no_mcp_config_audited_as_none(self):
+        engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
+        outcome = engine.execute_task(
+            task_id="TASK-NOMCP", objective="Demo", prompt="do it", repo_path=self.repo,
+        )
+        events = self.store.ledger_for(outcome.run_ids[-1]).read_all()
+        started = next(e for e in events if e.event_type == "run.attempt_started")
+        self.assertIsNone(started.data["mcp"])
 
     def test_git_evidence_captured_per_run(self):
         engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))

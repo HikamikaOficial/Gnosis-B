@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 from ..contracts.engineer_report import EngineerReport, ReportStatus
 from ..runner.capture import ExecutionResult
-from ..runner.claude_cli_runner import CancellationToken, ClaudeCodeCLIRunner
+from ..runner.claude_cli_runner import CancellationToken, ClaudeCodeCLIRunner, McpRunnerConfig
 from ..runner.retry import RetryPolicy, execute_with_retry
 from .git_evidence import capture_git_evidence
 from .ids import new_run_id
@@ -59,6 +59,7 @@ class TaskEngine:
         verifier: Optional[Verifier] = None,
         timeout_s: float = 1800.0,
         cancellation_token: Optional[CancellationToken] = None,
+        mcp: Optional[McpRunnerConfig] = None,
     ) -> TaskExecutionOutcome:
         task_sm = TaskStateMachine(TaskState.CREATED)
         task_sm.transition(TaskState.PLANNED)
@@ -74,13 +75,16 @@ class TaskEngine:
             run_ids.append(run_id)
             paths = self.run_store.create_run(run_id, task_id)
             ledger = self.run_store.ledger_for(run_id)
-            ledger.append(run_id, "run.attempt_started", {"attempt": attempt_number, "objective": objective})
+            ledger.append(run_id, "run.attempt_started", {
+                "attempt": attempt_number, "objective": objective,
+                "mcp": mcp.to_dict() if mcp is not None else None,
+            })
             self.run_store.update_state(run_id, RunState.RUNNING)
             self.run_store.heartbeat(run_id)
 
             result = self.cli_runner.run(
                 prompt=prompt, cwd=repo_path, stdout_path=paths.stdout, stderr_path=paths.stderr,
-                timeout_s=timeout_s, cancellation_token=cancellation_token,
+                timeout_s=timeout_s, cancellation_token=cancellation_token, mcp=mcp,
                 heartbeat_fn=lambda pid: self.run_store.heartbeat(run_id),
             )
 
