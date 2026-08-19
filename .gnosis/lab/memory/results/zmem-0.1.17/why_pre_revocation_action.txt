@@ -1,0 +1,11 @@
+ZMem action explanation
+Action: act_62c07ebd66f84400
+Agent: gnosis-smoke | Risk: medium
+Task: What is the continuity token store?
+Retrieved: 2 | Injected: 2 | Withheld: 0
+Verification: ok
+Proof root: ac64be5cf07524cc9d4cae24b5f72717fe2b2925005af6af68307a0200cc589c
+Context proof: sha256:481e95aff370add25c068a273da96efd7816e8a7e56dfd654f1b96012f64648d
+Memory that shaped the action:
+  - mem_4154a0840a304013 [semantic/active] GNOSIS smoke T2: the continuity token store migrated to SQLITE.
+  - mem_7a9d441ba7da4211 [semantic/revoked] GNOSIS smoke T1: the continuity token store is FILE-BASED.

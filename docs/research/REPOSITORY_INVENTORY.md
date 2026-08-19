@@ -1,8 +1,8 @@
 # GNOSIS Repository Inventory
 
 - Project: `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi`
-- Found: **0 / 130**
-- Missing: **130**
+- Found: **27 / 130**
+- Missing: **103**
 
 ## Registered S+/S/A resources
 
@@ -10,67 +10,67 @@
 |---|---|---:|---|---|
 | A | Agent Orchestrator | **MISSING** | `—` | https://github.com/Untrivial-ai/agent-orchestrator |
 | A | Claudexor | **MISSING** | `—` | https://github.com/razzant/claudexor |
-| S | Bernstein | **MISSING** | `—` | https://github.com/sipyourdrink-ltd/bernstein |
-| S | Cezar | **MISSING** | `—` | https://github.com/open-mercato/cezar |
-| S | Ralphex | **MISSING** | `—` | https://github.com/umputun/ralphex |
+| S | Bernstein | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\bernstein` | https://github.com/sipyourdrink-ltd/bernstein |
+| S | Cezar | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\cezar` | https://github.com/open-mercato/cezar |
+| S | Ralphex | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\ralphex` | https://github.com/umputun/ralphex |
 | A | Omnigent | **MISSING** | `—` | https://github.com/omnigent-ai/omnigent |
 | A | A Fable of Codexes | **MISSING** | `—` | https://github.com/jvogan/a-fable-of-codexes |
 | A | Tutti | **MISSING** | `—` | https://github.com/nutthouse/tutti |
-| S | OpenAI Symphony | **MISSING** | `—` | https://github.com/openai/symphony |
+| S | OpenAI Symphony | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\symphony` | https://github.com/openai/symphony |
 | A | Genesis | **MISSING** | `—` | https://github.com/AmRitJain0442/Genesis |
-| S | Smithers | **MISSING** | `—` | https://github.com/smithersai/smithers |
+| S | Smithers | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\smithers` | https://github.com/smithersai/smithers |
 | A | Buildplane | **MISSING** | `—` | https://github.com/SollanSystems/buildplane |
 | A | Joshua Agent | **MISSING** | `—` | https://github.com/jorgevazquez-vagojo/joshua-agent |
-| S | VirtusLab Orca | **MISSING** | `—` | https://github.com/VirtusLab/orca |
-| S | GitHub Spec Kit | **MISSING** | `—` | https://github.com/github/spec-kit |
-| S | Superpowers | **MISSING** | `—` | https://github.com/obra/superpowers |
+| S | VirtusLab Orca | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\orca` | https://github.com/VirtusLab/orca |
+| S | GitHub Spec Kit | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\spec-kit` | https://github.com/github/spec-kit |
+| S | Superpowers | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\superpowers` | https://github.com/obra/superpowers |
 | A | Hoyeon | **MISSING** | `—` | https://github.com/team-attention/hoyeon |
-| S | Beads | **MISSING** | `—` | https://github.com/gastownhall/beads |
+| S | Beads | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\beads` | https://github.com/gastownhall/beads |
 | A | Gas Town | **MISSING** | `—` | https://github.com/gastownhall/gastown |
-| S | Agent Workspace Fabric (AWF) | **MISSING** | `—` | https://github.com/dimileeh/agent-workspace-fabric |
-| S | Grit | **MISSING** | `—` | https://github.com/rtk-ai/grit |
+| S | Agent Workspace Fabric (AWF) | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\agent-workspace-fabric` | https://github.com/dimileeh/agent-workspace-fabric |
+| S | Grit | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\grit` | https://github.com/rtk-ai/grit |
 | A | Symlock | **MISSING** | `—` | https://github.com/echoVic/symlock |
 | A | Polywave Protocol | **MISSING** | `—` | https://github.com/blackwell-systems/polywave-protocol |
-| S | Agent Arena | **MISSING** | `—` | https://github.com/zhjai/agent-arena |
+| S | Agent Arena | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\agent-arena` | https://github.com/zhjai/agent-arena |
 | A | Senate | **MISSING** | `—` | https://github.com/SebastianElvis/senate |
 | A | OpenAI Codex Plugin for Claude Code | **MISSING** | `—` | https://github.com/openai/codex-plugin-cc |
-| S | TwinRouterBench | **MISSING** | `—` | https://github.com/CommonstackAI/TwinRouterBench |
+| S | TwinRouterBench | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\TwinRouterBench` | https://github.com/CommonstackAI/TwinRouterBench |
 | A | AgentFlow | **MISSING** | `—` | https://github.com/lupantech/AgentFlow |
 | A | Graph of Skills | **MISSING** | `—` | https://github.com/davidliuk/graph-of-skills |
 | A | SkillFlow | **MISSING** | `—` | https://github.com/ZhangZi-a/SkillFlow |
 | A | ProofAgent Harness | **MISSING** | `—` | https://github.com/ProofAgent-ai/proofagent-harness |
 | A | CodeGraph MCP | **MISSING** | `—` | https://github.com/StarQuant/codegraph-mcp |
-| S | Sverklo | **MISSING** | `—` | https://github.com/sverklo/sverklo |
+| S | Sverklo | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\sverklo` | https://github.com/sverklo/sverklo |
 | A | Code Context Engine | **MISSING** | `—` | https://github.com/elara-labs/code-context-engine |
 | A | AgentMemory | **MISSING** | `—` | https://github.com/rohitg00/agentmemory |
 | S | cass_memory_system | **MISSING** | `—` | https://github.com/Dicklesworthstone/cass_memory_system |
 | A | coding_agent_session_search | **MISSING** | `—` | https://github.com/Dicklesworthstone/coding_agent_session_search |
 | A | world-model-mcp | **MISSING** | `—` | https://github.com/SaravananJaichandar/world-model-mcp |
-| S | Microsoft Agent Governance Toolkit | **MISSING** | `—` | https://github.com/microsoft/agent-governance-toolkit |
-| S | AgentJail | **MISSING** | `—` | https://github.com/LuD1161/agentjail |
-| S | nono | **MISSING** | `—` | https://github.com/nolabs-ai/nono |
+| S | Microsoft Agent Governance Toolkit | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\agent-governance-toolkit` | https://github.com/microsoft/agent-governance-toolkit |
+| S | AgentJail | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\agentjail` | https://github.com/LuD1161/agentjail |
+| S | nono | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\nono` | https://github.com/nolabs-ai/nono |
 | A | Agent Sandbox | **MISSING** | `—` | https://github.com/mattolson/agent-sandbox |
-| S | Sandbox Probe | **MISSING** | `—` | https://github.com/controlplaneio/sandbox-probe |
+| S | Sandbox Probe | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\sandbox-probe` | https://github.com/controlplaneio/sandbox-probe |
 | A | Vigils | **MISSING** | `—` | https://github.com/duncatzat/vigils |
 | A | Gensee Crate | **MISSING** | `—` | https://github.com/GenseeAI/gensee-crate |
 | A | h5i | **MISSING** | `—` | https://github.com/h5i-dev/h5i |
-| S | Reprise | **MISSING** | `—` | https://github.com/itsshreyasbhardwaj-design/reprise |
+| S | Reprise | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\reprise` | https://github.com/itsshreyasbhardwaj-design/reprise |
 | A | llmreplay | **MISSING** | `—` | https://github.com/dmallya93/llmreplay |
-| S | Agent Capsule | **MISSING** | `—` | https://github.com/quantumpipes/agent-capsule |
-| S | Catacomb | **MISSING** | `—` | https://github.com/realkarych/catacomb |
-| S | OpenTraces | **MISSING** | `—` | https://github.com/jayfarei/opentraces |
-| S | OpenTelemetry Collector | **MISSING** | `—` | https://github.com/open-telemetry/opentelemetry-collector |
+| S | Agent Capsule | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\agent-capsule` | https://github.com/quantumpipes/agent-capsule |
+| S | Catacomb | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\catacomb` | https://github.com/realkarych/catacomb |
+| S | OpenTraces | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\opentraces` | https://github.com/jayfarei/opentraces |
+| S | OpenTelemetry Collector | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\opentelemetry-collector` | https://github.com/open-telemetry/opentelemetry-collector |
 | A | Prometheus | **MISSING** | `—` | https://github.com/prometheus/prometheus |
 | A | Grafana | **MISSING** | `—` | https://github.com/grafana/grafana |
-| S | Dagger | **MISSING** | `—` | https://github.com/dagger/dagger |
+| S | Dagger | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\dagger` | https://github.com/dagger/dagger |
 | A | Syft | **MISSING** | `—` | https://github.com/anchore/syft |
 | A | Grype | **MISSING** | `—` | https://github.com/anchore/grype |
 | A | Cosign / Sigstore | **MISSING** | `—` | https://github.com/sigstore/cosign |
 | A | SLSA Verifier | **MISSING** | `—` | https://github.com/slsa-framework/slsa-verifier |
 | A | Murmur | **MISSING** | `—` | https://github.com/instavm/murmur |
-| S+ | ZMem | **MISSING** | `—` | https://github.com/zerkerlabs/zmem |
-| S+ | M3 Memory | **MISSING** | `—` | https://github.com/skynetcmd/m3-memory |
-| A+ OPTIONAL | Graphify | **MISSING** | `—` | https://github.com/Graphify-Labs/graphify |
+| S+ | ZMem | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\zmem` | https://github.com/zerkerlabs/zmem |
+| S+ | M3 Memory | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\m3-memory` | https://github.com/skynetcmd/m3-memory |
+| A+ OPTIONAL | Graphify | **FOUND** | `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\external\repositories\graphify` | https://github.com/Graphify-Labs/graphify |
 
 ## Missing
 
@@ -83,25 +83,19 @@
 - [C] **Ouroboros** — https://github.com/razzant/ouroboros
 - [B] **Ruflo** — https://github.com/ruvnet/ruflo
 - [B] **Kodo** — https://github.com/ikamensh/kodo
-- [S] **Bernstein** — https://github.com/sipyourdrink-ltd/bernstein
 - [B] **OMK (Open Multi-Agent Kit)** — https://github.com/dmae97/omk
 - [B] **Maestro** — https://github.com/RunMaestro/Maestro
-- [S] **Cezar** — https://github.com/open-mercato/cezar
-- [S] **Ralphex** — https://github.com/umputun/ralphex
 - [A] **Omnigent** — https://github.com/omnigent-ai/omnigent
 - [A] **A Fable of Codexes** — https://github.com/jvogan/a-fable-of-codexes
 - [A] **Tutti** — https://github.com/nutthouse/tutti
-- [S] **OpenAI Symphony** — https://github.com/openai/symphony
 - [B] **AgentsMesh** — https://github.com/AgentsMesh/AgentsMesh
 - [B] **Agent Teams AI** — https://github.com/777genius/agent-teams-ai
 - [B] **Operator OSS** — https://github.com/iishyfishyy/operator-oss
 - [B] **Superset** — https://github.com/superset-sh/superset
 - [A] **Genesis** — https://github.com/AmRitJain0442/Genesis
-- [S] **Smithers** — https://github.com/smithersai/smithers
 - [A] **Buildplane** — https://github.com/SollanSystems/buildplane
 - [A] **Joshua Agent** — https://github.com/jorgevazquez-vagojo/joshua-agent
 - [B] **Crewplane** — https://github.com/crewplaneai/crewplane
-- [S] **VirtusLab Orca** — https://github.com/VirtusLab/orca
 - [B] **OpenView** — https://github.com/iii-experimental/openview
 - [B] **Drover** — https://github.com/cloud-shuttle/drover
 - [B] **Shipwright** — https://github.com/sethdford/shipwright
@@ -110,25 +104,18 @@
 - [B] **LoopTroop** — https://github.com/looptroop-ai/LoopTroop
 - [B] **sd0x-dev-flow** — https://github.com/sd0xdev/sd0x-dev-flow
 - [C] **Agentic Control Stack** — https://github.com/sd0xdev/agentic-control-stack
-- [S] **GitHub Spec Kit** — https://github.com/github/spec-kit
-- [S] **Superpowers** — https://github.com/obra/superpowers
 - [A] **Hoyeon** — https://github.com/team-attention/hoyeon
-- [S] **Beads** — https://github.com/gastownhall/beads
 - [A] **Gas Town** — https://github.com/gastownhall/gastown
 - [B] **Software Build Assurance Kit** — https://github.com/kknipe2k/Software-Build-Assurance-Kit
-- [S] **Agent Workspace Fabric (AWF)** — https://github.com/dimileeh/agent-workspace-fabric
-- [S] **Grit** — https://github.com/rtk-ai/grit
 - [A] **Symlock** — https://github.com/echoVic/symlock
 - [B] **parallel-cc** — https://github.com/frankbria/parallel-cc
 - [A] **Polywave Protocol** — https://github.com/blackwell-systems/polywave-protocol
 - [B] **Polywave** — https://github.com/blackwell-systems/polywave
 - [B] **Polywave Go** — https://github.com/blackwell-systems/polywave-go
-- [S] **Agent Arena** — https://github.com/zhjai/agent-arena
 - [A] **Senate** — https://github.com/SebastianElvis/senate
 - [B] **LLM Council** — https://github.com/sherifkozman/the-llm-council
 - [B] **Agent Review Panel** — https://github.com/wan-huiyan/agent-review-panel
 - [A] **OpenAI Codex Plugin for Claude Code** — https://github.com/openai/codex-plugin-cc
-- [S] **TwinRouterBench** — https://github.com/CommonstackAI/TwinRouterBench
 - [B] **UncommonRoute** — https://github.com/CommonstackAI/UncommonRoute
 - [A] **AgentFlow** — https://github.com/lupantech/AgentFlow
 - [A] **Graph of Skills** — https://github.com/davidliuk/graph-of-skills
@@ -145,7 +132,6 @@
 - [B] **Test-Forge** — https://github.com/manjeetsharma0796/Test-Forge
 - [B] **Canary** — https://github.com/0xnyn/canary
 - [A] **CodeGraph MCP** — https://github.com/StarQuant/codegraph-mcp
-- [S] **Sverklo** — https://github.com/sverklo/sverklo
 - [A] **Code Context Engine** — https://github.com/elara-labs/code-context-engine
 - [B] **context-mode** — https://github.com/mksglu/context-mode
 - [B] **UltraCode (faxenoff)** — https://github.com/faxenoff/ultracode
@@ -166,26 +152,16 @@
 - [B] **Entire CLI** — https://github.com/entireio/cli
 - [B] **claude-replay** — https://github.com/es617/claude-replay
 - [B] **ReplayPack** — https://github.com/Atomics-hub/replaypack
-- [S] **Microsoft Agent Governance Toolkit** — https://github.com/microsoft/agent-governance-toolkit
-- [S] **AgentJail** — https://github.com/LuD1161/agentjail
-- [S] **nono** — https://github.com/nolabs-ai/nono
 - [A] **Agent Sandbox** — https://github.com/mattolson/agent-sandbox
-- [S] **Sandbox Probe** — https://github.com/controlplaneio/sandbox-probe
 - [A] **Vigils** — https://github.com/duncatzat/vigils
 - [A] **Gensee Crate** — https://github.com/GenseeAI/gensee-crate
 - [A] **h5i** — https://github.com/h5i-dev/h5i
 - [C] **Awesome Agent Runtime Security** — https://github.com/bureado/awesome-agent-runtime-security
 - [B] **Agentic AI Security Starter Kit** — https://github.com/aembit/agentic-ai-security-starter-kit
-- [S] **Reprise** — https://github.com/itsshreyasbhardwaj-design/reprise
 - [A] **llmreplay** — https://github.com/dmallya93/llmreplay
-- [S] **Agent Capsule** — https://github.com/quantumpipes/agent-capsule
-- [S] **Catacomb** — https://github.com/realkarych/catacomb
-- [S] **OpenTraces** — https://github.com/jayfarei/opentraces
-- [S] **OpenTelemetry Collector** — https://github.com/open-telemetry/opentelemetry-collector
 - [A] **Prometheus** — https://github.com/prometheus/prometheus
 - [A] **Grafana** — https://github.com/grafana/grafana
 - [B] **Agent Deck** — https://github.com/asheshgoplani/agent-deck
-- [S] **Dagger** — https://github.com/dagger/dagger
 - [A] **Syft** — https://github.com/anchore/syft
 - [A] **Grype** — https://github.com/anchore/grype
 - [A] **Cosign / Sigstore** — https://github.com/sigstore/cosign
@@ -200,7 +176,4 @@
 - [B] **Awesome Agent Orchestrators** — https://github.com/andyrewlee/awesome-agent-orchestrators
 - [B] **Awesome Harness Engineering** — https://github.com/ai-boost/awesome-harness-engineering
 - [C] **Awesome Agent Harness** — https://github.com/Picrew/awesome-agent-harness
-- [S+] **ZMem** — https://github.com/zerkerlabs/zmem
-- [S+] **M3 Memory** — https://github.com/skynetcmd/m3-memory
-- [A+ OPTIONAL] **Graphify** — https://github.com/Graphify-Labs/graphify
 - [B OPTIONAL] **Obsidian Mind** — https://github.com/breferrari/obsidian-mind

@@ -47,3 +47,6 @@ Runtime correctness cannot depend on the Obsidian app or an Obsidian plugin.
 
 ## D-016 — Resource paths are resolved by Git origin
 All canonical links are kept in `resources/repositories.json`; agents should not depend on guessed folder names.
+
+## D-017 — Memory engine isolation is environment-pinned, and engines install from copies
+External memory engines are installed as isolated `uv tool` environments built from copies (originals stay read-only). m3 state isolation uses `M3_MEMORY_ROOT`/`M3_ENGINE_ROOT`/`M3_CONFIG_ROOT`, never `--database` (broken upstream). zmem hermetic use goes through standalone `--db`. Details/evidence: ADR-0001.

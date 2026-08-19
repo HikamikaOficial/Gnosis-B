@@ -1,0 +1,29 @@
+{
+  "mcpServers": {
+    "zerker-memory": {
+      "command": "C:\\Users\\nicol\\.local\\bin\\zmem.exe",
+      "args": [
+        "--db",
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.zerker\\memory.sqlite",
+        "mcp",
+        "--profile",
+        "agent"
+      ],
+      "env": {
+        "PYTHONUTF8": "1"
+      }
+    },
+    "m3-memory": {
+      "command": "C:\\Users\\nicol\\AppData\\Roaming\\uv\\tools\\m3-memory\\Scripts\\python.exe",
+      "args": [
+        "C:\\Users\\nicol\\AppData\\Roaming\\uv\\tools\\m3-memory\\Lib\\site-packages\\m3_memory\\bin\\memory_bridge.py"
+      ],
+      "env": {
+        "M3_MEMORY_ROOT": "C:\\Users\\nicol\\.m3",
+        "M3_ENGINE_ROOT": "C:\\Users\\nicol\\.m3\\engine",
+        "M3_CONFIG_ROOT": "C:\\Users\\nicol\\.m3\\config",
+        "PYTHONUTF8": "1"
+      }
+    }
+  }
+}

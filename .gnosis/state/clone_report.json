@@ -1,0 +1,261 @@
+{
+  "schema_version": 1,
+  "tiers_requested": [
+    "S+",
+    "S"
+  ],
+  "results": [
+    {
+      "name": "Agent Arena",
+      "tier": "S",
+      "url": "https://github.com/zhjai/agent-arena",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\agent-arena",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "f31c2a90288c348aa63bbb99f14a598842611fe1"
+    },
+    {
+      "name": "Agent Capsule",
+      "tier": "S",
+      "url": "https://github.com/quantumpipes/agent-capsule",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\agent-capsule",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "204307644890357b0a1984e787a529846e72c8d9"
+    },
+    {
+      "name": "Agent Workspace Fabric (AWF)",
+      "tier": "S",
+      "url": "https://github.com/dimileeh/agent-workspace-fabric",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\agent-workspace-fabric",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "45693fe6fb40075ce821dd7d8cb5ca197a3369ce"
+    },
+    {
+      "name": "AgentJail",
+      "tier": "S",
+      "url": "https://github.com/LuD1161/agentjail",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\agentjail",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "0c112c2b2633246d676d6c28f9b140896c00d8d1"
+    },
+    {
+      "name": "Beads",
+      "tier": "S",
+      "url": "https://github.com/gastownhall/beads",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\beads",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "309ebd4a5d80074264f9275c070b4a6dc9d21ad7"
+    },
+    {
+      "name": "Catacomb",
+      "tier": "S",
+      "url": "https://github.com/realkarych/catacomb",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\catacomb",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "91bc99cc1fda794bb365af455aafc09c6fbf8ab3"
+    },
+    {
+      "name": "Cezar",
+      "tier": "S",
+      "url": "https://github.com/open-mercato/cezar",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\cezar",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "9a8b24dd9f4fd76ae8bbd7d1066760e003549f54"
+    },
+    {
+      "name": "Dagger",
+      "tier": "S",
+      "url": "https://github.com/dagger/dagger",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\dagger",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "0e19eba6d38d7fd7e9781a1a3df5fc37208d252a"
+    },
+    {
+      "name": "GitHub Spec Kit",
+      "tier": "S",
+      "url": "https://github.com/github/spec-kit",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\spec-kit",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "7eee05d0ed95d2984947b30a1fc25f0e23627880"
+    },
+    {
+      "name": "Graphify",
+      "tier": "A+ OPTIONAL",
+      "url": "https://github.com/Graphify-Labs/graphify",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\graphify",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "b14b52e94ec3d9840413d81777f4c134eac0a40d"
+    },
+    {
+      "name": "Grit",
+      "tier": "S",
+      "url": "https://github.com/rtk-ai/grit",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\grit",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "0f3c9d04abe9525b1884f3a0ade890e54a6d9ffe"
+    },
+    {
+      "name": "M3 Memory",
+      "tier": "S+",
+      "url": "https://github.com/skynetcmd/m3-memory",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\m3-memory",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "3b4133aa9650f4815a17c7056be47a6172041297"
+    },
+    {
+      "name": "Microsoft Agent Governance Toolkit",
+      "tier": "S",
+      "url": "https://github.com/microsoft/agent-governance-toolkit",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\agent-governance-toolkit",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "7d0cef5d9820a865c3c19b07bd39ecf7053b58a1"
+    },
+    {
+      "name": "OpenAI Symphony",
+      "tier": "S",
+      "url": "https://github.com/openai/symphony",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\symphony",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "8001b52e3062495a16e520e4ceaf8f9de868c4d0"
+    },
+    {
+      "name": "OpenTelemetry Collector",
+      "tier": "S",
+      "url": "https://github.com/open-telemetry/opentelemetry-collector",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\opentelemetry-collector",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "fe6e69a3bf45b14512164e676883a6205d48f23b"
+    },
+    {
+      "name": "OpenTraces",
+      "tier": "S",
+      "url": "https://github.com/jayfarei/opentraces",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\opentraces",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "2ca75f7aba5ae2e28b85087aed509269015f54c1"
+    },
+    {
+      "name": "Ralphex",
+      "tier": "S",
+      "url": "https://github.com/umputun/ralphex",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\ralphex",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "935cc87cc7f161c32c72882883ac98e94cadadb0"
+    },
+    {
+      "name": "Reprise",
+      "tier": "S",
+      "url": "https://github.com/itsshreyasbhardwaj-design/reprise",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\reprise",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "fbd62842159789efe15e64e81c0c0c2677110830"
+    },
+    {
+      "name": "Sandbox Probe",
+      "tier": "S",
+      "url": "https://github.com/controlplaneio/sandbox-probe",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\sandbox-probe",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "c8a31f26e1743e03b2ffdeb1dedfe6795ba549b1"
+    },
+    {
+      "name": "Smithers",
+      "tier": "S",
+      "url": "https://github.com/smithersai/smithers",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\smithers",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "584f479a804159bcda718c44769ff1a2c8a411bb"
+    },
+    {
+      "name": "Superpowers",
+      "tier": "S",
+      "url": "https://github.com/obra/superpowers",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\superpowers",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
+    },
+    {
+      "name": "Sverklo",
+      "tier": "S",
+      "url": "https://github.com/sverklo/sverklo",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\sverklo",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "b0a7b816b1a122082ebc4544690780d99994e1a4"
+    },
+    {
+      "name": "TwinRouterBench",
+      "tier": "S",
+      "url": "https://github.com/CommonstackAI/TwinRouterBench",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\TwinRouterBench",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "7cbb0deac8f697b5faa8489c309560e53d2ef088"
+    },
+    {
+      "name": "VirtusLab Orca",
+      "tier": "S",
+      "url": "https://github.com/VirtusLab/orca",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\orca",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "9da3d07c526770f2dae3ccf3fa76401753d88c01"
+    },
+    {
+      "name": "ZMem",
+      "tier": "S+",
+      "url": "https://github.com/zerkerlabs/zmem",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\zmem",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "84ffd2decff8479b6da9ccbe190c5a0c91fdf601"
+    },
+    {
+      "name": "nono",
+      "tier": "S",
+      "url": "https://github.com/nolabs-ai/nono",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\nono",
+      "shallow": true,
+      "status": "CLONED",
+      "head": "bc1406e9ceb0b765d303a015502fade11f3858f5"
+    },
+    {
+      "name": "Bernstein",
+      "tier": "S",
+      "url": "https://github.com/sipyourdrink-ltd/bernstein",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\bernstein",
+      "shallow": true,
+      "status": "CLONE_FAILED",
+      "detail": "error: unable to create file examples/lineage/eu-manufacturer/fixtures/signatures/95/95df96a3211e96d7da4cc5eb798aa4878aa2997a85dd259936f399d7c99e9051/sha256_114c8657800699a94961b859cc66f1dc1a0fe355921f8bbcaa14f29f4a9abb8f.jws: Filename too long\nerror: unable to create file examples/lineage/eu-manufacturer/fixtures/signatures/95/95df96a3211e96d7da4cc5eb798aa4878aa2997a85dd259936f399d7c99e9051/sha256_12d7f22422b45131b9a01450b1bb742bb351b591af3ef15e009f4ccb608ca9ff.jws: Filename too long\nerror: una"
+    },
+    {
+      "name": "cass_memory_system",
+      "tier": "S",
+      "url": "https://github.com/Dicklesworthstone/cass_memory_system",
+      "target": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\cass_memory_system",
+      "shallow": true,
+      "status": "SKIPPED_LICENSE",
+      "detail": "LICENSE rider explicitly bars Anthropic-affiliated use, copying, benchmarking or analysis; see .gnosis/lab/memory/results/cass_memory_system/LICENSE_FINDING.md"
+    }
+  ]
+}

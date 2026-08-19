@@ -1,7 +1,19 @@
 {
   "schema_version": 1,
   "project": "GNOSIS",
-  "phase": "environment_bootstrap",
-  "status": "not_started_on_target_machine",
-  "next_action": "run bootstrap then 01_START_HERE.md"
+  "phase": "phase_minus_1",
+  "status": "memory_fabric_validated",
+  "gates": {
+    "bootstrap": "PASS",
+    "workstation_doctor": "PASS_WITH_NOTES",
+    "codex_cli": "INSTALLED_NEEDS_HUMAN_LOGIN",
+    "repository_inventory": "PASS_27_OF_130_TIER_S_COMPLETE",
+    "m3_install_verify": "PASS",
+    "zmem_install_verify": "PASS",
+    "memory_fabric_cross_session_test": "PASS",
+    "tier_s_archaeology": "IN_PROGRESS",
+    "initial_adrs": "PASS"
+  },
+  "next_action": "finish Tier-S archaeology, then layout ADR, then Phase 1 kernel continuation",
+  "updated": "2026-08-19"
 }

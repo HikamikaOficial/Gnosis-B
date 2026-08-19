@@ -6,8 +6,8 @@
     "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\repos",
     "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\repositories"
   ],
-  "found": 0,
-  "missing": 130,
+  "found": 27,
+  "missing": 103,
   "results": [
     {
       "name": "Paperclip",
@@ -76,8 +76,14 @@
       "name": "Bernstein",
       "tier": "S",
       "github_url": "https://github.com/sipyourdrink-ltd/bernstein",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\bernstein",
+          "origin": "https://github.com/sipyourdrink-ltd/bernstein",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "OMK (Open Multi-Agent Kit)",
@@ -97,15 +103,27 @@
       "name": "Cezar",
       "tier": "S",
       "github_url": "https://github.com/open-mercato/cezar",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\cezar",
+          "origin": "https://github.com/open-mercato/cezar",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "Ralphex",
       "tier": "S",
       "github_url": "https://github.com/umputun/ralphex",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\ralphex",
+          "origin": "https://github.com/umputun/ralphex",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "Omnigent",
@@ -132,8 +150,14 @@
       "name": "OpenAI Symphony",
       "tier": "S",
       "github_url": "https://github.com/openai/symphony",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\symphony",
+          "origin": "https://github.com/openai/symphony",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "AgentsMesh",
@@ -174,8 +198,14 @@
       "name": "Smithers",
       "tier": "S",
       "github_url": "https://github.com/smithersai/smithers",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\smithers",
+          "origin": "https://github.com/smithersai/smithers",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "Buildplane",
@@ -202,8 +232,14 @@
       "name": "VirtusLab Orca",
       "tier": "S",
       "github_url": "https://github.com/VirtusLab/orca",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\orca",
+          "origin": "https://github.com/VirtusLab/orca",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "OpenView",
@@ -265,15 +301,27 @@
       "name": "GitHub Spec Kit",
       "tier": "S",
       "github_url": "https://github.com/github/spec-kit",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\spec-kit",
+          "origin": "https://github.com/github/spec-kit",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "Superpowers",
       "tier": "S",
       "github_url": "https://github.com/obra/superpowers",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\superpowers",
+          "origin": "https://github.com/obra/superpowers",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "Hoyeon",
@@ -286,8 +334,14 @@
       "name": "Beads",
       "tier": "S",
       "github_url": "https://github.com/gastownhall/beads",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\beads",
+          "origin": "https://github.com/gastownhall/beads",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "Gas Town",
@@ -307,15 +361,27 @@
       "name": "Agent Workspace Fabric (AWF)",
       "tier": "S",
       "github_url": "https://github.com/dimileeh/agent-workspace-fabric",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\agent-workspace-fabric",
+          "origin": "https://github.com/dimileeh/agent-workspace-fabric",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "Grit",
       "tier": "S",
       "github_url": "https://github.com/rtk-ai/grit",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\grit",
+          "origin": "https://github.com/rtk-ai/grit",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "Symlock",
@@ -356,8 +422,14 @@
       "name": "Agent Arena",
       "tier": "S",
       "github_url": "https://github.com/zhjai/agent-arena",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\agent-arena",
+          "origin": "https://github.com/zhjai/agent-arena",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "Senate",
@@ -391,8 +463,14 @@
       "name": "TwinRouterBench",
       "tier": "S",
       "github_url": "https://github.com/CommonstackAI/TwinRouterBench",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\TwinRouterBench",
+          "origin": "https://github.com/CommonstackAI/TwinRouterBench",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "UncommonRoute",
@@ -510,8 +588,14 @@
       "name": "Sverklo",
       "tier": "S",
       "github_url": "https://github.com/sverklo/sverklo",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\sverklo",
+          "origin": "https://github.com/sverklo/sverklo",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "Code Context Engine",
@@ -657,22 +741,40 @@
       "name": "Microsoft Agent Governance Toolkit",
       "tier": "S",
       "github_url": "https://github.com/microsoft/agent-governance-toolkit",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\agent-governance-toolkit",
+          "origin": "https://github.com/microsoft/agent-governance-toolkit",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "AgentJail",
       "tier": "S",
       "github_url": "https://github.com/LuD1161/agentjail",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\agentjail",
+          "origin": "https://github.com/LuD1161/agentjail",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "nono",
       "tier": "S",
       "github_url": "https://github.com/nolabs-ai/nono",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\nono",
+          "origin": "https://github.com/nolabs-ai/nono",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "Agent Sandbox",
@@ -685,8 +787,14 @@
       "name": "Sandbox Probe",
       "tier": "S",
       "github_url": "https://github.com/controlplaneio/sandbox-probe",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\sandbox-probe",
+          "origin": "https://github.com/controlplaneio/sandbox-probe",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "Vigils",
@@ -727,8 +835,14 @@
       "name": "Reprise",
       "tier": "S",
       "github_url": "https://github.com/itsshreyasbhardwaj-design/reprise",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\reprise",
+          "origin": "https://github.com/itsshreyasbhardwaj-design/reprise",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "llmreplay",
@@ -741,29 +855,53 @@
       "name": "Agent Capsule",
       "tier": "S",
       "github_url": "https://github.com/quantumpipes/agent-capsule",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\agent-capsule",
+          "origin": "https://github.com/quantumpipes/agent-capsule",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "Catacomb",
       "tier": "S",
       "github_url": "https://github.com/realkarych/catacomb",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\catacomb",
+          "origin": "https://github.com/realkarych/catacomb",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "OpenTraces",
       "tier": "S",
       "github_url": "https://github.com/jayfarei/opentraces",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\opentraces",
+          "origin": "https://github.com/jayfarei/opentraces",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "OpenTelemetry Collector",
       "tier": "S",
       "github_url": "https://github.com/open-telemetry/opentelemetry-collector",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\opentelemetry-collector",
+          "origin": "https://github.com/open-telemetry/opentelemetry-collector",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "Prometheus",
@@ -790,8 +928,14 @@
       "name": "Dagger",
       "tier": "S",
       "github_url": "https://github.com/dagger/dagger",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\dagger",
+          "origin": "https://github.com/dagger/dagger",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "Syft",
@@ -895,22 +1039,40 @@
       "name": "ZMem",
       "tier": "S+",
       "github_url": "https://github.com/zerkerlabs/zmem",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\zmem",
+          "origin": "https://github.com/zerkerlabs/zmem",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "M3 Memory",
       "tier": "S+",
       "github_url": "https://github.com/skynetcmd/m3-memory",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\m3-memory",
+          "origin": "https://github.com/skynetcmd/m3-memory",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "Graphify",
       "tier": "A+ OPTIONAL",
       "github_url": "https://github.com/Graphify-Labs/graphify",
-      "status": "MISSING",
-      "matches": []
+      "status": "FOUND",
+      "matches": [
+        {
+          "path": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories\\graphify",
+          "origin": "https://github.com/Graphify-Labs/graphify",
+          "match": "git_remote_origin"
+        }
+      ]
     },
     {
       "name": "Obsidian Mind",

@@ -26,12 +26,12 @@
     "claude": {
       "status": "FOUND",
       "path": "C:\\Users\\nicol\\.local\\bin\\claude.EXE",
-      "version": "2.1.233 (Claude Code)"
+      "version": "2.1.235 (Claude Code)"
     },
     "codex": {
-      "status": "MISSING",
-      "path": null,
-      "version": null
+      "status": "FOUND",
+      "path": "C:\\Users\\nicol\\AppData\\Roaming\\npm\\codex.CMD",
+      "version": "codex-cli 0.148.0"
     },
     "docker": {
       "status": "MISSING",
@@ -49,9 +49,9 @@
       "version": "11.17.0"
     },
     "rg": {
-      "status": "MISSING",
-      "path": null,
-      "version": null
+      "status": "FOUND",
+      "path": "C:\\Users\\nicol\\AppData\\Local\\Microsoft\\WinGet\\Links\\rg.EXE",
+      "version": "ripgrep 15.2.0 (rev e89fff89ac)"
     },
     "m3": {
       "status": "MISSING",
@@ -66,10 +66,6 @@
   },
   "issues": [
     {
-      "severity": "HIGH",
-      "message": "Codex CLI missing: independent Codex review unavailable."
-    },
-    {
       "severity": "LOW",
       "message": "Docker missing; not a Phase-1 blocker, useful later for sandbox/integration."
     },
@@ -83,6 +79,7 @@
     }
   ],
   "strengths": [
-    "Claude Code: 2.1.233 (Claude Code)"
+    "Claude Code: 2.1.235 (Claude Code)",
+    "Codex CLI: codex-cli 0.148.0"
   ]
 }

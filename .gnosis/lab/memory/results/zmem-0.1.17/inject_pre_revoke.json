@@ -1,0 +1,1927 @@
+{
+  "action_id": "act_62c07ebd66f84400",
+  "agent_id": "gnosis-smoke",
+  "created_at": "2026-08-19T18:32:12Z",
+  "hash_alg": "sha256",
+  "injected_memory_ids": [
+    "mem_4154a0840a304013",
+    "mem_7a9d441ba7da4211"
+  ],
+  "injected_memory_proofs": {
+    "mem_4154a0840a304013": {
+      "leaf_count": 2,
+      "leaf_hash": "415c713a421a519e8519a2991dcecb21219ea4f82384fcc9a5674af758f3d34c",
+      "leaf_index": 0,
+      "memory_id": "mem_4154a0840a304013",
+      "proof": [
+        {
+          "hash": "1ceb04b7620b24018515a3bee5e5805483d6386bfcd45907cc36564d5e03ed87",
+          "position": "right"
+        }
+      ],
+      "root": "8a0d580ff992922ffa827c4459e99f93518a42ea5fe177294480db39ee6788a1"
+    },
+    "mem_7a9d441ba7da4211": {
+      "leaf_count": 2,
+      "leaf_hash": "1ceb04b7620b24018515a3bee5e5805483d6386bfcd45907cc36564d5e03ed87",
+      "leaf_index": 1,
+      "memory_id": "mem_7a9d441ba7da4211",
+      "proof": [
+        {
+          "hash": "415c713a421a519e8519a2991dcecb21219ea4f82384fcc9a5674af758f3d34c",
+          "position": "left"
+        }
+      ],
+      "root": "8a0d580ff992922ffa827c4459e99f93518a42ea5fe177294480db39ee6788a1"
+    }
+  },
+  "injected_memory_write_receipts": {
+    "mem_4154a0840a304013": {
+      "actor_uri": "agent://gnosis-claude",
+      "content_digest": "sha256:0a54daef9286e41555c31d3af76f56fede22864f00435809c243d463b98b7404",
+      "created_at": "2026-08-19T18:31:43Z",
+      "environment_hash": "sha256:f71f73833c35058a3121e80606397d89057026404c47b47d9b940e39a285b3b0",
+      "event_hash": "330701796f7ff17dde8a621da16d568f163ed45649fa73c4608152c507d17200",
+      "hash_alg": "sha256",
+      "memory_id": "mem_4154a0840a304013",
+      "merkle_alg": "binary-sha256-v1",
+      "merkle_root": "5e7fc6c42c792154414187aa5275786f08b9c253cf92567e55d471c126fd2ea5",
+      "parent_action_id": null,
+      "receipt_hash": "e7e0d179afc8d23e2e117583ec6054802f18004ac275a75f927e28fc52036a79",
+      "receipt_id": "wr_9627a64ca792b13a185ae5ea",
+      "receipt_schema": "zerker.memory_write.v1",
+      "session_id": "session://C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.zerker\\memory.sqlite",
+      "source_uri": "gnosis://phase-minus-1/smoke/t2",
+      "treeship_statement": {
+        "created_at": "2026-08-19T18:31:43Z",
+        "evidence": {
+          "event_hash": "330701796f7ff17dde8a621da16d568f163ed45649fa73c4608152c507d17200",
+          "hash_alg": "sha256",
+          "merkle_alg": "binary-sha256-v1",
+          "merkle_root": "5e7fc6c42c792154414187aa5275786f08b9c253cf92567e55d471c126fd2ea5",
+          "new_merkle_root": "5e7fc6c42c792154414187aa5275786f08b9c253cf92567e55d471c126fd2ea5",
+          "prior_event_hash": "c7b840cf1348aaceea6699d636c1e2c43fcfcb5b6628546221cdb3c60915dfe1",
+          "prior_merkle_root": "c7b840cf1348aaceea6699d636c1e2c43fcfcb5b6628546221cdb3c60915dfe1"
+        },
+        "kind": "zerker.memory.write_provenance",
+        "object": {
+          "actor_id": "human",
+          "actor_uri": "agent://gnosis-claude",
+          "authority": "medium",
+          "caused_by_event": null,
+          "content_digest": "sha256:0a54daef9286e41555c31d3af76f56fede22864f00435809c243d463b98b7404",
+          "environment_hash": "sha256:f71f73833c35058a3121e80606397d89057026404c47b47d9b940e39a285b3b0",
+          "labels": [
+            "gnosis-smoke"
+          ],
+          "labels_digest": "sha256:b00a35d842215b2edb47890c7700dcba40b38d892522810a83f4ed924e58451c",
+          "memory_type": "semantic",
+          "parent_action_id": null,
+          "parents": [],
+          "parents_digest": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "scope": "global",
+          "semantic_truth_guaranteed": false,
+          "session_id": "session://C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.zerker\\memory.sqlite",
+          "source_kind": "system",
+          "source_uri": "gnosis://phase-minus-1/smoke/t2",
+          "status": "active",
+          "trust": 0.9
+        },
+        "predicate": "memory.write.provenance.generated",
+        "producer": {
+          "name": "zerker-memory"
+        },
+        "schema": "com.zerker.memory.treeship.statement",
+        "schema_version": "0.1.0",
+        "source": {
+          "event": {
+            "action_id": null,
+            "actor_id": "human",
+            "created_at": "2026-08-19T18:31:43Z",
+            "event_hash": "330701796f7ff17dde8a621da16d568f163ed45649fa73c4608152c507d17200",
+            "event_schema": "zerker.memory_event.v1",
+            "event_type": "OBSERVED",
+            "hash_alg": "sha256",
+            "memory_id": "mem_4154a0840a304013",
+            "merkle_alg": "binary-sha256-v1",
+            "merkle_root": "5e7fc6c42c792154414187aa5275786f08b9c253cf92567e55d471c126fd2ea5",
+            "payload_hash": "d24371dd7f04b8ec2cf0011f4de262486dcaf3740f0ccd174d63f6e2fc4019bf",
+            "payload_json": "{\"authority\":\"medium\",\"caused_by_event\":null,\"content_hash\":\"0a54daef9286e41555c31d3af76f56fede22864f00435809c243d463b98b7404\",\"id\":\"mem_4154a0840a304013\",\"labels\":[\"gnosis-smoke\"],\"labels_digest\":\"sha256:b00a35d842215b2edb47890c7700dcba40b38d892522810a83f4ed924e58451c\",\"parent_action_id\":null,\"parents\":[],\"parents_digest\":\"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\",\"scope\":\"global\",\"source_kind\":\"system\",\"source_uri\":\"gnosis://phase-minus-1/smoke/t2\",\"status\":\"active\",\"trust\":0.9,\"type\":\"semantic\"}",
+            "prev_event_hash": "c7b840cf1348aaceea6699d636c1e2c43fcfcb5b6628546221cdb3c60915dfe1",
+            "prior_merkle_root": "c7b840cf1348aaceea6699d636c1e2c43fcfcb5b6628546221cdb3c60915dfe1"
+          },
+          "receipt": {
+            "actor_uri": "agent://gnosis-claude",
+            "caused_by_event": null,
+            "content_digest": "sha256:0a54daef9286e41555c31d3af76f56fede22864f00435809c243d463b98b7404",
+            "created_at": "2026-08-19T18:31:43Z",
+            "environment_hash": "sha256:f71f73833c35058a3121e80606397d89057026404c47b47d9b940e39a285b3b0",
+            "event_hash": "330701796f7ff17dde8a621da16d568f163ed45649fa73c4608152c507d17200",
+            "hash_alg": "sha256",
+            "memory_id": "mem_4154a0840a304013",
+            "merkle_alg": "binary-sha256-v1",
+            "merkle_root": "5e7fc6c42c792154414187aa5275786f08b9c253cf92567e55d471c126fd2ea5",
+            "parent_action_id": null,
+            "receipt_id": "wr_9627a64ca792b13a185ae5ea",
+            "receipt_schema": "zerker.memory_write.v1",
+            "session_id": "session://C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.zerker\\memory.sqlite",
+            "source_uri": "gnosis://phase-minus-1/smoke/t2"
+          },
+          "system": "zerker-memory"
+        },
+        "statement_version": "1",
+        "subject": {
+          "id": "wr_9627a64ca792b13a185ae5ea",
+          "memory_id": "mem_4154a0840a304013",
+          "type": "memory_write"
+        }
+      }
+    },
+    "mem_7a9d441ba7da4211": {
+      "actor_uri": "agent://gnosis-claude",
+      "content_digest": "sha256:7c3acb1cb0c52a0f4373130dd90ba61b7571bb4c50174872b3fb0ce0cd600b6a",
+      "created_at": "2026-08-19T18:31:42Z",
+      "environment_hash": "sha256:f71f73833c35058a3121e80606397d89057026404c47b47d9b940e39a285b3b0",
+      "event_hash": "c7b840cf1348aaceea6699d636c1e2c43fcfcb5b6628546221cdb3c60915dfe1",
+      "hash_alg": "sha256",
+      "memory_id": "mem_7a9d441ba7da4211",
+      "merkle_alg": "binary-sha256-v1",
+      "merkle_root": "c7b840cf1348aaceea6699d636c1e2c43fcfcb5b6628546221cdb3c60915dfe1",
+      "parent_action_id": null,
+      "receipt_hash": "e27b923c5a1707add01ab9ff0c9a84b2e2fc74800eb0d9bb409d657061475670",
+      "receipt_id": "wr_d593adc4c887434475cc545c",
+      "receipt_schema": "zerker.memory_write.v1",
+      "session_id": "session://C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.zerker\\memory.sqlite",
+      "source_uri": "gnosis://phase-minus-1/smoke/t1",
+      "treeship_statement": {
+        "created_at": "2026-08-19T18:31:42Z",
+        "evidence": {
+          "event_hash": "c7b840cf1348aaceea6699d636c1e2c43fcfcb5b6628546221cdb3c60915dfe1",
+          "hash_alg": "sha256",
+          "merkle_alg": "binary-sha256-v1",
+          "merkle_root": "c7b840cf1348aaceea6699d636c1e2c43fcfcb5b6628546221cdb3c60915dfe1",
+          "new_merkle_root": "c7b840cf1348aaceea6699d636c1e2c43fcfcb5b6628546221cdb3c60915dfe1",
+          "prior_event_hash": "aeebad4a796fcc2e15dc4c6061b45ed9b373f26adfc798ca7d2d8cc58182718e",
+          "prior_merkle_root": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "kind": "zerker.memory.write_provenance",
+        "object": {
+          "actor_id": "human",
+          "actor_uri": "agent://gnosis-claude",
+          "authority": "medium",
+          "caused_by_event": null,
+          "content_digest": "sha256:7c3acb1cb0c52a0f4373130dd90ba61b7571bb4c50174872b3fb0ce0cd600b6a",
+          "environment_hash": "sha256:f71f73833c35058a3121e80606397d89057026404c47b47d9b940e39a285b3b0",
+          "labels": [
+            "gnosis-smoke"
+          ],
+          "labels_digest": "sha256:b00a35d842215b2edb47890c7700dcba40b38d892522810a83f4ed924e58451c",
+          "memory_type": "semantic",
+          "parent_action_id": null,
+          "parents": [],
+          "parents_digest": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "scope": "global",
+          "semantic_truth_guaranteed": false,
+          "session_id": "session://C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.zerker\\memory.sqlite",
+          "source_kind": "system",
+          "source_uri": "gnosis://phase-minus-1/smoke/t1",
+          "status": "active",
+          "trust": 0.9
+        },
+        "predicate": "memory.write.provenance.generated",
+        "producer": {
+          "name": "zerker-memory"
+        },
+        "schema": "com.zerker.memory.treeship.statement",
+        "schema_version": "0.1.0",
+        "source": {
+          "event": {
+            "action_id": null,
+            "actor_id": "human",
+            "created_at": "2026-08-19T18:31:42Z",
+            "event_hash": "c7b840cf1348aaceea6699d636c1e2c43fcfcb5b6628546221cdb3c60915dfe1",
+            "event_schema": "zerker.memory_event.v1",
+            "event_type": "OBSERVED",
+            "hash_alg": "sha256",
+            "memory_id": "mem_7a9d441ba7da4211",
+            "merkle_alg": "binary-sha256-v1",
+            "merkle_root": "c7b840cf1348aaceea6699d636c1e2c43fcfcb5b6628546221cdb3c60915dfe1",
+            "payload_hash": "4126e5c763a483dca2840004f1dee98102d8c82e26969c98071e2ebabca1a128",
+            "payload_json": "{\"authority\":\"medium\",\"caused_by_event\":null,\"content_hash\":\"7c3acb1cb0c52a0f4373130dd90ba61b7571bb4c50174872b3fb0ce0cd600b6a\",\"id\":\"mem_7a9d441ba7da4211\",\"labels\":[\"gnosis-smoke\"],\"labels_digest\":\"sha256:b00a35d842215b2edb47890c7700dcba40b38d892522810a83f4ed924e58451c\",\"parent_action_id\":null,\"parents\":[],\"parents_digest\":\"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\",\"scope\":\"global\",\"source_kind\":\"system\",\"source_uri\":\"gnosis://phase-minus-1/smoke/t1\",\"status\":\"active\",\"trust\":0.9,\"type\":\"semantic\"}",
+            "prev_event_hash": "aeebad4a796fcc2e15dc4c6061b45ed9b373f26adfc798ca7d2d8cc58182718e",
+            "prior_merkle_root": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "receipt": {
+            "actor_uri": "agent://gnosis-claude",
+            "caused_by_event": null,
+            "content_digest": "sha256:7c3acb1cb0c52a0f4373130dd90ba61b7571bb4c50174872b3fb0ce0cd600b6a",
+            "created_at": "2026-08-19T18:31:42Z",
+            "environment_hash": "sha256:f71f73833c35058a3121e80606397d89057026404c47b47d9b940e39a285b3b0",
+            "event_hash": "c7b840cf1348aaceea6699d636c1e2c43fcfcb5b6628546221cdb3c60915dfe1",
+            "hash_alg": "sha256",
+            "memory_id": "mem_7a9d441ba7da4211",
+            "merkle_alg": "binary-sha256-v1",
+            "merkle_root": "c7b840cf1348aaceea6699d636c1e2c43fcfcb5b6628546221cdb3c60915dfe1",
+            "parent_action_id": null,
+            "receipt_id": "wr_d593adc4c887434475cc545c",
+            "receipt_schema": "zerker.memory_write.v1",
+            "session_id": "session://C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.zerker\\memory.sqlite",
+            "source_uri": "gnosis://phase-minus-1/smoke/t1"
+          },
+          "system": "zerker-memory"
+        },
+        "statement_version": "1",
+        "subject": {
+          "id": "wr_d593adc4c887434475cc545c",
+          "memory_id": "mem_7a9d441ba7da4211",
+          "type": "memory_write"
+        }
+      }
+    }
+  },
+  "memories": [
+    {
+      "authority": "medium",
+      "content": "GNOSIS smoke T2: the continuity token store migrated to SQLITE.",
+      "content_hash": "0a54daef9286e41555c31d3af76f56fede22864f00435809c243d463b98b7404",
+      "created_at": "2026-08-19T18:31:43Z",
+      "expires_at": null,
+      "id": "mem_4154a0840a304013",
+      "labels": [
+        "gnosis-smoke"
+      ],
+      "parents": [],
+      "scope": "global",
+      "source_kind": "system",
+      "status": "active",
+      "trust": 0.9,
+      "type": "semantic",
+      "updated_at": "2026-08-19T18:31:43Z"
+    },
+    {
+      "authority": "medium",
+      "content": "GNOSIS smoke T1: the continuity token store is FILE-BASED.",
+      "content_hash": "7c3acb1cb0c52a0f4373130dd90ba61b7571bb4c50174872b3fb0ce0cd600b6a",
+      "created_at": "2026-08-19T18:31:42Z",
+      "expires_at": null,
+      "id": "mem_7a9d441ba7da4211",
+      "labels": [
+        "gnosis-smoke"
+      ],
+      "parents": [],
+      "scope": "global",
+      "source_kind": "system",
+      "status": "active",
+      "trust": 0.9,
+      "type": "semantic",
+      "updated_at": "2026-08-19T18:31:42Z"
+    }
+  ],
+  "memory_context": {
+    "action_id": "act_62c07ebd66f84400",
+    "agent_id": "gnosis-smoke",
+    "budget_dropped_memory_ids": [],
+    "context_digest": "sha256:481e95aff370add25c068a273da96efd7816e8a7e56dfd654f1b96012f64648d",
+    "created_at": "2026-08-19T18:32:12Z",
+    "hash_alg": "sha256",
+    "injected_memory_ids": [
+      "mem_4154a0840a304013",
+      "mem_7a9d441ba7da4211"
+    ],
+    "memory_tree_root": "8a0d580ff992922ffa827c4459e99f93518a42ea5fe177294480db39ee6788a1",
+    "merkle_root": "ac64be5cf07524cc9d4cae24b5f72717fe2b2925005af6af68307a0200cc589c",
+    "policy_digest": "sha256:694b6b282f07e893059ec29fa2287bf51b5344a438da156b34ed49d33e5e9e92",
+    "retrieved_memory_ids": [
+      "mem_4154a0840a304013",
+      "mem_7a9d441ba7da4211"
+    ],
+    "schema": "zerker.memory_context.v1",
+    "scope": null,
+    "task_hash": "930f9f28d2277a0c90de4aaa315db76efcc416b1728044d5bb101a9f601a4339",
+    "withheld_memory_ids": []
+  },
+  "memory_tree": {
+    "hash_alg": "sha256",
+    "leaf_count": 2,
+    "leaves": [
+      {
+        "content_hash": "0a54daef9286e41555c31d3af76f56fede22864f00435809c243d463b98b7404",
+        "hash_alg": "sha256",
+        "leaf_hash": "415c713a421a519e8519a2991dcecb21219ea4f82384fcc9a5674af758f3d34c",
+        "material": {
+          "authority": "medium",
+          "content_hash": "0a54daef9286e41555c31d3af76f56fede22864f00435809c243d463b98b7404",
+          "created_at": "2026-08-19T18:31:43Z",
+          "expires_at": null,
+          "labels": [
+            "gnosis-smoke"
+          ],
+          "memory_id": "mem_4154a0840a304013",
+          "parents": [],
+          "scope": "global",
+          "source_kind": "system",
+          "status": "active",
+          "trust": 0.9,
+          "type": "semantic",
+          "updated_at": "2026-08-19T18:31:43Z"
+        },
+        "memory_id": "mem_4154a0840a304013",
+        "schema": "zerker.memory_leaf.v1"
+      },
+      {
+        "content_hash": "7c3acb1cb0c52a0f4373130dd90ba61b7571bb4c50174872b3fb0ce0cd600b6a",
+        "hash_alg": "sha256",
+        "leaf_hash": "1ceb04b7620b24018515a3bee5e5805483d6386bfcd45907cc36564d5e03ed87",
+        "material": {
+          "authority": "medium",
+          "content_hash": "7c3acb1cb0c52a0f4373130dd90ba61b7571bb4c50174872b3fb0ce0cd600b6a",
+          "created_at": "2026-08-19T18:31:42Z",
+          "expires_at": null,
+          "labels": [
+            "gnosis-smoke"
+          ],
+          "memory_id": "mem_7a9d441ba7da4211",
+          "parents": [],
+          "scope": "global",
+          "source_kind": "system",
+          "status": "active",
+          "trust": 0.9,
+          "type": "semantic",
+          "updated_at": "2026-08-19T18:31:42Z"
+        },
+        "memory_id": "mem_7a9d441ba7da4211",
+        "schema": "zerker.memory_leaf.v1"
+      }
+    ],
+    "merkle_alg": "binary-sha256-v1",
+    "proofs": {
+      "mem_4154a0840a304013": {
+        "leaf_count": 2,
+        "leaf_hash": "415c713a421a519e8519a2991dcecb21219ea4f82384fcc9a5674af758f3d34c",
+        "leaf_index": 0,
+        "memory_id": "mem_4154a0840a304013",
+        "proof": [
+          {
+            "hash": "1ceb04b7620b24018515a3bee5e5805483d6386bfcd45907cc36564d5e03ed87",
+            "position": "right"
+          }
+        ],
+        "root": "8a0d580ff992922ffa827c4459e99f93518a42ea5fe177294480db39ee6788a1"
+      },
+      "mem_7a9d441ba7da4211": {
+        "leaf_count": 2,
+        "leaf_hash": "1ceb04b7620b24018515a3bee5e5805483d6386bfcd45907cc36564d5e03ed87",
+        "leaf_index": 1,
+        "memory_id": "mem_7a9d441ba7da4211",
+        "proof": [
+          {
+            "hash": "415c713a421a519e8519a2991dcecb21219ea4f82384fcc9a5674af758f3d34c",
+            "position": "left"
+          }
+        ],
+        "root": "8a0d580ff992922ffa827c4459e99f93518a42ea5fe177294480db39ee6788a1"
+      }
+    },
+    "root": "8a0d580ff992922ffa827c4459e99f93518a42ea5fe177294480db39ee6788a1",
+    "schema": "zerker.memory_tree.v1",
+    "scope": "retrieved"
+  },
+  "merkle_alg": "binary-sha256-v1",
+  "merkle_root": "ac64be5cf07524cc9d4cae24b5f72717fe2b2925005af6af68307a0200cc589c",
+  "policy_checks": [],
+  "policy_decisions": [
+    {
+      "decision": "inject",
+      "memory_id": "mem_4154a0840a304013",
+      "reason": "authorized",
+      "rule": "authorized-memory"
+    },
+    {
+      "decision": "inject",
+      "memory_id": "mem_7a9d441ba7da4211",
+      "reason": "authorized",
+      "rule": "authorized-memory"
+    }
+  ],
+  "policy_engine": "zerker.symbolic_policy.v1",
+  "receipt_schema": "zerker.memory_action.v1",
+  "retrieval": {
+    "baseline_ranking": {
+      "applied": true,
+      "dense_fusion_signal": null,
+      "dense_fusion_signal_applied": false,
+      "hybrid_semantic_signal": null,
+      "hybrid_semantic_signal_applied": false,
+      "lookup_fact_boosts": [
+        "lookup_key_match",
+        "lookup_value_compactness"
+      ],
+      "multi_hop_fusion_signal": null,
+      "multi_hop_fusion_signal_applied": false,
+      "rank_before_boosts_source": "fts_window_preselection_v1",
+      "strategy": "deterministic_lookup_fact_score_desc_v5",
+      "temporal_fusion_signal": null,
+      "temporal_fusion_signal_applied": false
+    },
+    "candidate_limit": 20,
+    "candidates": [
+      {
+        "bm25": -3.0660146699266504e-06,
+        "child_candidate_ids": [],
+        "dense_candidate_source": null,
+        "dense_fusion_rank": null,
+        "dense_fusion_score": null,
+        "dense_fusion_sources": null,
+        "dense_rank": null,
+        "dense_score": null,
+        "dense_vector_hash": null,
+        "embedding": {
+          "content_hash": "0a54daef9286e41555c31d3af76f56fede22864f00435809c243d463b98b7404",
+          "memory_vector_hash": null,
+          "memory_vector_id": "vec_fc6abb69e276bbc8ae833dbe",
+          "model_id": "zmem-pseudo-embedding-v1",
+          "provider_eligible": false,
+          "provider_excluded_reason": null,
+          "provider_id": null,
+          "score": null
+        },
+        "embedding_rank": 1,
+        "expires_at": null,
+        "features": {
+          "authority": "medium",
+          "authority_rank": 2,
+          "child_candidate_ids": [],
+          "content_exact_query_match": false,
+          "content_phrase_match": true,
+          "content_term_matches": 3,
+          "created_at": "2026-08-19T18:31:43Z",
+          "dense_candidate_source": null,
+          "dense_fusion_rank": null,
+          "dense_fusion_score": null,
+          "dense_fusion_sources": null,
+          "dense_rank": null,
+          "dense_score": null,
+          "dense_vector_hash": null,
+          "embedding": {
+            "content_hash": "0a54daef9286e41555c31d3af76f56fede22864f00435809c243d463b98b7404",
+            "memory_vector_hash": null,
+            "memory_vector_id": "vec_fc6abb69e276bbc8ae833dbe",
+            "model_id": "zmem-pseudo-embedding-v1",
+            "provider_eligible": false,
+            "provider_excluded_reason": null,
+            "provider_id": null,
+            "score": null
+          },
+          "embedding_rank": 1,
+          "expires_at": null,
+          "fts_preselection_rank": 1,
+          "fts_window_rank": 1,
+          "fusion_rank": null,
+          "fusion_score": null,
+          "fusion_sources": null,
+          "has_parents": false,
+          "hybrid_candidate_source": null,
+          "introduced_by_subquery_id": null,
+          "is_expired": false,
+          "label_exact_query_match": false,
+          "label_phrase_match": false,
+          "label_term_matches": 0,
+          "lookup_boost_supported": false,
+          "lookup_key_kind": null,
+          "lookup_key_match": false,
+          "lookup_relation_match": false,
+          "lookup_value_compactness": 0.0,
+          "lookup_value_token_count": null,
+          "matched_fields": [
+            "content"
+          ],
+          "multi_hop_duplicate_count": 0,
+          "multi_hop_fusion_rank": null,
+          "multi_hop_fusion_score": null,
+          "multi_hop_fusion_source_count": 0,
+          "multi_hop_fusion_sources": [],
+          "multi_hop_outranked_by_fusion": false,
+          "multi_hop_outranked_reason": null,
+          "multi_hop_promoted_by_fusion": false,
+          "multi_hop_rank": 1,
+          "multi_hop_rank_delta": null,
+          "multi_hop_subquery_ids": [
+            "parent"
+          ],
+          "observation_seq": 2,
+          "post_rerank_rank": 1,
+          "pre_dense_rank": null,
+          "pre_embedding_rank": 1,
+          "pre_hybrid_rank": null,
+          "pre_multi_hop_rank": 1,
+          "pre_rerank_rank": 1,
+          "provider_embedding_rank": null,
+          "provider_rerank_rank": null,
+          "rank_before_boosts": 1,
+          "reranker": {
+            "hybrid_semantic_score": null,
+            "local_lexical_score": null,
+            "local_score": null,
+            "local_strategy": null,
+            "model_id": "none",
+            "provider_eligible": false,
+            "provider_excluded_reason": null,
+            "provider_id": null,
+            "reranker_id": "none",
+            "score": null,
+            "score_hash": null
+          },
+          "reranker_score": null,
+          "score_components": {
+            "authority": 0.7,
+            "bm25": 3.0660146699266504e-06,
+            "content_exact": 0.30000000000000004,
+            "content_exact_query": 0.0,
+            "content_phrase": 0.3,
+            "embedding": 0.0,
+            "label_exact": 0.0,
+            "label_exact_query": 0.0,
+            "label_phrase": 0.0,
+            "lookup_key_match": 0.0,
+            "lookup_value_compactness": 0.0,
+            "reranker": 0.0,
+            "trust": 0.225
+          },
+          "search_mode": "fts",
+          "selected_by_temporal_strategy": true,
+          "semantic_backfill_score": null,
+          "semantic_backfill_term_overlap": null,
+          "structured_fact_candidate": null,
+          "superseded_by_candidate": null,
+          "support_expansion_candidate": null,
+          "support_expansion_kind": null,
+          "support_expansion_nucleus_ids": null,
+          "support_expansion_rank": null,
+          "temporal_fusion_rank": null,
+          "temporal_fusion_score": null,
+          "temporal_fusion_source_count": 0,
+          "temporal_fusion_sources": [],
+          "temporal_injection_rank": null,
+          "temporal_selection_exclusion": null,
+          "temporal_selection_exclusion_reason": null,
+          "temporal_selection_rank": 1,
+          "temporal_state": "current",
+          "temporal_support_candidate": null,
+          "temporal_support_kind": null,
+          "trust": 0.9,
+          "updated_at": "2026-08-19T18:31:43Z"
+        },
+        "fts_preselection_rank": 1,
+        "fts_window_rank": 1,
+        "fusion_rank": null,
+        "fusion_score": null,
+        "fusion_sources": null,
+        "hybrid_candidate_source": null,
+        "introduced_by_subquery_id": null,
+        "is_expired": false,
+        "matched_fields": [
+          "content"
+        ],
+        "memory_id": "mem_4154a0840a304013",
+        "mode": "fts",
+        "multi_hop_duplicate_count": 0,
+        "multi_hop_fusion_rank": null,
+        "multi_hop_fusion_score": null,
+        "multi_hop_fusion_source_count": 0,
+        "multi_hop_fusion_sources": [],
+        "multi_hop_outranked_by_fusion": false,
+        "multi_hop_outranked_reason": null,
+        "multi_hop_promoted_by_fusion": false,
+        "multi_hop_rank": 1,
+        "multi_hop_rank_delta": null,
+        "multi_hop_subquery_ids": [
+          "parent"
+        ],
+        "observation_seq": 2,
+        "post_rerank_rank": 1,
+        "pre_dense_rank": null,
+        "pre_embedding_rank": 1,
+        "pre_hybrid_rank": null,
+        "pre_multi_hop_rank": 1,
+        "pre_rerank_rank": 1,
+        "provider_embedding_rank": null,
+        "provider_rerank_rank": null,
+        "rank": 1,
+        "rank_before_boosts": 1,
+        "reranker": {
+          "hybrid_semantic_score": null,
+          "local_lexical_score": null,
+          "local_score": null,
+          "local_strategy": null,
+          "model_id": "none",
+          "provider_eligible": false,
+          "provider_excluded_reason": null,
+          "provider_id": null,
+          "reranker_id": "none",
+          "score": null,
+          "score_hash": null
+        },
+        "reranker_score": null,
+        "score": 1.525003,
+        "score_components": {
+          "authority": 0.7,
+          "bm25": 3.0660146699266504e-06,
+          "content_exact": 0.30000000000000004,
+          "content_exact_query": 0.0,
+          "content_phrase": 0.3,
+          "embedding": 0.0,
+          "label_exact": 0.0,
+          "label_exact_query": 0.0,
+          "label_phrase": 0.0,
+          "lookup_key_match": 0.0,
+          "lookup_value_compactness": 0.0,
+          "reranker": 0.0,
+          "trust": 0.225
+        },
+        "search_mode": "fts",
+        "selected_by_temporal_strategy": true,
+        "semantic_backfill_score": null,
+        "semantic_backfill_term_overlap": null,
+        "structured_fact_candidate": null,
+        "superseded_by_candidate": null,
+        "support_expansion_candidate": null,
+        "support_expansion_kind": null,
+        "support_expansion_nucleus_ids": null,
+        "support_expansion_rank": null,
+        "temporal_fusion_rank": null,
+        "temporal_fusion_score": null,
+        "temporal_fusion_source_count": 0,
+        "temporal_fusion_sources": [],
+        "temporal_injection_rank": null,
+        "temporal_selection_exclusion": null,
+        "temporal_selection_exclusion_reason": null,
+        "temporal_selection_rank": 1,
+        "temporal_state": "current",
+        "temporal_support_candidate": null,
+        "temporal_support_kind": null,
+        "updated_at": "2026-08-19T18:31:43Z"
+      },
+      {
+        "bm25": -3.0660146699266504e-06,
+        "child_candidate_ids": [],
+        "dense_candidate_source": null,
+        "dense_fusion_rank": null,
+        "dense_fusion_score": null,
+        "dense_fusion_sources": null,
+        "dense_rank": null,
+        "dense_score": null,
+        "dense_vector_hash": null,
+        "embedding": {
+          "content_hash": "7c3acb1cb0c52a0f4373130dd90ba61b7571bb4c50174872b3fb0ce0cd600b6a",
+          "memory_vector_hash": null,
+          "memory_vector_id": "vec_6bbd9b90a084d5ff6de55dee",
+          "model_id": "zmem-pseudo-embedding-v1",
+          "provider_eligible": false,
+          "provider_excluded_reason": null,
+          "provider_id": null,
+          "score": null
+        },
+        "embedding_rank": 2,
+        "expires_at": null,
+        "features": {
+          "authority": "medium",
+          "authority_rank": 2,
+          "child_candidate_ids": [],
+          "content_exact_query_match": false,
+          "content_phrase_match": true,
+          "content_term_matches": 3,
+          "created_at": "2026-08-19T18:31:42Z",
+          "dense_candidate_source": null,
+          "dense_fusion_rank": null,
+          "dense_fusion_score": null,
+          "dense_fusion_sources": null,
+          "dense_rank": null,
+          "dense_score": null,
+          "dense_vector_hash": null,
+          "embedding": {
+            "content_hash": "7c3acb1cb0c52a0f4373130dd90ba61b7571bb4c50174872b3fb0ce0cd600b6a",
+            "memory_vector_hash": null,
+            "memory_vector_id": "vec_6bbd9b90a084d5ff6de55dee",
+            "model_id": "zmem-pseudo-embedding-v1",
+            "provider_eligible": false,
+            "provider_excluded_reason": null,
+            "provider_id": null,
+            "score": null
+          },
+          "embedding_rank": 2,
+          "expires_at": null,
+          "fts_preselection_rank": 2,
+          "fts_window_rank": 2,
+          "fusion_rank": null,
+          "fusion_score": null,
+          "fusion_sources": null,
+          "has_parents": false,
+          "hybrid_candidate_source": null,
+          "introduced_by_subquery_id": null,
+          "is_expired": false,
+          "label_exact_query_match": false,
+          "label_phrase_match": false,
+          "label_term_matches": 0,
+          "lookup_boost_supported": false,
+          "lookup_key_kind": null,
+          "lookup_key_match": false,
+          "lookup_relation_match": false,
+          "lookup_value_compactness": 0.0,
+          "lookup_value_token_count": null,
+          "matched_fields": [
+            "content"
+          ],
+          "multi_hop_duplicate_count": 0,
+          "multi_hop_fusion_rank": null,
+          "multi_hop_fusion_score": null,
+          "multi_hop_fusion_source_count": 0,
+          "multi_hop_fusion_sources": [],
+          "multi_hop_outranked_by_fusion": false,
+          "multi_hop_outranked_reason": null,
+          "multi_hop_promoted_by_fusion": false,
+          "multi_hop_rank": 2,
+          "multi_hop_rank_delta": null,
+          "multi_hop_subquery_ids": [
+            "parent"
+          ],
+          "observation_seq": 1,
+          "post_rerank_rank": 2,
+          "pre_dense_rank": null,
+          "pre_embedding_rank": 2,
+          "pre_hybrid_rank": null,
+          "pre_multi_hop_rank": 2,
+          "pre_rerank_rank": 2,
+          "provider_embedding_rank": null,
+          "provider_rerank_rank": null,
+          "rank_before_boosts": 2,
+          "reranker": {
+            "hybrid_semantic_score": null,
+            "local_lexical_score": null,
+            "local_score": null,
+            "local_strategy": null,
+            "model_id": "none",
+            "provider_eligible": false,
+            "provider_excluded_reason": null,
+            "provider_id": null,
+            "reranker_id": "none",
+            "score": null,
+            "score_hash": null
+          },
+          "reranker_score": null,
+          "score_components": {
+            "authority": 0.7,
+            "bm25": 3.0660146699266504e-06,
+            "content_exact": 0.30000000000000004,
+            "content_exact_query": 0.0,
+            "content_phrase": 0.3,
+            "embedding": 0.0,
+            "label_exact": 0.0,
+            "label_exact_query": 0.0,
+            "label_phrase": 0.0,
+            "lookup_key_match": 0.0,
+            "lookup_value_compactness": 0.0,
+            "reranker": 0.0,
+            "trust": 0.225
+          },
+          "search_mode": "fts",
+          "selected_by_temporal_strategy": true,
+          "semantic_backfill_score": null,
+          "semantic_backfill_term_overlap": null,
+          "structured_fact_candidate": null,
+          "superseded_by_candidate": null,
+          "support_expansion_candidate": null,
+          "support_expansion_kind": null,
+          "support_expansion_nucleus_ids": null,
+          "support_expansion_rank": null,
+          "temporal_fusion_rank": null,
+          "temporal_fusion_score": null,
+          "temporal_fusion_source_count": 0,
+          "temporal_fusion_sources": [],
+          "temporal_injection_rank": null,
+          "temporal_selection_exclusion": null,
+          "temporal_selection_exclusion_reason": null,
+          "temporal_selection_rank": 2,
+          "temporal_state": "current",
+          "temporal_support_candidate": null,
+          "temporal_support_kind": null,
+          "trust": 0.9,
+          "updated_at": "2026-08-19T18:31:42Z"
+        },
+        "fts_preselection_rank": 2,
+        "fts_window_rank": 2,
+        "fusion_rank": null,
+        "fusion_score": null,
+        "fusion_sources": null,
+        "hybrid_candidate_source": null,
+        "introduced_by_subquery_id": null,
+        "is_expired": false,
+        "matched_fields": [
+          "content"
+        ],
+        "memory_id": "mem_7a9d441ba7da4211",
+        "mode": "fts",
+        "multi_hop_duplicate_count": 0,
+        "multi_hop_fusion_rank": null,
+        "multi_hop_fusion_score": null,
+        "multi_hop_fusion_source_count": 0,
+        "multi_hop_fusion_sources": [],
+        "multi_hop_outranked_by_fusion": false,
+        "multi_hop_outranked_reason": null,
+        "multi_hop_promoted_by_fusion": false,
+        "multi_hop_rank": 2,
+        "multi_hop_rank_delta": null,
+        "multi_hop_subquery_ids": [
+          "parent"
+        ],
+        "observation_seq": 1,
+        "post_rerank_rank": 2,
+        "pre_dense_rank": null,
+        "pre_embedding_rank": 2,
+        "pre_hybrid_rank": null,
+        "pre_multi_hop_rank": 2,
+        "pre_rerank_rank": 2,
+        "provider_embedding_rank": null,
+        "provider_rerank_rank": null,
+        "rank": 2,
+        "rank_before_boosts": 2,
+        "reranker": {
+          "hybrid_semantic_score": null,
+          "local_lexical_score": null,
+          "local_score": null,
+          "local_strategy": null,
+          "model_id": "none",
+          "provider_eligible": false,
+          "provider_excluded_reason": null,
+          "provider_id": null,
+          "reranker_id": "none",
+          "score": null,
+          "score_hash": null
+        },
+        "reranker_score": null,
+        "score": 1.525003,
+        "score_components": {
+          "authority": 0.7,
+          "bm25": 3.0660146699266504e-06,
+          "content_exact": 0.30000000000000004,
+          "content_exact_query": 0.0,
+          "content_phrase": 0.3,
+          "embedding": 0.0,
+          "label_exact": 0.0,
+          "label_exact_query": 0.0,
+          "label_phrase": 0.0,
+          "lookup_key_match": 0.0,
+          "lookup_value_compactness": 0.0,
+          "reranker": 0.0,
+          "trust": 0.225
+        },
+        "search_mode": "fts",
+        "selected_by_temporal_strategy": true,
+        "semantic_backfill_score": null,
+        "semantic_backfill_term_overlap": null,
+        "structured_fact_candidate": null,
+        "superseded_by_candidate": null,
+        "support_expansion_candidate": null,
+        "support_expansion_kind": null,
+        "support_expansion_nucleus_ids": null,
+        "support_expansion_rank": null,
+        "temporal_fusion_rank": null,
+        "temporal_fusion_score": null,
+        "temporal_fusion_source_count": 0,
+        "temporal_fusion_sources": [],
+        "temporal_injection_rank": null,
+        "temporal_selection_exclusion": null,
+        "temporal_selection_exclusion_reason": null,
+        "temporal_selection_rank": 2,
+        "temporal_state": "current",
+        "temporal_support_candidate": null,
+        "temporal_support_kind": null,
+        "updated_at": "2026-08-19T18:31:42Z"
+      }
+    ],
+    "chronology_support": {
+      "applied": false,
+      "mutation_terms": [],
+      "reason": "not-needed",
+      "relation": null,
+      "relation_terms": [],
+      "selected_candidate_ids": [],
+      "subject_term": null,
+      "support_kind": "chronology"
+    },
+    "context_commitment": {
+      "action_id": "act_62c07ebd66f84400",
+      "agent_id": "gnosis-smoke",
+      "budget_dropped_memory_ids": [],
+      "context_digest": "sha256:481e95aff370add25c068a273da96efd7816e8a7e56dfd654f1b96012f64648d",
+      "created_at": "2026-08-19T18:32:12Z",
+      "hash_alg": "sha256",
+      "injected_memory_ids": [
+        "mem_4154a0840a304013",
+        "mem_7a9d441ba7da4211"
+      ],
+      "memory_tree_root": "8a0d580ff992922ffa827c4459e99f93518a42ea5fe177294480db39ee6788a1",
+      "merkle_root": "ac64be5cf07524cc9d4cae24b5f72717fe2b2925005af6af68307a0200cc589c",
+      "policy_digest": "sha256:694b6b282f07e893059ec29fa2287bf51b5344a438da156b34ed49d33e5e9e92",
+      "retrieved_memory_ids": [
+        "mem_4154a0840a304013",
+        "mem_7a9d441ba7da4211"
+      ],
+      "schema": "zerker.memory_context.v1",
+      "scope": null,
+      "task_hash": "930f9f28d2277a0c90de4aaa315db76efcc416b1728044d5bb101a9f601a4339",
+      "withheld_memory_ids": []
+    },
+    "dense_hybrid": {
+      "config_hash": null,
+      "conflict_resolution_boundary": null,
+      "dense_ranked_candidate_ids": [],
+      "disabled_reason": "disabled-by-config",
+      "enabled": false,
+      "fallback": true,
+      "fusion": null,
+      "index_coverage": null,
+      "introduced_candidate_ids": [],
+      "min_score": 0.35,
+      "model_digest": null,
+      "model_id": null,
+      "network_calls_enabled": false,
+      "provider_id": null,
+      "query_vector_hash": null,
+      "schema": "zerker.dense_hybrid_retrieval.v1"
+    },
+    "embedding": {
+      "activation_reason": null,
+      "auto_enabled": false,
+      "dims": 64,
+      "disabled_reason": "disabled-by-config",
+      "enabled": false,
+      "fallback": true,
+      "index_hash": "fc2c42f4aa84b53b1304b191d171d9752e43f7a1a963551258ddea3018921971",
+      "index_id": "local-candidates-v1",
+      "model_id": "zmem-pseudo-embedding-v1",
+      "network_calls_enabled": false,
+      "provider": "none",
+      "provider_config_hash": null,
+      "provider_id": null,
+      "query_vector_hash": null,
+      "query_vector_id": "vec_973195766420a3d9a1f2a312",
+      "retrieval_reproducibility": "deterministic-local",
+      "schema": "zerker.embedding_retrieval.v1"
+    },
+    "fts_preselection": {
+      "applied": false,
+      "dropped_candidate_ids": [],
+      "fts_query": "\"continuity\" \"token\" \"store\"",
+      "query": "What is the continuity token store?",
+      "requested_limit": 20,
+      "search_query": "continuity token store",
+      "search_terms": [
+        "continuity",
+        "token",
+        "store"
+      ],
+      "selected_candidate_ids": [
+        "mem_4154a0840a304013",
+        "mem_7a9d441ba7da4211"
+      ],
+      "sql_window_order": "authority_trust_bm25_observation_v1",
+      "strategy": "fts_window_rescore_prune_v1",
+      "window_candidate_count": 2,
+      "window_multiplier": 4
+    },
+    "fts_query": "\"continuity\" \"token\" \"store\"",
+    "fusion_query": "continuity token store",
+    "fusion_query_basis": "question-wrapper",
+    "history_support": {
+      "applied": false,
+      "mutation_terms": [],
+      "reason": "not-needed",
+      "relation": null,
+      "relation_terms": [],
+      "selected_candidate_ids": [],
+      "subject_term": null,
+      "support_kind": "history"
+    },
+    "hybrid": {
+      "applied": false,
+      "base_search_mode": "fts",
+      "confidence": {
+        "minimum_margin": 0.05,
+        "minimum_score": 0.75,
+        "passed": false,
+        "reason": "no-introduced-candidates",
+        "top_lexical_score": 0.754005,
+        "top_semantic_score": 0.754005
+      },
+      "dropped_lexical_candidate_ids": [],
+      "effective_query": "continuity token store",
+      "effective_query_terms": [
+        "continuity",
+        "token",
+        "store"
+      ],
+      "fusion": null,
+      "introduced_candidate_ids": [],
+      "kept_lexical_candidate_ids": [],
+      "lexical_candidate_ids": [
+        "mem_4154a0840a304013",
+        "mem_7a9d441ba7da4211"
+      ],
+      "reason": "semantic-candidates-already-lexical",
+      "required_terms": [],
+      "schema": "zerker.hybrid_retrieval.v1",
+      "selected_candidate_ids": [],
+      "selection_exclusions": [],
+      "semantic_candidate_ids": [
+        "mem_7a9d441ba7da4211",
+        "mem_4154a0840a304013"
+      ],
+      "semantic_probe": {
+        "abstention": {
+          "applied": false,
+          "dropped_candidate_ids": [],
+          "reason": null
+        },
+        "applied": true,
+        "candidate_pool_size": 3,
+        "confidence": {
+          "enabled": false,
+          "minimum_score": null,
+          "passed": null,
+          "profile": null,
+          "query_term_count": 3,
+          "reason": null,
+          "require_full_query_overlap": false,
+          "top_overlap_ratio": 1.0,
+          "top_score": 0.754005,
+          "top_term_overlap": 3
+        },
+        "effective_query": "continuity token store",
+        "effective_query_terms": [
+          "continuity",
+          "token",
+          "store"
+        ],
+        "matched_candidate_count": 2,
+        "model_id": "zmem-pseudo-embedding-v1",
+        "morphology": {
+          "minimum_exact_overlap": 2,
+          "minimum_gain": 2,
+          "selected_candidate_ids": [],
+          "strategy": "conservative_regular_inflection_v1"
+        },
+        "query": "continuity token store",
+        "query_terms": [
+          "continuity",
+          "token",
+          "store"
+        ],
+        "reason": "fts-paraphrase-backfill",
+        "required_terms": [],
+        "schema": "zerker.semantic_rescue.v1",
+        "selected_candidate_ids": [
+          "mem_7a9d441ba7da4211",
+          "mem_4154a0840a304013"
+        ],
+        "selected_candidates": [
+          {
+            "exact_term_overlap": 3,
+            "inflectional_term_overlap": 3,
+            "memory_id": "mem_7a9d441ba7da4211",
+            "morphology_applied": false,
+            "morphology_gain": 0,
+            "score": 0.754005,
+            "term_overlap": 3
+          },
+          {
+            "exact_term_overlap": 3,
+            "inflectional_term_overlap": 3,
+            "memory_id": "mem_4154a0840a304013",
+            "morphology_applied": false,
+            "morphology_gain": 0,
+            "score": 0.63618,
+            "term_overlap": 3
+          }
+        ]
+      },
+      "strategy": "fts_semantic_backfill_v1"
+    },
+    "limit": 20,
+    "mode": "fts",
+    "multi_hop": {
+      "activation_reason": null,
+      "auto_enabled": false,
+      "auto_evaluated": false,
+      "candidate_attribution": {
+        "mem_4154a0840a304013": {
+          "duplicate_count": 0,
+          "introduced_by_subquery_id": null,
+          "memory_id": "mem_4154a0840a304013",
+          "pre_multi_hop_rank": 1,
+          "sources": [
+            "parent"
+          ],
+          "subquery_ids": [
+            "parent"
+          ]
+        },
+        "mem_7a9d441ba7da4211": {
+          "duplicate_count": 0,
+          "introduced_by_subquery_id": null,
+          "memory_id": "mem_7a9d441ba7da4211",
+          "pre_multi_hop_rank": 2,
+          "sources": [
+            "parent"
+          ],
+          "subquery_ids": [
+            "parent"
+          ]
+        }
+      },
+      "config_hash": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "decomposer_id": null,
+      "decomposition_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "disabled_reason": "disabled-by-config",
+      "enabled": false,
+      "fusion": {
+        "applied": false,
+        "disabled_reason": "disabled-by-config",
+        "selected_candidate_ids": [
+          "mem_4154a0840a304013",
+          "mem_7a9d441ba7da4211"
+        ],
+        "source_rankings": {
+          "parent": [
+            "mem_4154a0840a304013",
+            "mem_7a9d441ba7da4211"
+          ]
+        }
+      },
+      "limits": {
+        "candidate_limit": 20,
+        "max_subqueries": 8,
+        "per_subquery_results": 5
+      },
+      "merge": {
+        "duplicate_candidate_ids": [],
+        "input_candidate_count": 2,
+        "introduced_candidate_ids": [],
+        "merged_candidate_count": 2,
+        "outranked_candidate_ids": [],
+        "promoted_candidate_ids": [],
+        "strategy": "stable_parent_then_subquery_union_v1"
+      },
+      "parent_query_hash": "930f9f28d2277a0c90de4aaa315db76efcc416b1728044d5bb101a9f601a4339",
+      "rank_transitions": [
+        {
+          "introduced_by_subquery_id": null,
+          "memory_id": "mem_4154a0840a304013",
+          "multi_hop_fusion_rank": null,
+          "multi_hop_outranked_by_fusion": false,
+          "multi_hop_promoted_by_fusion": false,
+          "multi_hop_rank": 1,
+          "multi_hop_rank_delta": null,
+          "pre_multi_hop_rank": 1
+        },
+        {
+          "introduced_by_subquery_id": null,
+          "memory_id": "mem_7a9d441ba7da4211",
+          "multi_hop_fusion_rank": null,
+          "multi_hop_outranked_by_fusion": false,
+          "multi_hop_promoted_by_fusion": false,
+          "multi_hop_rank": 2,
+          "multi_hop_rank_delta": null,
+          "pre_multi_hop_rank": 2
+        }
+      ],
+      "schema": "zerker.multi_hop_decomposition.v1",
+      "strategy": "local_query_decomposition_v1",
+      "subqueries": [],
+      "suppression_reason": null
+    },
+    "packing": {
+      "approximation": "chars_div_4_ceil",
+      "available_tokens": 212,
+      "budget_dropped": [],
+      "budget_enforced": false,
+      "candidate_priorities": [
+        {
+          "approx_tokens": 107,
+          "embedding_outranked": false,
+          "embedding_outranked_reason": null,
+          "embedding_promoted": false,
+          "embedding_rank": 1,
+          "embedding_rank_delta": null,
+          "hybrid_outranked_by_semantic_backfill": false,
+          "hybrid_outranked_reason": null,
+          "hybrid_semantic_rank": null,
+          "memory_id": "mem_4154a0840a304013",
+          "multi_hop_fusion_rank": null,
+          "multi_hop_outranked_by_fusion": false,
+          "multi_hop_outranked_reason": null,
+          "packing_priority": 22810,
+          "packing_rank": 1,
+          "packing_rank_basis": "temporal_selection_rank",
+          "rank": 1,
+          "reranker_outranked": false,
+          "reranker_outranked_reason": null,
+          "reranker_promoted": false,
+          "reranker_rank": null,
+          "reranker_rank_delta": null,
+          "reservation_exclusion": null,
+          "reservation_exclusion_reason": null,
+          "reserved_by_strategy": false,
+          "selected_by_temporal_strategy": true,
+          "temporal_fusion_rank": null,
+          "temporal_injection_rank": null,
+          "temporal_selection_rank": 1,
+          "temporal_state": "current"
+        },
+        {
+          "approx_tokens": 105,
+          "embedding_outranked": false,
+          "embedding_outranked_reason": null,
+          "embedding_promoted": false,
+          "embedding_rank": 2,
+          "embedding_rank_delta": null,
+          "hybrid_outranked_by_semantic_backfill": false,
+          "hybrid_outranked_reason": null,
+          "hybrid_semantic_rank": null,
+          "memory_id": "mem_7a9d441ba7da4211",
+          "multi_hop_fusion_rank": null,
+          "multi_hop_outranked_by_fusion": false,
+          "multi_hop_outranked_reason": null,
+          "packing_priority": 12810,
+          "packing_rank": 2,
+          "packing_rank_basis": "temporal_selection_rank",
+          "rank": 2,
+          "reranker_outranked": false,
+          "reranker_outranked_reason": null,
+          "reranker_promoted": false,
+          "reranker_rank": null,
+          "reranker_rank_delta": null,
+          "reservation_exclusion": null,
+          "reservation_exclusion_reason": null,
+          "reserved_by_strategy": false,
+          "selected_by_temporal_strategy": true,
+          "temporal_fusion_rank": null,
+          "temporal_injection_rank": null,
+          "temporal_selection_rank": 2,
+          "temporal_state": "current"
+        }
+      ],
+      "diversity_dropped": [],
+      "injected_ids": [
+        "mem_4154a0840a304013",
+        "mem_7a9d441ba7da4211"
+      ],
+      "max_tokens": null,
+      "memory_type_summary": {
+        "budget_dropped_ids_by_type": {
+          "episodic": [],
+          "policy": [],
+          "procedural": [],
+          "semantic": []
+        },
+        "injected_ids_by_type": {
+          "episodic": [],
+          "policy": [],
+          "procedural": [],
+          "semantic": [
+            "mem_4154a0840a304013",
+            "mem_7a9d441ba7da4211"
+          ]
+        },
+        "instruction_types": [
+          "policy",
+          "procedural"
+        ],
+        "recall_types": [
+          "episodic",
+          "semantic"
+        ],
+        "withheld_ids_by_type": {
+          "episodic": [],
+          "policy": [],
+          "procedural": [],
+          "semantic": []
+        }
+      },
+      "priority_model": "temporal_selection_rank_score_authority_current_v1",
+      "reservation": {
+        "applied": false,
+        "applied_ids": [],
+        "blocked_reason": null,
+        "fallback_applied": false,
+        "fallback_reason": null,
+        "fallback_requested_ids": [],
+        "reason": null,
+        "requested_ids": [],
+        "strategy": null
+      },
+      "schema": "zerker.context_packing.v1",
+      "strategy": "priority_knapsack_budget_v1",
+      "used_tokens": 212
+    },
+    "policy": {
+      "authorized_ids": [
+        "mem_4154a0840a304013",
+        "mem_7a9d441ba7da4211"
+      ],
+      "decisions": [
+        {
+          "decision": "inject",
+          "memory_id": "mem_4154a0840a304013",
+          "reason": "authorized",
+          "rule": "authorized-memory"
+        },
+        {
+          "decision": "inject",
+          "memory_id": "mem_7a9d441ba7da4211",
+          "reason": "authorized",
+          "rule": "authorized-memory"
+        }
+      ],
+      "engine": "zerker.symbolic_policy.v1",
+      "policy_digest": "sha256:694b6b282f07e893059ec29fa2287bf51b5344a438da156b34ed49d33e5e9e92",
+      "withheld_ids": []
+    },
+    "query": "What is the continuity token store?",
+    "query_lookup": {
+      "chronology": {
+        "alias_expanded": false,
+        "core_terms": [],
+        "expanded": false,
+        "matched_aliases": [],
+        "matched_terms": [],
+        "raw_core_terms": [],
+        "search_alias_expanded": false,
+        "search_alias_variants": [],
+        "support_candidate_ids": [],
+        "support_relation_terms": [],
+        "support_subject_term": null
+      },
+      "current": {
+        "alias_expanded": false,
+        "core_terms": [],
+        "expanded": false,
+        "matched_aliases": [],
+        "matched_terms": [],
+        "raw_core_terms": [],
+        "role_inference_reason": null,
+        "role_inferred": null,
+        "search_alias_expanded": false,
+        "search_alias_variants": [],
+        "update_anchor_terms": [],
+        "update_sibling_candidate_ids": []
+      },
+      "history": {
+        "alias_expanded": false,
+        "core_terms": [],
+        "expanded": false,
+        "matched_aliases": [],
+        "matched_terms": [],
+        "observation_support": {
+          "anchor_candidate_ids": [],
+          "anchor_observation_seq": null,
+          "anchor_observation_seqs": [],
+          "anchor_selection_strategy": null,
+          "applied": false,
+          "considered_candidate_ids": [],
+          "excluded_anchor_candidate_ids": [],
+          "ordered_anchor_candidate_ids": [],
+          "ordered_support_candidate_ids": [],
+          "reason": "not-needed",
+          "scored_candidates": [],
+          "selected_anchor_candidate_ids": [],
+          "selected_support_candidate_ids": [],
+          "selection_order": null,
+          "selection_strategy": null,
+          "trigger_terms": []
+        },
+        "raw_core_terms": [],
+        "role_inference_reason": null,
+        "role_inferred": null,
+        "search_alias_expanded": false,
+        "search_alias_variants": [],
+        "support_candidate_ids": [],
+        "support_relation_terms": [],
+        "support_subject_term": null
+      },
+      "lookup_basis": "question-wrapper",
+      "lookup_key": "continuity token store",
+      "lookup_relation": null,
+      "schema": "zerker.query_lookup.v1",
+      "selected_search_basis": "question-wrapper",
+      "selected_search_query": "continuity token store",
+      "selected_search_terms": [
+        "continuity",
+        "token",
+        "store"
+      ],
+      "semantic_aliases": {
+        "alias_expanded": false,
+        "core_terms": [],
+        "expanded": false,
+        "matched_aliases": [],
+        "raw_core_terms": [],
+        "search_alias_expanded": false,
+        "search_alias_variants": []
+      },
+      "semantic_rescue": {
+        "applied": false,
+        "candidate_pool_size": 0,
+        "matched_candidate_count": 0,
+        "model_id": "zmem-pseudo-embedding-v1",
+        "query": "continuity token store",
+        "query_terms": [
+          "continuity",
+          "token",
+          "store"
+        ],
+        "reason": "not-needed",
+        "schema": "zerker.semantic_rescue.v1",
+        "selected_candidate_ids": [],
+        "selected_candidates": []
+      },
+      "target_history": {
+        "applied": false,
+        "history_terms": [],
+        "mutation_terms": [],
+        "relation": null,
+        "search_variants": [],
+        "target_query": null
+      },
+      "update": {
+        "alias_expanded": false,
+        "core_terms": [],
+        "direction": null,
+        "direction_terms": [],
+        "expanded": false,
+        "matched_aliases": [],
+        "matched_terms": [],
+        "raw_core_terms": [],
+        "role_inference_reason": null,
+        "role_inferred": null,
+        "search_alias_expanded": false,
+        "search_alias_variants": [],
+        "support_candidate_ids": [],
+        "support_relation_terms": [],
+        "support_subject_term": null
+      },
+      "variants": [
+        {
+          "basis": "question-wrapper",
+          "fts_query": "\"continuity\" \"token\" \"store\"",
+          "query": "continuity token store",
+          "terms": [
+            "continuity",
+            "token",
+            "store"
+          ]
+        },
+        {
+          "basis": "raw-query",
+          "fts_query": "\"what\" \"the\" \"continuity\" \"token\" \"store\"",
+          "query": "what continuity token store",
+          "terms": [
+            "what",
+            "the",
+            "continuity",
+            "token",
+            "store"
+          ]
+        }
+      ]
+    },
+    "query_terms": [
+      "what",
+      "the",
+      "continuity",
+      "token",
+      "store"
+    ],
+    "rank_config": {
+      "mode": "fts_bm25_phrase_exact_lookup_fact_v4",
+      "schema": "zerker.retrieval_rank_config.v1",
+      "weights": {
+        "authority": 0.35,
+        "bm25": 1.0,
+        "content_exact": 0.1,
+        "content_exact_query": 0.4,
+        "content_phrase": 0.3,
+        "label_exact": 0.15,
+        "label_exact_query": 0.25,
+        "label_phrase": 0.2,
+        "lookup_key_match": 0.35,
+        "lookup_value_compactness": 0.8,
+        "trust": 0.25
+      }
+    },
+    "reranker": {
+      "activation_reason": null,
+      "auto_enabled": false,
+      "config_hash": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "disabled_reason": "disabled-by-config",
+      "enabled": false,
+      "fallback": true,
+      "model_id": "none",
+      "network_calls_enabled": false,
+      "provider": "none",
+      "provider_config_hash": null,
+      "provider_id": null,
+      "requested_reranker_id": null,
+      "reranker_id": "none",
+      "retrieval_reproducibility": "deterministic-local",
+      "schema": "zerker.reranker.v1"
+    },
+    "schema": "zerker.retrieval.v1",
+    "scope": null,
+    "search_mode": "fts",
+    "search_query": "continuity token store",
+    "search_terms": [
+      "continuity",
+      "token",
+      "store"
+    ],
+    "semantic_rescue": {
+      "applied": false,
+      "candidate_pool_size": 0,
+      "matched_candidate_count": 0,
+      "model_id": "zmem-pseudo-embedding-v1",
+      "query": "continuity token store",
+      "query_terms": [
+        "continuity",
+        "token",
+        "store"
+      ],
+      "reason": "not-needed",
+      "schema": "zerker.semantic_rescue.v1",
+      "selected_candidate_ids": [],
+      "selected_candidates": []
+    },
+    "support_expansion": {
+      "applied": false,
+      "candidate_limit": 1,
+      "matched_query_terms": [],
+      "nucleus_bridge_terms": [],
+      "nucleus_candidate_ids": [],
+      "object_terms": [],
+      "reason": "query-not-completion-shaped",
+      "replaced_candidate_ids": [],
+      "schema": "zerker.support_expansion.v1",
+      "selected_candidate_ids": [],
+      "selected_candidates": [],
+      "strategy": "nucleus_completion_support_v1",
+      "subject_term": null
+    },
+    "temporal": {
+      "abstained_current_memory_ids": [],
+      "abstained_temporal_graph": {},
+      "abstention": {
+        "abstained_ids": [],
+        "applied": false,
+        "conflict_reasons": [],
+        "reason": null
+      },
+      "budget_dropped_temporal_graph": {},
+      "conflict_sets": [],
+      "current_ids": [
+        "mem_4154a0840a304013",
+        "mem_7a9d441ba7da4211"
+      ],
+      "current_memory_ids": [
+        "mem_4154a0840a304013",
+        "mem_7a9d441ba7da4211"
+      ],
+      "current_ordering": {
+        "applied": true,
+        "basis": "retrieval_rank",
+        "considered_current_rankings": [
+          {
+            "memory_id": "mem_4154a0840a304013",
+            "rank": 1,
+            "selected": true
+          },
+          {
+            "memory_id": "mem_7a9d441ba7da4211",
+            "rank": 2,
+            "selected": true
+          }
+        ],
+        "pass_through": false,
+        "reason": "current-only-retrieval-rank",
+        "selected_current_rankings": [
+          {
+            "memory_id": "mem_4154a0840a304013",
+            "rank": 1
+          },
+          {
+            "memory_id": "mem_7a9d441ba7da4211",
+            "rank": 2
+          }
+        ],
+        "source": "baseline"
+      },
+      "current_temporal_graph": {
+        "mem_4154a0840a304013": {
+          "current_conflict_reasons": [],
+          "current_resolution": "selected",
+          "learned_at": "2026-08-19T18:31:43Z",
+          "memory_id": "mem_4154a0840a304013",
+          "parents": [],
+          "serial": 2,
+          "status_at_query": "active",
+          "superseded_at": null,
+          "superseded_by_ids": [],
+          "temporal_resolution_kind": null,
+          "temporal_resolution_reasons": [],
+          "temporal_state": "current",
+          "unlearned_at": null,
+          "valid_from": "2026-08-19T18:31:43Z",
+          "valid_to": null
+        },
+        "mem_7a9d441ba7da4211": {
+          "current_conflict_reasons": [],
+          "current_resolution": "selected",
+          "learned_at": "2026-08-19T18:31:42Z",
+          "memory_id": "mem_7a9d441ba7da4211",
+          "parents": [],
+          "serial": 1,
+          "status_at_query": "active",
+          "superseded_at": null,
+          "superseded_by_ids": [],
+          "temporal_resolution_kind": null,
+          "temporal_resolution_reasons": [],
+          "temporal_state": "current",
+          "unlearned_at": null,
+          "valid_from": "2026-08-19T18:31:42Z",
+          "valid_to": null
+        }
+      },
+      "decisions": [
+        {
+          "decision": "current",
+          "memory_id": "mem_4154a0840a304013",
+          "reason": "lifecycle-current"
+        },
+        {
+          "decision": "current",
+          "memory_id": "mem_7a9d441ba7da4211",
+          "reason": "lifecycle-current"
+        }
+      ],
+      "dropped_current_memory_ids": [],
+      "dropped_current_temporal_graph": {},
+      "fusion": {
+        "applied": false,
+        "basis": null,
+        "disabled_reason": "no-support-chain-or-mutation-temporal-merge",
+        "injection_candidate_ids": [
+          "mem_4154a0840a304013",
+          "mem_7a9d441ba7da4211"
+        ],
+        "selected_candidate_ids": [
+          "mem_4154a0840a304013",
+          "mem_7a9d441ba7da4211"
+        ],
+        "selection_exclusion_ids": [],
+        "signal": null,
+        "source_rankings": {}
+      },
+      "future_memory_ids": [],
+      "future_temporal_graph": {},
+      "history_memory_ids": [
+        "mem_4154a0840a304013",
+        "mem_7a9d441ba7da4211"
+      ],
+      "history_ordering": {
+        "applied": false,
+        "basis": "history_conflict_abstention_rank",
+        "considered_history_rankings": [],
+        "pass_through": false,
+        "reason": "default-current-only",
+        "selected_history_rankings": [],
+        "source": "temporal_history_conflict_abstention"
+      },
+      "history_temporal_graph": {
+        "mem_4154a0840a304013": {
+          "current_conflict_reasons": [],
+          "current_resolution": "selected",
+          "learned_at": "2026-08-19T18:31:43Z",
+          "memory_id": "mem_4154a0840a304013",
+          "parents": [],
+          "serial": 2,
+          "status_at_query": "active",
+          "superseded_at": null,
+          "superseded_by_ids": [],
+          "temporal_resolution_kind": null,
+          "temporal_resolution_reasons": [],
+          "temporal_state": "current",
+          "unlearned_at": null,
+          "valid_from": "2026-08-19T18:31:43Z",
+          "valid_to": null
+        },
+        "mem_7a9d441ba7da4211": {
+          "current_conflict_reasons": [],
+          "current_resolution": "selected",
+          "learned_at": "2026-08-19T18:31:42Z",
+          "memory_id": "mem_7a9d441ba7da4211",
+          "parents": [],
+          "serial": 1,
+          "status_at_query": "active",
+          "superseded_at": null,
+          "superseded_by_ids": [],
+          "temporal_resolution_kind": null,
+          "temporal_resolution_reasons": [],
+          "temporal_state": "current",
+          "unlearned_at": null,
+          "valid_from": "2026-08-19T18:31:42Z",
+          "valid_to": null
+        }
+      },
+      "injected_temporal_graph": {
+        "mem_4154a0840a304013": {
+          "current_conflict_reasons": [],
+          "current_resolution": "selected",
+          "learned_at": "2026-08-19T18:31:43Z",
+          "memory_id": "mem_4154a0840a304013",
+          "parents": [],
+          "serial": 2,
+          "status_at_query": "active",
+          "superseded_at": null,
+          "superseded_by_ids": [],
+          "temporal_resolution_kind": null,
+          "temporal_resolution_reasons": [],
+          "temporal_state": "current",
+          "unlearned_at": null,
+          "valid_from": "2026-08-19T18:31:43Z",
+          "valid_to": null
+        },
+        "mem_7a9d441ba7da4211": {
+          "current_conflict_reasons": [],
+          "current_resolution": "selected",
+          "learned_at": "2026-08-19T18:31:42Z",
+          "memory_id": "mem_7a9d441ba7da4211",
+          "parents": [],
+          "serial": 1,
+          "status_at_query": "active",
+          "superseded_at": null,
+          "superseded_by_ids": [],
+          "temporal_resolution_kind": null,
+          "temporal_resolution_reasons": [],
+          "temporal_state": "current",
+          "unlearned_at": null,
+          "valid_from": "2026-08-19T18:31:42Z",
+          "valid_to": null
+        }
+      },
+      "injection_order": "ranked",
+      "injection_preferred_ids": [
+        "mem_4154a0840a304013",
+        "mem_7a9d441ba7da4211"
+      ],
+      "injection_reason": null,
+      "injection_strategy": null,
+      "learned_memory_ids": [],
+      "learned_temporal_graph": {},
+      "resolved_current_memory_ids": [
+        "mem_4154a0840a304013",
+        "mem_7a9d441ba7da4211"
+      ],
+      "schema": "zerker.temporal_resolution.v1",
+      "selected_current_anchor_id": "mem_7a9d441ba7da4211",
+      "selected_current_ids": [
+        "mem_4154a0840a304013",
+        "mem_7a9d441ba7da4211"
+      ],
+      "selected_current_support_ids": [],
+      "selected_ids": [
+        "mem_4154a0840a304013",
+        "mem_7a9d441ba7da4211"
+      ],
+      "selected_mutation_anchor_id": null,
+      "selected_mutation_anchor_ids": [],
+      "selected_relation_current_id": null,
+      "selected_relation_support_ids": [],
+      "selected_stale_anchor_id": null,
+      "selected_superseded_ids": [],
+      "selected_target_current_id": null,
+      "selected_target_support_ids": [],
+      "selected_temporal_graph": {
+        "mem_4154a0840a304013": {
+          "current_conflict_reasons": [],
+          "current_resolution": "selected",
+          "learned_at": "2026-08-19T18:31:43Z",
+          "memory_id": "mem_4154a0840a304013",
+          "parents": [],
+          "serial": 2,
+          "status_at_query": "active",
+          "superseded_at": null,
+          "superseded_by_ids": [],
+          "temporal_resolution_kind": null,
+          "temporal_resolution_reasons": [],
+          "temporal_state": "current",
+          "unlearned_at": null,
+          "valid_from": "2026-08-19T18:31:43Z",
+          "valid_to": null
+        },
+        "mem_7a9d441ba7da4211": {
+          "current_conflict_reasons": [],
+          "current_resolution": "selected",
+          "learned_at": "2026-08-19T18:31:42Z",
+          "memory_id": "mem_7a9d441ba7da4211",
+          "parents": [],
+          "serial": 1,
+          "status_at_query": "active",
+          "superseded_at": null,
+          "superseded_by_ids": [],
+          "temporal_resolution_kind": null,
+          "temporal_resolution_reasons": [],
+          "temporal_state": "current",
+          "unlearned_at": null,
+          "valid_from": "2026-08-19T18:31:42Z",
+          "valid_to": null
+        }
+      },
+      "selected_update_current_id": null,
+      "selection_exclusions": [],
+      "selection_matched_terms": [],
+      "selection_order": "ranked",
+      "selection_reason": "default-current-only",
+      "selection_strategy": "current_only_v1",
+      "stale_ids": [],
+      "strategy": "lifecycle_fields_v1",
+      "superseded_memory_ids": [],
+      "superseded_temporal_graph": {},
+      "temporal_graph": {
+        "mem_4154a0840a304013": {
+          "current_conflict_reasons": [],
+          "current_resolution": "selected",
+          "learned_at": "2026-08-19T18:31:43Z",
+          "memory_id": "mem_4154a0840a304013",
+          "parents": [],
+          "serial": 2,
+          "status_at_query": "active",
+          "superseded_at": null,
+          "superseded_by_ids": [],
+          "temporal_resolution_kind": null,
+          "temporal_resolution_reasons": [],
+          "temporal_state": "current",
+          "unlearned_at": null,
+          "valid_from": "2026-08-19T18:31:43Z",
+          "valid_to": null
+        },
+        "mem_7a9d441ba7da4211": {
+          "current_conflict_reasons": [],
+          "current_resolution": "selected",
+          "learned_at": "2026-08-19T18:31:42Z",
+          "memory_id": "mem_7a9d441ba7da4211",
+          "parents": [],
+          "serial": 1,
+          "status_at_query": "active",
+          "superseded_at": null,
+          "superseded_by_ids": [],
+          "temporal_resolution_kind": null,
+          "temporal_resolution_reasons": [],
+          "temporal_state": "current",
+          "unlearned_at": null,
+          "valid_from": "2026-08-19T18:31:42Z",
+          "valid_to": null
+        }
+      },
+      "temporal_projection_at": "2026-08-19T18:32:12Z",
+      "unlearned_memory_ids": [],
+      "unlearned_temporal_graph": {},
+      "withheld_temporal_graph": {}
+    },
+    "update_current_support": {
+      "applied": false,
+      "mutation_terms": [],
+      "reason": "not-needed",
+      "relation": null,
+      "relation_terms": [],
+      "selected_candidate_ids": [],
+      "subject_term": null,
+      "support_kind": "update-current"
+    },
+    "update_history_support": {
+      "applied": false,
+      "mutation_terms": [],
+      "reason": "not-needed",
+      "relation": null,
+      "relation_terms": [],
+      "selected_candidate_ids": [],
+      "subject_term": null,
+      "support_kind": "update-history"
+    }
+  },
+  "retrieved_memory_ids": [
+    "mem_4154a0840a304013",
+    "mem_7a9d441ba7da4211"
+  ],
+  "risk": "medium",
+  "task": "What is the continuity token store?",
+  "task_hash": "930f9f28d2277a0c90de4aaa315db76efcc416b1728044d5bb101a9f601a4339",
+  "withheld": []
+}
