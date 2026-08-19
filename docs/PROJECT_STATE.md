@@ -30,7 +30,7 @@ constitution names `src/gnosis/` (currently an empty scaffold).
 - [x] M3 installed/configured/smoke-tested (uv tool, PYTHONUTF8=1, env-pinned roots; ADR-0001).
 - [x] ZMem installed/configured/smoke-tested (uv tool; governance loop revalidated on 0.1.17).
 - [x] Cross-session Memory Fabric test passed (`tests/integration/test_memory_fabric_smoke.py`, 3/3; docs/research/MEMORY_FABRIC_STATUS.md).
-- [ ] Tier S architecture archaeology completed (in progress this session).
+- [x] Tier S architecture archaeology completed: 23 repos analyzed (10 deep + 3 group sweeps, 14 agents, read-only) → `docs/research/REFERENCE_REPOSITORY_FINDINGS.md` (summary table, 9 kernel architecture directives, contradictions/open questions, per-repo findings with evidence labels).
 - [x] Initial ADRs confirmed (ADR-0001; D-017; L-0001..L-0003).
 - [ ] Kernel implementation (Phase 1 continuation) begins after archaeology.
 
