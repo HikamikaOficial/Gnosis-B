@@ -13,5 +13,10 @@
     "commit": "82318cb1996f0b926a8e146bd971d620c80489f5",
     "recorded_at": "2026-08-19T02:50:56.458265+00:00",
     "summary": "M2.0 (f95244e): optional MCP runner config. M2.1 (82318cb): CodeIntelligenceProvider contract + benchmarked codegraph-mcp adapter, real executed benchmark vs sverklo/codegraph-mcp/code-context-engine. 127 tests."
+  },
+  "M2.5": {
+    "commit": "6883e0d15f5c83d32f56b8897beea30d4e3c7226",
+    "recorded_at": "2026-08-19T05:48:49.100050+00:00",
+    "summary": "Production CodeIntelligenceProvider (status/find/explore) wired into TaskEngine (bounded context injection, evidence recording, graceful fallback). Sverklo: REFERENCE for code intel, carried into M3 memory arena. 144 tests."
   }
 }
