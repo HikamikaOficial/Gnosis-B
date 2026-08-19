@@ -18,5 +18,10 @@
     "commit": "6883e0d15f5c83d32f56b8897beea30d4e3c7226",
     "recorded_at": "2026-08-19T05:48:49.100050+00:00",
     "summary": "Production CodeIntelligenceProvider (status/find/explore) wired into TaskEngine (bounded context injection, evidence recording, graceful fallback). Sverklo: REFERENCE for code intel, carried into M3 memory arena. 144 tests."
+  },
+  "M3": {
+    "commit": "de5488afc6d1ce7c6cdd17aff0df4d7400954d5d",
+    "recorded_at": "2026-08-19T06:11:10.017222+00:00",
+    "summary": "Gnosis Memory Plane contract (MemoryProvider/MemoryRecord/MemoryStatus lifecycle/MemoryRouter) + InMemoryMemoryProvider reference impl. Real benchmark: zmem (governance, deep), m3-memory (factual/temporal, real bug found), cass_memory_system REJECTED on license grounds. 164 tests."
   }
 }
