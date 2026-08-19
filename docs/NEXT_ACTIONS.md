@@ -1,6 +1,6 @@
 # GNOSIS Next Actions — Nicol workstation
 
-1. **HUMAN:** run `codex login` (ChatGPT auth) so independent Codex review becomes available. Verify with `codex login status`.
+1. **HUMAN:** run `codex login` (browser OAuth with the ChatGPT account; consumes no quota — can be done today). Codex usage quota is exhausted until 2026-08-20; independent Codex review is parked as RATE_LIMITED until the reset, then verify with `codex login status` and a `codex exec --sandbox read-only` smoke.
 2. Read `docs/research/REFERENCE_REPOSITORY_FINDINGS.md` §"Architecture directives" before any kernel work — 9 evidence-backed rules (canonical-JSON hash primitive, hash-chained journal, frozen transition allow-list, claims+leases two-plane, provenance-gated worktree destruction, review convergence, strict replay, fail-closed policy, typed failure taxonomy) and the open questions section.
 3. Optional lint polish: ~15 deliberate ruff residuals in src (BLE001/PLW1510/etc.) and ~20 in tests — whitelist with per-line noqa+reason or fix, when touching those files anyway. mypy strict is at zero for src/gnosis.
 4. Write ADR for the M4 memory-provider selection criteria (embedder benchmark for m3, supersession-cost question for zmem, per MEMORY_FABRIC.md §benchmark).
