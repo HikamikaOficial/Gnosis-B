@@ -14,7 +14,7 @@ evidence (commit hashes) lives in `.gnosis/state/baselines.json`.
 
 ## Layout
 
-    gnosis/
+    src/gnosis/
       contracts/   DirectorBrief, EngineerReport: typed, validated, round-trippable
       kernel/       ids, state machines, ledger, run store, redaction,
                     verification, git evidence, worktree primitives, atomic
@@ -39,7 +39,7 @@ evidence (commit hashes) lives in `.gnosis/state/baselines.json`.
 
 ## Design notes
 
-- No Anthropic API billing, no Agent SDK. gnosis/runner/claude_cli_runner.py
+- No Anthropic API billing, no Agent SDK. src/gnosis/runner/claude_cli_runner.py
   shells out to the locally installed `claude` CLI in -p/--print mode,
   exactly as a human operator would.
 - Everything is a file. No database, a run's entire state (meta,
@@ -61,12 +61,12 @@ evidence (commit hashes) lives in `.gnosis/state/baselines.json`.
   (immutable evidence). Anything derived from it that crosses into the
   ledger, a report, or a transport must go through kernel.redaction.redact.
 - Director transport is abstracted and now has a real durable protocol.
-  gnosis/director/ ingests DirectorBrief JSON files dropped in
+  src/gnosis/director/ ingests DirectorBrief JSON files dropped in
   .gnosis/director/inbox/, deduplicates by brief_id, executes via
   TaskEngine, and writes EngineerReports to outbox/ (and escalations/ when
   a report demands escalation). McpDirectorTransport remains a
   same-interface placeholder for a future ChatGPT MCP integration.
-- Worktrees are a primitive, not a scheduler. gnosis/kernel/worktree.py
+- Worktrees are a primitive, not a scheduler. src/gnosis/kernel/worktree.py
   creates/removes isolated `gnosis/<task_id>` branches under
   .gnosis/worktrees/. No parallel task scheduling is wired on top of it yet
   (explicit Director decision: run state safety comes first).
