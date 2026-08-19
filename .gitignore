@@ -36,3 +36,9 @@ runs/*
 .gnosis/lab/code-intelligence/datasets/fixture-repo/
 .gnosis/lab/code-intelligence/datasets/fixture-repo-c1/
 .gnosis/lab/code-intelligence/datasets/fixture-repo-c1-then-c4/
+
+# M3 memory lab: candidates/ (uv venvs, pip installs) and datasets/ (real
+# SQLite workspaces) are reproducible; results/ (scorecards, the license
+# finding) is kept as evidence.
+.gnosis/lab/memory/candidates/
+.gnosis/lab/memory/datasets/

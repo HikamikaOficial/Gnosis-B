@@ -1,0 +1,11 @@
+ZMem action explanation
+Action: act_2ca1df839de242f3
+Agent: test-agent | Risk: medium
+Task: What is the storage backend?
+Retrieved: 2 | Injected: 2 | Withheld: 0
+Verification: ok
+Proof root: fc5538bbe091d7581162bc6ef305288df6da531625c632393680c379c2007033
+Context proof: sha256:b0fb89fd16e1edce05d4c0524aa9bdb618b6fea1c3a14c2bf691e00710672908
+Memory that shaped the action:
+  - mem_958128795aba468b [semantic/revoked] Storage backend is SQLite.
+  - mem_c0a8e5e24d7f488b [semantic/active] Storage backend migrated to PostgreSQL.

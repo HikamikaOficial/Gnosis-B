@@ -1,0 +1,20 @@
+[
+  {
+    "authority": "medium",
+    "content": "Storage backend migrated to PostgreSQL.",
+    "content_hash": "2e112fcfcf01297e71c83a46a06f41366176a3c1c99550e69e7041a03dff3255",
+    "created_at": "2026-08-19T05:52:02Z",
+    "expires_at": null,
+    "id": "mem_c0a8e5e24d7f488b",
+    "labels": [
+      "storage-backend"
+    ],
+    "parents": [],
+    "scope": "global",
+    "source_kind": "human",
+    "status": "active",
+    "trust": 0.95,
+    "type": "semantic",
+    "updated_at": "2026-08-19T05:52:02Z"
+  }
+]

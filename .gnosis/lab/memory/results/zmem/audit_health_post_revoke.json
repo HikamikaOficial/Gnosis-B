@@ -1,0 +1,32 @@
+{
+  "active_memory_count": 1,
+  "category_counts": {
+    "contradictory_or_conflicting": 0,
+    "exact_duplicate": 0,
+    "high_risk_active": 0,
+    "stale_or_expired": 0,
+    "weak_or_missing_provenance": 0
+  },
+  "db_path": "C:\\Users\\axelr\\Desktop\\Claude Proyectos\\GnosisAgentAi\\.gnosis\\lab\\memory\\datasets\\zmem-workspace\\.zerker\\memory.sqlite",
+  "error": null,
+  "evaluated_at": "2026-08-19T05:53:51Z",
+  "finding_count": 0,
+  "findings": {
+    "contradictory_or_conflicting": [],
+    "exact_duplicate": [],
+    "high_risk_active": [],
+    "stale_or_expired": [],
+    "weak_or_missing_provenance": []
+  },
+  "healthy": true,
+  "limitations": [
+    "Findings describe persisted metadata and deterministic lexical signals only.",
+    "The audit does not establish whether memory content is factually or semantically true.",
+    "The audit reads one SQLite snapshot and may not include writes committed after that snapshot begins."
+  ],
+  "memory_count": 2,
+  "ok": true,
+  "read_only": true,
+  "schema": "zerker.memory_health_report.v1",
+  "semantic_truth_claimed": false
+}
