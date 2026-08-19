@@ -1,6 +1,7 @@
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -14,7 +15,18 @@ class TestCLIRunner(unittest.TestCase):
         self.runner = CLIRunner(poll_interval_s=0.05)
 
     def tearDown(self):
-        self.tmp.cleanup()
+        # Windows: a child killed via TerminateProcess can keep its inherited
+        # out/err.log handles alive for a moment after wait() returns, so a
+        # same-instant cleanup loses the race (WinError 32). Bounded retry:
+        # a handle still held after ~2s would be a real leak and must fail.
+        for attempt in range(10):
+            try:
+                self.tmp.cleanup()
+                break
+            except PermissionError:
+                if attempt == 9:
+                    raise
+                time.sleep(0.2)
 
     def _run(self, code, timeout_s=10.0, cancellation_token=None, heartbeat_fn=None, heartbeat_interval_s=5.0):
         return self.runner.run(
