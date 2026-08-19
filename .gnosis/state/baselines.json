@@ -8,5 +8,10 @@
     "commit": "52a956a63702e2251354147f1328b6fd85efdc03",
     "recorded_at": "2026-08-19T01:46:01.452118+00:00",
     "summary": "Operational hardening: concurrency-safe run state (FileLock + atomic writes), PID/start-time-aware crash detection, Director inbox/outbox protocol, Git worktree primitives. 106 tests."
+  },
+  "M2": {
+    "commit": "82318cb1996f0b926a8e146bd971d620c80489f5",
+    "recorded_at": "2026-08-19T02:50:56.458265+00:00",
+    "summary": "M2.0 (f95244e): optional MCP runner config. M2.1 (82318cb): CodeIntelligenceProvider contract + benchmarked codegraph-mcp adapter, real executed benchmark vs sverklo/codegraph-mcp/code-context-engine. 127 tests."
   }
 }
