@@ -10,20 +10,90 @@ future work with its own extension point here.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from ..contracts.engineer_report import EngineerReport, ReportStatus
 from ..runner.capture import ExecutionResult
 from ..runner.claude_cli_runner import CancellationToken, ClaudeCodeCLIRunner, McpRunnerConfig
 from ..runner.retry import RetryPolicy, execute_with_retry
+from .code_intelligence import CodeIntelligenceProvider, CodeIntelligenceUnavailable
 from .git_evidence import capture_git_evidence
 from .ids import new_run_id
 from .redaction import redact
 from .run_store import RunStore
 from .state_machine import RunState, TaskState, TaskStateMachine
 from .verification import Verifier, VerificationResult
+
+
+def _gather_code_intelligence_context(
+    provider: CodeIntelligenceProvider,
+    repo_path: Path,
+    focus_symbols: Sequence[str],
+    max_context_chars: int,
+) -> tuple[str, dict]:
+    """Best-effort structural context gathering for `focus_symbols`, run
+    once before the CLI attempt loop. Never raises: any provider failure
+    (missing tool, timeout, stale index) is caught and recorded in the
+    returned evidence, never blocks task execution -- code intelligence
+    is an accelerant, not a dependency (see kernel.code_intelligence).
+
+    Bounded by construction: each explore() call is already capped by
+    the adapter, and `max_context_chars` caps the *combined* text
+    actually included in the prompt, this is the context-budgeting hook
+    a future MemoryRouter can drive with a smarter number.
+    """
+    provider_name = type(provider).__name__
+    queries: list = []
+    blocks: list = []
+    total_chars = 0
+
+    try:
+        provider.index(repo_path, full=False)
+    except CodeIntelligenceUnavailable as exc:
+        queries.append({"op": "index", "success": False, "error": str(exc)})
+
+    try:
+        index_status = provider.status().to_dict()
+    except CodeIntelligenceUnavailable as exc:
+        index_status = {"available": False, "stale": True, "detail": str(exc)}
+
+    if index_status.get("available") and index_status.get("stale"):
+        blocks.append(
+            "**Note:** the code-intelligence index may be stale (pending "
+            "changes since last sync) -- verify structural claims before "
+            "relying on them."
+        )
+
+    for symbol in focus_symbols:
+        started = time.monotonic()
+        try:
+            ctx = provider.explore(symbol)
+            latency_ms = round((time.monotonic() - started) * 1000, 1)
+            remaining = max_context_chars - total_chars
+            included = ctx.text[:remaining] if remaining > 0 else ""
+            if included:
+                blocks.append(f"### Code intelligence: {symbol}\n{included}")
+                total_chars += len(included)
+            queries.append({
+                "op": "explore", "symbol": symbol, "success": True, "latency_ms": latency_ms,
+                "related_symbols": list(ctx.related_symbols), "chars_returned": len(ctx.text),
+                "chars_included": len(included),
+            })
+        except CodeIntelligenceUnavailable as exc:
+            latency_ms = round((time.monotonic() - started) * 1000, 1)
+            queries.append({
+                "op": "explore", "symbol": symbol, "success": False,
+                "latency_ms": latency_ms, "error": str(exc),
+            })
+
+    evidence = {
+        "provider": provider_name, "index_status": index_status,
+        "queries": queries, "context_included_chars": total_chars,
+    }
+    return "\n\n".join(blocks), evidence
 
 
 @dataclass
@@ -60,6 +130,9 @@ class TaskEngine:
         timeout_s: float = 1800.0,
         cancellation_token: Optional[CancellationToken] = None,
         mcp: Optional[McpRunnerConfig] = None,
+        code_intelligence: Optional[CodeIntelligenceProvider] = None,
+        focus_symbols: Optional[Sequence[str]] = None,
+        max_context_chars: int = 12000,
     ) -> TaskExecutionOutcome:
         task_sm = TaskStateMachine(TaskState.CREATED)
         task_sm.transition(TaskState.PLANNED)
@@ -69,21 +142,36 @@ class TaskEngine:
         run_ids: list = []
         last_result: Optional[ExecutionResult] = None
 
+        ci_evidence: Optional[dict] = None
+        effective_prompt = prompt
+        if code_intelligence is not None and focus_symbols:
+            context_block, ci_evidence = _gather_code_intelligence_context(
+                code_intelligence, repo_path, focus_symbols, max_context_chars,
+            )
+            if context_block:
+                effective_prompt = f"{context_block}\n\n---\n\n{prompt}"
+
         def attempt(attempt_number: int) -> ExecutionResult:
             nonlocal last_result
             run_id = new_run_id()
             run_ids.append(run_id)
             paths = self.run_store.create_run(run_id, task_id)
             ledger = self.run_store.ledger_for(run_id)
+            if attempt_number == 1 and ci_evidence is not None:
+                ledger.append(run_id, "code_intelligence.context_gathered", ci_evidence)
+                (paths.root / "code_intelligence.json").write_text(
+                    json.dumps(ci_evidence, indent=2, sort_keys=True), encoding="utf-8",
+                )
             ledger.append(run_id, "run.attempt_started", {
                 "attempt": attempt_number, "objective": objective,
                 "mcp": mcp.to_dict() if mcp is not None else None,
+                "code_intelligence_used": ci_evidence is not None,
             })
             self.run_store.update_state(run_id, RunState.RUNNING)
             self.run_store.heartbeat(run_id)
 
             result = self.cli_runner.run(
-                prompt=prompt, cwd=repo_path, stdout_path=paths.stdout, stderr_path=paths.stderr,
+                prompt=effective_prompt, cwd=repo_path, stdout_path=paths.stdout, stderr_path=paths.stderr,
                 timeout_s=timeout_s, cancellation_token=cancellation_token, mcp=mcp,
                 heartbeat_fn=lambda pid: self.run_store.heartbeat(run_id),
             )
