@@ -39,13 +39,13 @@ def execute_with_retry(
     policy: RetryPolicy,
     on_attempt: Callable[[AttemptRecord[T]], None] | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
-) -> list:
+) -> list[AttemptRecord[T]]:
     """Call attempt_fn(attempt_number) up to policy.max_attempts times.
 
     Stops as soon as should_retry(result) is False (success), or once the
     hard attempt cap is reached (failure, never retried indefinitely).
     """
-    records: list = []
+    records: list[AttemptRecord[T]] = []
     for attempt in range(1, policy.max_attempts + 1):
         result = attempt_fn(attempt)
         needs_retry = should_retry(result)

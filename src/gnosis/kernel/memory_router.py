@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from .memory import MemoryProvider, MemoryQuery, MemoryResult, MemoryUnavailable
 
@@ -24,7 +25,7 @@ class MemoryRouterResult:
     failures_by_role: dict[str, str]
     total_records_included: int
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "query_text": self.query_text,
             "results_by_role": {role: result.to_dict() for role, result in self.results_by_role.items()},

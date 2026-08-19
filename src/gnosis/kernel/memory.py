@@ -22,6 +22,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
+from typing import Any
 
 
 def _utc_now_iso() -> str:
@@ -52,7 +53,7 @@ class IllegalMemoryTransitionError(RuntimeError):
         self.target = target
 
 
-MEMORY_TRANSITIONS: dict = {
+MEMORY_TRANSITIONS: dict[MemoryStatus, frozenset[MemoryStatus]] = {
     MemoryStatus.OBSERVED: frozenset({MemoryStatus.CANDIDATE}),
     MemoryStatus.CANDIDATE: frozenset({MemoryStatus.QUARANTINED, MemoryStatus.ACTIVE}),
     MemoryStatus.QUARANTINED: frozenset({MemoryStatus.ACTIVE, MemoryStatus.REVOKED}),
@@ -81,7 +82,7 @@ class MemoryEvidence:
     actor_uri: str | None = None
     confidence: float = 1.0
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "source_kind": self.source_kind, "source_uri": self.source_uri,
             "actor_uri": self.actor_uri, "confidence": self.confidence,
@@ -109,7 +110,7 @@ class MemoryRecord:
     superseded_by: str | None = None
     labels: tuple[str, ...] = field(default_factory=tuple)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "memory_id": self.memory_id, "content": self.content, "memory_type": self.memory_type,
             "status": self.status.value, "evidence": self.evidence.to_dict(),
@@ -139,7 +140,7 @@ class MemoryResult:
     records: tuple[MemoryRecord, ...]
     stale: bool = False
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "query_text": self.query.text, "as_of": self.query.as_of,
             "records": [r.to_dict() for r in self.records], "stale": self.stale,
@@ -158,7 +159,7 @@ class MemoryInfluence:
     created_at: str = field(default_factory=_utc_now_iso)
     proof: str | None = None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "action_id": self.action_id, "memory_ids": list(self.memory_ids),
             "created_at": self.created_at, "proof": self.proof,
@@ -177,7 +178,7 @@ class MemoryRevision:
     changed_at: str = field(default_factory=_utc_now_iso)
     changed_by: str | None = None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "memory_id": self.memory_id, "previous_status": self.previous_status.value,
             "new_status": self.new_status.value, "reason": self.reason,
@@ -271,32 +272,38 @@ class NullMemoryProvider(MemoryProvider):
     requires no specific vendor to exist -- Gnosis works with zero memory
     providers configured, exactly like NullCodeIntelligenceProvider."""
 
-    def remember(self, content, memory_type, evidence, valid_from=None, labels=()):
+    def remember(
+        self, content: str, memory_type: str, evidence: MemoryEvidence,
+        valid_from: str | None = None, labels: tuple[str, ...] = (),
+    ) -> MemoryRecord:
         raise MemoryUnavailable("No MemoryProvider is configured.")
 
-    def propose(self, content, memory_type, evidence, valid_from=None, labels=()):
+    def propose(
+        self, content: str, memory_type: str, evidence: MemoryEvidence,
+        valid_from: str | None = None, labels: tuple[str, ...] = (),
+    ) -> MemoryRecord:
         raise MemoryUnavailable("No MemoryProvider is configured.")
 
-    def promote(self, memory_id):
+    def promote(self, memory_id: str) -> MemoryRecord:
         raise MemoryUnavailable("No MemoryProvider is configured.")
 
-    def reject(self, memory_id, reason):
+    def reject(self, memory_id: str, reason: str) -> MemoryRecord:
         raise MemoryUnavailable("No MemoryProvider is configured.")
 
-    def supersede(self, memory_id, new_content, evidence):
+    def supersede(self, memory_id: str, new_content: str, evidence: MemoryEvidence) -> MemoryRecord:
         raise MemoryUnavailable("No MemoryProvider is configured.")
 
-    def revoke(self, memory_id, reason):
+    def revoke(self, memory_id: str, reason: str) -> MemoryRecord:
         raise MemoryUnavailable("No MemoryProvider is configured.")
 
-    def query(self, query):
+    def query(self, query: MemoryQuery) -> MemoryResult:
         raise MemoryUnavailable("No MemoryProvider is configured.")
 
-    def inject(self, action_id, task, agent):
+    def inject(self, action_id: str, task: str, agent: str) -> MemoryInfluence:
         raise MemoryUnavailable("No MemoryProvider is configured.")
 
-    def why(self, action_id):
+    def why(self, action_id: str) -> MemoryInfluence:
         raise MemoryUnavailable("No MemoryProvider is configured.")
 
-    def history(self, memory_id):
+    def history(self, memory_id: str) -> tuple[MemoryRevision, ...]:
         raise MemoryUnavailable("No MemoryProvider is configured.")

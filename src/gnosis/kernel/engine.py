@@ -34,7 +34,7 @@ def _gather_code_intelligence_context(
     repo_path: Path,
     focus_symbols: Sequence[str],
     max_context_chars: int,
-) -> tuple[str, dict]:
+) -> tuple[str, dict[str, Any]]:
     """Best-effort structural context gathering for `focus_symbols`, run
     once before the CLI attempt loop. Never raises: any provider failure
     (missing tool, timeout, stale index) is caught and recorded in the
@@ -47,8 +47,8 @@ def _gather_code_intelligence_context(
     a future MemoryRouter can drive with a smarter number.
     """
     provider_name = type(provider).__name__
-    queries: list = []
-    blocks: list = []
+    queries: list[dict[str, Any]] = []
+    blocks: list[str] = []
     total_chars = 0
 
     try:
@@ -100,7 +100,7 @@ def _gather_code_intelligence_context(
 @dataclass
 class TaskExecutionOutcome:
     task_id: str
-    run_ids: list
+    run_ids: list[str]
     final_task_state: TaskState
     verification: VerificationResult | None
     execution_result: ExecutionResult | None
@@ -140,10 +140,10 @@ class TaskEngine:
         task_sm.transition(TaskState.IN_PROGRESS)
 
         pre_git = capture_git_evidence(repo_path)
-        run_ids: list = []
+        run_ids: list[str] = []
         last_result: ExecutionResult | None = None
 
-        ci_evidence: dict | None = None
+        ci_evidence: dict[str, Any] | None = None
         effective_prompt = prompt
         if code_intelligence is not None and focus_symbols:
             context_block, ci_evidence = _gather_code_intelligence_context(
@@ -224,7 +224,7 @@ class TaskEngine:
         else:
             task_sm.transition(TaskState.FAILED)
 
-        problems: tuple = ()
+        problems: tuple[str, ...] = ()
         if not cli_succeeded and latest_run_id:
             stderr_path = self.run_store.paths_for(latest_run_id).stderr
             if stderr_path.exists():

@@ -16,6 +16,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from .capture import ExecutionResult
 
@@ -53,7 +54,7 @@ class McpRunnerConfig:
         if not self.config_paths:
             raise ValueError("McpRunnerConfig.config_paths must be non-empty")
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {"config_paths": list(self.config_paths), "strict": self.strict}
 
 

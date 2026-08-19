@@ -54,7 +54,7 @@ def _parse_symbol_entries(text: str) -> tuple[SymbolLocation, ...]:
     an optional ignored third line). Non-symbol kinds ("file", "import")
     never match _ENTRY_HEADER_RE, so they are skipped automatically."""
     lines = _strip_ansi(text).splitlines()
-    results: list = []
+    results: list[SymbolLocation] = []
     i = 0
     while i < len(lines):
         header = _ENTRY_HEADER_RE.match(lines[i])
@@ -73,7 +73,7 @@ def _parse_symbol_entries(text: str) -> tuple[SymbolLocation, ...]:
 def _parse_impact_entries(text: str) -> tuple[SymbolLocation, ...]:
     """Parses `impact` output: a file-path header line followed by one or
     more "<kind>    <name>:<line>" lines."""
-    results: list = []
+    results: list[SymbolLocation] = []
     current_file: str | None = None
     for raw_line in _strip_ansi(text).splitlines():
         line = raw_line.rstrip()

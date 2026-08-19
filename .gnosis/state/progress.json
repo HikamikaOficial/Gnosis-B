@@ -2,7 +2,7 @@
   "schema_version": 1,
   "project": "GNOSIS",
   "phase": "phase_minus_1",
-  "status": "memory_fabric_validated",
+  "status": "complete_except_codex_login",
   "gates": {
     "bootstrap": "PASS",
     "workstation_doctor": "PASS_WITH_NOTES",
@@ -11,9 +11,10 @@
     "m3_install_verify": "PASS",
     "zmem_install_verify": "PASS",
     "memory_fabric_cross_session_test": "PASS",
-    "tier_s_archaeology": "IN_PROGRESS",
-    "initial_adrs": "PASS"
+    "tier_s_archaeology": "PASS",
+    "initial_adrs": "PASS",
+    "quality_gates": "RUFF_CLEAN_AUTOFIX_MYPY_STRICT_ZERO"
   },
-  "next_action": "finish Tier-S archaeology, then layout ADR, then Phase 1 kernel continuation",
+  "next_action": "human: codex login; then M4 memory-provider ADR and Phase 1 kernel continuation per REFERENCE_REPOSITORY_FINDINGS directives",
   "updated": "2026-08-19"
 }

@@ -17,9 +17,12 @@ resubmit as a new brief.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
+from ..contracts.director_brief import DirectorBrief
 from ..contracts.engineer_report import EngineerReport, ReportStatus
 from ..kernel.engine import TaskEngine, TaskExecutionOutcome
 from ..kernel.ids import new_task_id
@@ -47,8 +50,8 @@ class DirectorOrchestrator:
         run_store: RunStore,
         repo_path: Path,
         task_engine: TaskEngine | None = None,
-        prompt_builder=None,
-    ):
+        prompt_builder: Callable[[DirectorBrief], str] | None = None,
+    ) -> None:
         self.inbox = DirectorInbox(director_root)
         self.records = BriefRecordStore(director_root / "state" / "briefs")
         self.run_store = run_store
@@ -66,10 +69,12 @@ class DirectorOrchestrator:
             if not claim.accepted:
                 outcomes.append(IngestOutcome(brief_id=None, task_id=None, accepted=False, reason=claim.reason))
                 continue
-            outcomes.append(self._execute_brief(claim.brief, verifier=verifier))
+            # An accepted claim always carries a brief; cast is a typing-only
+            # no-op that tells mypy what ClaimResult.accepted guarantees.
+            outcomes.append(self._execute_brief(cast(DirectorBrief, claim.brief), verifier=verifier))
         return outcomes
 
-    def _execute_brief(self, brief, verifier: Verifier | None) -> IngestOutcome:
+    def _execute_brief(self, brief: DirectorBrief, verifier: Verifier | None) -> IngestOutcome:
         task_id = new_task_id()
         self.records.create(brief.brief_id, task_id, BriefRecordState.ASSIGNED)
         self.records.update(brief.brief_id, state=BriefRecordState.IN_PROGRESS)
@@ -136,7 +141,7 @@ class DirectorOrchestrator:
         return False
 
 
-def _default_prompt_builder(brief) -> str:
+def _default_prompt_builder(brief: DirectorBrief) -> str:
     parts = [brief.mission]
     if brief.constraints:
         parts.append("Constraints: " + "; ".join(brief.constraints))

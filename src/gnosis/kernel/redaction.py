@@ -9,6 +9,7 @@ transport MUST be passed through this function first.
 from __future__ import annotations
 
 import re
+from typing import Any
 
 _LABELS_AND_PATTERNS = [
     ("ANTHROPIC_API_KEY", re.compile(r"sk-ant-[A-Za-z0-9\-_]{10,}")),
@@ -33,8 +34,8 @@ def redact(text: str) -> str:
     return redacted
 
 
-def redact_mapping(data: dict) -> dict:
-    result: dict = {}
+def redact_mapping(data: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
     for key, value in data.items():
         if isinstance(value, str):
             result[key] = redact(value)

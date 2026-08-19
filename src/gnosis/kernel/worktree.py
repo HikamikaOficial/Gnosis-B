@@ -18,6 +18,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from .git_evidence import GitEvidence, capture_git_evidence
 
@@ -35,18 +36,18 @@ class WorktreeHandle:
     branch: str
     created_at: str
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "task_id": self.task_id, "run_id": self.run_id, "source_repo": self.source_repo,
             "path": self.path, "branch": self.branch, "created_at": self.created_at,
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> WorktreeHandle:
+    def from_dict(cls, data: dict[str, Any]) -> WorktreeHandle:
         return cls(**data)
 
 
-def _run_git(cwd: Path, args: list[str], timeout_s: float = 60.0) -> subprocess.CompletedProcess:
+def _run_git(cwd: Path, args: list[str], timeout_s: float = 60.0) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, timeout=timeout_s)
 
 

@@ -20,6 +20,7 @@ import json
 from datetime import UTC, datetime
 
 from .memory import (
+    MemoryEvidence,
     MemoryInfluence,
     MemoryProvider,
     MemoryQuery,
@@ -41,7 +42,7 @@ def _new_id(prefix: str, counter: int) -> str:
 
 
 class InMemoryMemoryProvider(MemoryProvider):
-    def __init__(self):
+    def __init__(self) -> None:
         self._records: dict[str, MemoryRecord] = {}
         self._history: dict[str, list[MemoryRevision]] = {}
         self._influences: dict[str, MemoryInfluence] = {}
@@ -65,7 +66,10 @@ class InMemoryMemoryProvider(MemoryProvider):
         ))
         return updated
 
-    def remember(self, content, memory_type, evidence, valid_from=None, labels=()):
+    def remember(
+        self, content: str, memory_type: str, evidence: MemoryEvidence,
+        valid_from: str | None = None, labels: tuple[str, ...] = (),
+    ) -> MemoryRecord:
         memory_id = self._next_id("mem")
         record = MemoryRecord(
             memory_id=memory_id, content=content, memory_type=memory_type,
@@ -77,7 +81,10 @@ class InMemoryMemoryProvider(MemoryProvider):
         record = self._set_status(record, MemoryStatus.ACTIVE, f"trusted source: {evidence.source_kind}")
         return record
 
-    def propose(self, content, memory_type, evidence, valid_from=None, labels=()):
+    def propose(
+        self, content: str, memory_type: str, evidence: MemoryEvidence,
+        valid_from: str | None = None, labels: tuple[str, ...] = (),
+    ) -> MemoryRecord:
         memory_id = self._next_id("mem")
         record = MemoryRecord(
             memory_id=memory_id, content=content, memory_type=memory_type,
@@ -89,15 +96,15 @@ class InMemoryMemoryProvider(MemoryProvider):
         record = self._set_status(record, MemoryStatus.QUARANTINED, "pending review")
         return record
 
-    def promote(self, memory_id):
+    def promote(self, memory_id: str) -> MemoryRecord:
         record = self._require(memory_id)
         return self._set_status(record, MemoryStatus.ACTIVE, "promoted")
 
-    def reject(self, memory_id, reason):
+    def reject(self, memory_id: str, reason: str) -> MemoryRecord:
         record = self._require(memory_id)
         return self._set_status(record, MemoryStatus.REVOKED, f"rejected: {reason}")
 
-    def supersede(self, memory_id, new_content, evidence):
+    def supersede(self, memory_id: str, new_content: str, evidence: MemoryEvidence) -> MemoryRecord:
         old = self._require(memory_id)
         new_id = self._next_id("mem")
         new_record = MemoryRecord(
@@ -120,7 +127,7 @@ class InMemoryMemoryProvider(MemoryProvider):
         self._set_status(superseded_old, MemoryStatus.SUPERSEDED, f"superseded by {new_id}")
         return new_record
 
-    def revoke(self, memory_id, reason):
+    def revoke(self, memory_id: str, reason: str) -> MemoryRecord:
         record = self._require(memory_id)
         return self._set_status(record, MemoryStatus.REVOKED, f"revoked: {reason}")
 
@@ -130,7 +137,7 @@ class InMemoryMemoryProvider(MemoryProvider):
             raise MemoryUnavailable(f"No such memory: {memory_id}")
         return record
 
-    def query(self, query):
+    def query(self, query: MemoryQuery) -> MemoryResult:
         candidates: list[MemoryRecord] = []
         for record in self._records.values():
             if record.status == MemoryStatus.REVOKED:
@@ -179,7 +186,7 @@ class InMemoryMemoryProvider(MemoryProvider):
             return False
         return True
 
-    def inject(self, action_id, task, agent):
+    def inject(self, action_id: str, task: str, agent: str) -> MemoryInfluence:
         result = self.query(MemoryQuery(text=task, limit=50))
         memory_ids = tuple(r.memory_id for r in result.records)
         proof = hashlib.sha256(json.dumps({"action_id": action_id, "memory_ids": list(memory_ids)}).encode()).hexdigest()
@@ -187,13 +194,13 @@ class InMemoryMemoryProvider(MemoryProvider):
         self._influences[action_id] = influence
         return influence
 
-    def why(self, action_id):
+    def why(self, action_id: str) -> MemoryInfluence:
         influence = self._influences.get(action_id)
         if influence is None:
             raise MemoryUnavailable(f"No recorded influence for action: {action_id}")
         return influence
 
-    def history(self, memory_id):
+    def history(self, memory_id: str) -> tuple[MemoryRevision, ...]:
         if memory_id not in self._history:
             raise MemoryUnavailable(f"No such memory: {memory_id}")
         return tuple(self._history[memory_id])

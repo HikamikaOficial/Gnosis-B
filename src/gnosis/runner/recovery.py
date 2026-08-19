@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from ..kernel.run_store import RunStore
 from ..kernel.state_machine import RunState
@@ -79,14 +80,14 @@ class RecoveryManager:
                 ))
         return crashed
 
-    def _staleness(self, heartbeat: dict | None) -> float | None:
+    def _staleness(self, heartbeat: dict[str, Any] | None) -> float | None:
         if not heartbeat or not heartbeat.get("ts"):
             return None
         ts = datetime.fromisoformat(heartbeat["ts"])
         now = datetime.now(UTC)
         return (now - ts).total_seconds()
 
-    def _process_alive(self, heartbeat: dict | None) -> bool | None:
+    def _process_alive(self, heartbeat: dict[str, Any] | None) -> bool | None:
         if not heartbeat or "pid" not in heartbeat:
             return None
         fingerprint = ProcessFingerprint.from_dict(heartbeat)

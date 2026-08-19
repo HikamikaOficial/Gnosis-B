@@ -77,7 +77,11 @@ RUN_TERMINAL_STATES = frozenset({
 })
 
 
-def _transition(current: Enum, target: Enum, table: dict, kind: str) -> Enum:
+# Generic over the concrete state enum so TaskStateMachine/RunStateMachine
+# get back their own state type from _transition, not a bare Enum.
+def _transition[StateT: Enum](
+    current: StateT, target: StateT, table: dict[StateT, frozenset[StateT]], kind: str,
+) -> StateT:
     allowed = table.get(current, frozenset())
     if target not in allowed:
         raise IllegalTransitionError(current, target, kind)

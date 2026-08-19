@@ -187,3 +187,14 @@ re-runnable form lives in `tests/integration/test_memory_fabric_smoke.py`
 - Claude Code must be restarted (or the project MCP config approved) for
   the two MCP servers to appear in a session; config is in place.
 
+## MCP handshake verification (2026-08-19)
+
+Both servers were spawned exactly as `.mcp.json` declares them and
+answered a JSON-RPC `initialize` request:
+
+- `zerker-memory`: serverInfo `{'name': 'zerker-memory', 'version': '0.1.17'}`
+- `m3-memory`: serverInfo `{'name': 'Memory Bridge', 'version': '1.29.0'}`
+
+So the remaining "connect to Claude Code" step is purely the client-side
+approval on next session start, not an open engineering question.
+

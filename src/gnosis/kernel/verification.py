@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from .redaction import redact
 
@@ -29,7 +30,7 @@ class VerificationResult:
     stderr_excerpt: str
     ts: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name, "passed": self.passed, "exit_code": self.exit_code,
             "duration_s": self.duration_s, "stdout_excerpt": self.stdout_excerpt,

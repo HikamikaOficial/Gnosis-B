@@ -5,6 +5,8 @@ integration). Exists so the transport interface is proven pluggable and so
 M1 can implement this class without touching kernel code."""
 from __future__ import annotations
 
+from typing import Any
+
 from ..contracts.director_brief import DirectorBrief
 from ..contracts.engineer_report import EngineerReport
 from .base import DirectorTransport
@@ -16,7 +18,7 @@ _NOT_IMPLEMENTED_MSG = (
 
 
 class McpDirectorTransport(DirectorTransport):
-    def __init__(self, endpoint: str, **config):
+    def __init__(self, endpoint: str, **config: Any) -> None:
         self.endpoint = endpoint
         self.config = config
 

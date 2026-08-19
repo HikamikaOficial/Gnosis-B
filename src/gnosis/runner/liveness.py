@@ -124,7 +124,9 @@ def _posix_process_start_time(pid: int) -> float | None:
     try:
         with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as fh:
             fields = fh.read().split()
-        clk_tck = os.sysconf("SC_CLK_TCK")
+        # POSIX-only branch (guarded by platform.system() in callers); the
+        # attribute does not exist in the win32 stubs mypy checks against.
+        clk_tck: int = os.sysconf("SC_CLK_TCK")  # type: ignore[attr-defined]
         boot_time = _posix_boot_time()
         if boot_time is None:
             return None

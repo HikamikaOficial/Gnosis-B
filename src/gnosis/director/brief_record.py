@@ -10,6 +10,7 @@ re-assigned a second task.
 from __future__ import annotations
 
 import json
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
@@ -36,7 +37,7 @@ class BriefRecord:
     state: str
     created_at: str
     updated_at: str
-    run_ids: list = field(default_factory=list)
+    run_ids: list[str] = field(default_factory=list)
     report_path: str | None = None
     error: str | None = None
 
@@ -97,7 +98,7 @@ class BriefRecordStore:
     def _write(self, record: BriefRecord) -> None:
         atomic_write_text(self._path(record.brief_id), json.dumps(record.to_dict(), indent=2, sort_keys=True))
 
-    def list_in_states(self, states: set) -> list[BriefRecord]:
+    def list_in_states(self, states: AbstractSet[BriefRecordState | str]) -> list[BriefRecord]:
         wanted = {s.value if isinstance(s, Enum) else s for s in states}
         records = []
         for path in sorted(self.root.glob("*.json")):

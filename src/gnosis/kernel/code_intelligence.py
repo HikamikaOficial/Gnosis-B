@@ -20,6 +20,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -28,7 +29,7 @@ class SymbolLocation:
     file: str
     line: int | None = None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {"qualified_name": self.qualified_name, "file": self.file, "line": self.line}
 
 
@@ -37,7 +38,7 @@ class ImpactResult:
     changed_symbol: str
     impacted_symbols: tuple[SymbolLocation, ...]
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "changed_symbol": self.changed_symbol,
             "impacted_symbols": [s.to_dict() for s in self.impacted_symbols],
@@ -58,7 +59,7 @@ class IndexStatus:
     stale: bool = True
     detail: str = ""
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "available": self.available, "files_indexed": self.files_indexed,
             "nodes": self.nodes, "edges": self.edges, "stale": self.stale, "detail": self.detail,
@@ -76,7 +77,7 @@ class CompactContext:
     text: str
     related_symbols: tuple[str, ...] = field(default_factory=tuple)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {"query": self.query, "text": self.text, "related_symbols": list(self.related_symbols)}
 
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
+from types import TracebackType
 from typing import IO
 
 if sys.platform == "win32":
@@ -81,11 +82,16 @@ class FileLock:
         self.acquire()
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         self.release()
 
 
-def _lock_exclusive_nonblocking(fh) -> None:
+def _lock_exclusive_nonblocking(fh: IO[bytes]) -> None:
     if sys.platform == "win32":
         fh.seek(0)
         msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
@@ -93,7 +99,7 @@ def _lock_exclusive_nonblocking(fh) -> None:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
-def _unlock(fh) -> None:
+def _unlock(fh: IO[bytes]) -> None:
     if sys.platform == "win32":
         fh.seek(0)
         msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)

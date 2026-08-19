@@ -125,7 +125,10 @@ class RunStore:
         paths = self.paths_for(run_id)
         if not paths.heartbeat.exists():
             return None
-        return json.loads(paths.heartbeat.read_text(encoding="utf-8"))
+        # json.loads returns Any; annotate a local so strict mypy sees the
+        # declared payload shape instead of returning Any.
+        payload: dict[str, Any] = json.loads(paths.heartbeat.read_text(encoding="utf-8"))
+        return payload
 
     def list_run_ids(self) -> list[str]:
         if not self.root.exists():

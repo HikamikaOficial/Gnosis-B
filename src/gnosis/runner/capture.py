@@ -16,7 +16,7 @@ class ExecutionResult:
     stderr_path: str
     started_at: str
     ended_at: str
-    parsed_json: dict | None = None
+    parsed_json: dict[str, Any] | None = None
 
     @property
     def succeeded(self) -> bool:
