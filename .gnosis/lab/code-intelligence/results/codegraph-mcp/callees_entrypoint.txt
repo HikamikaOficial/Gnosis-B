@@ -1,0 +1,11 @@
+[1m
+Callees of "entrypoint" (2):
+[0m
+[36mfunction    [0m[37mcompute_b_renamed[0m
+[2m  pkg/helpers.py:4[0m
+
+[36mfunction    [0m[37mcompute_c[0m
+[2m  pkg/helpers.py:8[0m
+
+(node:46148) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)

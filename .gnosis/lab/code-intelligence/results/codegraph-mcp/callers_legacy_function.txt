@@ -1,0 +1,3 @@
+[34m[i][0m Symbol "legacy_function" not found
+(node:44692) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)

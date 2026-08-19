@@ -1,0 +1,15 @@
+Clearing index at C:\Users\axelr\Desktop\Claude Proyectos\GnosisAgentAi\.gnosis\lab\code-intelligence\datasets\fixture-repo…
+Reindexing from scratch…
+(node:41192) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[timing] provider_init: 1212ms
+[timing] discover: 34ms
+[timing] parse_chunk_insert: 21ms
+[timing] embed: 1383ms
+[timing] graph_pagerank: 8ms
+[timing] doc_link: 8ms
+Indexing complete: 13 files, 14 chunks in 2669ms
+[timing] summary: provider_init=1212ms · discover=34ms · parse_chunk_insert=21ms · embed=1383ms · graph_pagerank=8ms · doc_link=8ms · total=2669ms
+
+✓ Done in 2.7s
+  13 files · 14 chunks

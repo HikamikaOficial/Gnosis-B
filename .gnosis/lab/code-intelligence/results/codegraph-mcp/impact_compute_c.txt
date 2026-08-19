@@ -1,0 +1,16 @@
+[1m
+Impact of changing "compute_c" — 5 affected symbols:
+[0m
+[36mpkg/helpers.py[0m
+  [2mfunction    [0mcompute_c[2m:8[0m
+
+[36mpkg/core.py[0m
+  [2mfunction    [0mentrypoint[2m:4[0m
+  [2mfile        [0mcore.py[2m:1[0m
+
+[36mtests/test_core.py[0m
+  [2mfunction    [0mtest_entrypoint[2m:4[0m
+  [2mfile        [0mtest_core.py[2m:1[0m
+
+(node:55800) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)

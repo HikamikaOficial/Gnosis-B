@@ -1,0 +1,11 @@
+[1m
+Callers of "compute_c" (2):
+[0m
+[36mfunction    [0m[37mentrypoint[0m
+[2m  pkg/core.py:4[0m
+
+[36mfile        [0m[37mcore.py[0m
+[2m  pkg/core.py:1[0m
+
+(node:29252) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)

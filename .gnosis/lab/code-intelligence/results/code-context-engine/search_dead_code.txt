@@ -1,0 +1,16 @@
+
+  ── Search · unused dead code function ────────────
+
+    1. pkg\dead_code.py:1-3
+       def unused_function():
+    2. README.md:1-1
+       Gnosis M2.1 code-intelligence benchmark fixture. Synthetic, no real logic.
+    3. pkg\helpers.py:4-5
+       def compute_b_renamed(x):
+    4. pkg\circular_y.py:4-5
+       def y_func():
+    5. pkg\circular_x.py:4-5
+       def x_func():
+
+    ✓ 5 results  79 tokens served vs 145 full file tokens (45% saved)
+

@@ -1,0 +1,17 @@
+[1m
+Callers of "compute_b_renamed" (4):
+[0m
+[36mfunction    [0m[37mentrypoint[0m
+[2m  pkg/core.py:4[0m
+
+[36mfunction    [0m[37mnew_feature[0m
+[2m  pkg/new_module.py:4[0m
+
+[36mfile        [0m[37mcore.py[0m
+[2m  pkg/core.py:1[0m
+
+[36mfile        [0m[37mnew_module.py[0m
+[2m  pkg/new_module.py:1[0m
+
+(node:56544) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)

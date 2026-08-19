@@ -1,0 +1,16 @@
+
+  ── Search · what calls compute_b_renamed ─────────
+
+    1. pkg\helpers.py:4-5
+       def compute_b_renamed(x):
+    2. pkg\core.py:4-6
+       def entrypoint(x):
+    3. pkg\new_module.py:4-5
+       def new_feature(x):
+    4. pkg\helpers.py:8-11
+       def compute_c(x):
+    5. pkg\deep.py:1-3
+       def compute_d(x):
+
+    ✓ 5 results  135 tokens served vs 167 full file tokens (19% saved)
+

@@ -25,3 +25,14 @@ runs/*
 !.gnosis/director/state/briefs/.gitkeep
 .gnosis/worktrees/*
 !.gnosis/worktrees/.gitkeep
+
+# M2.1 lab: candidates/tools are reproducible (npm/uv installs, portable
+# Node download); fixture-repo* dirs are reproducible via build_fixture.py
+# and are themselves git repos (would otherwise show up as gitlinks).
+# results/ (scorecards + raw command output) and the fixture builder +
+# ground truth ARE kept as evidence.
+.gnosis/lab/code-intelligence/candidates/
+.gnosis/lab/code-intelligence/tools/
+.gnosis/lab/code-intelligence/datasets/fixture-repo/
+.gnosis/lab/code-intelligence/datasets/fixture-repo-c1/
+.gnosis/lab/code-intelligence/datasets/fixture-repo-c1-then-c4/

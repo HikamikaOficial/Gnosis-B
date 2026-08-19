@@ -1,0 +1,14 @@
+[1m
+Callers of "compute_d" (3):
+[0m
+[36mfunction    [0m[37mcompute_b_renamed[0m
+[2m  pkg/helpers.py:4[0m
+
+[36mfunction    [0m[37mcompute_c[0m
+[2m  pkg/helpers.py:8[0m
+
+[36mfile        [0m[37mhelpers.py[0m
+[2m  pkg/helpers.py:1[0m
+
+(node:32600) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)

@@ -1,0 +1,21 @@
+Clearing index at C:\Users\axelr\Desktop\Claude Proyectos\GnosisAgentAi\.gnosis\lab\code-intelligence\datasets\fixture-repo…
+Reindexing from scratch…
+Downloading embedding model (~90MB)...
+  Downloading model.onnx...
+(node:58856) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+  model.onnx downloaded (integrity verified)
+  Downloading tokenizer.json...
+  tokenizer.json downloaded (integrity verified)
+Setup complete! Models saved to C:\Users\axelr\.sverklo\models
+[timing] provider_init: 8841ms
+[timing] discover: 30ms
+[timing] parse_chunk_insert: 37ms
+[timing] embed: 1592ms
+[timing] graph_pagerank: 7ms
+[timing] doc_link: 3ms
+Indexing complete: 13 files, 14 chunks in 10515ms
+[timing] summary: provider_init=8841ms · discover=30ms · parse_chunk_insert=37ms · embed=1592ms · graph_pagerank=7ms · doc_link=3ms · total=10515ms
+
+✓ Done in 10.5s
+  13 files · 14 chunks

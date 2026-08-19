@@ -1,0 +1,144 @@
+{
+  "final_state": {
+    "blast_radius_of_compute_c_change": {
+      "changed_in_commit": "c5_blast_radius_change",
+      "changed_symbol": "pkg.helpers.compute_c",
+      "expected_impacted_set": [
+        "pkg.helpers.compute_c",
+        "pkg.core.entrypoint",
+        "tests.test_core.test_entrypoint"
+      ]
+    },
+    "circular_dependency": {
+      "description": "pkg.circular_x imports pkg.circular_y and pkg.circular_y imports pkg.circular_x",
+      "modules": [
+        "pkg.circular_x",
+        "pkg.circular_y"
+      ]
+    },
+    "cross_module_call": {
+      "callee": "pkg.core.entrypoint",
+      "caller": "tests.test_core.test_entrypoint",
+      "description": "test module calling production module across a package boundary"
+    },
+    "dead_code": {
+      "expected_callers": [],
+      "qualified_name": "pkg.dead_code.unused_function"
+    },
+    "direct_calls": [
+      {
+        "callee": "pkg.helpers.compute_b_renamed",
+        "caller": "pkg.core.entrypoint"
+      },
+      {
+        "callee": "pkg.helpers.compute_c",
+        "caller": "pkg.core.entrypoint"
+      },
+      {
+        "callee": "pkg.deep.compute_d",
+        "caller": "pkg.helpers.compute_b_renamed"
+      },
+      {
+        "callee": "pkg.deep.compute_d",
+        "caller": "pkg.helpers.compute_c"
+      },
+      {
+        "callee": "pkg.helpers.compute_b_renamed",
+        "caller": "pkg.new_module.new_feature"
+      },
+      {
+        "callee": "pkg.core.entrypoint",
+        "caller": "tests.test_core.test_entrypoint"
+      }
+    ],
+    "indirect_chain": {
+      "description": "entrypoint -> compute_c -> compute_d transitive chain",
+      "path": [
+        "pkg.core.entrypoint",
+        "pkg.helpers.compute_c",
+        "pkg.deep.compute_d"
+      ]
+    },
+    "overloaded_names": {
+      "distinct_qualified_names": [
+        "pkg.overload_ns1.process",
+        "pkg.overload_ns2.process"
+      ],
+      "name": "process"
+    },
+    "symbols_absent": [
+      {
+        "qualified_name": "pkg.helpers.compute_b",
+        "reason": "renamed to compute_b_renamed in c2"
+      },
+      {
+        "qualified_name": "pkg.deep.legacy_function",
+        "reason": "deleted in c3"
+      }
+    ],
+    "symbols_present": [
+      {
+        "file": "pkg/deep.py",
+        "kind": "function",
+        "qualified_name": "pkg.deep.compute_d"
+      },
+      {
+        "file": "pkg/helpers.py",
+        "kind": "function",
+        "qualified_name": "pkg.helpers.compute_b_renamed"
+      },
+      {
+        "file": "pkg/helpers.py",
+        "kind": "function",
+        "qualified_name": "pkg.helpers.compute_c"
+      },
+      {
+        "file": "pkg/core.py",
+        "kind": "function",
+        "qualified_name": "pkg.core.entrypoint"
+      },
+      {
+        "file": "pkg/circular_x.py",
+        "kind": "function",
+        "qualified_name": "pkg.circular_x.x_func"
+      },
+      {
+        "file": "pkg/circular_y.py",
+        "kind": "function",
+        "qualified_name": "pkg.circular_y.y_func"
+      },
+      {
+        "file": "pkg/overload_ns1.py",
+        "kind": "function",
+        "qualified_name": "pkg.overload_ns1.process"
+      },
+      {
+        "file": "pkg/overload_ns2.py",
+        "kind": "function",
+        "qualified_name": "pkg.overload_ns2.process"
+      },
+      {
+        "file": "pkg/dead_code.py",
+        "kind": "function",
+        "qualified_name": "pkg.dead_code.unused_function"
+      },
+      {
+        "file": "pkg/new_module.py",
+        "kind": "function",
+        "qualified_name": "pkg.new_module.new_feature"
+      },
+      {
+        "file": "tests/test_core.py",
+        "kind": "function",
+        "qualified_name": "tests.test_core.test_entrypoint"
+      }
+    ]
+  },
+  "fixture_commits": {
+    "c1_initial": "7df5c06e21fc599fa63b2c51807691ac86b7d745",
+    "c2_rename": "ff1045561251470356d450ed4f86ee62c8be7c79",
+    "c3_delete": "3977d825301edcfd0c4811300e12deceb4216ae8",
+    "c4_new_file": "83482cc900b3cb18e02392846af130a2ab176e1e",
+    "c5_blast_radius_change": "9f251cbdc8cdb45227c8dd54e63abb30810c1dd2"
+  }
+}
