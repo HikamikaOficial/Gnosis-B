@@ -1,0 +1,10 @@
+# GNOSIS project-scoped Codex defaults.
+# Reviewer default = read-only, non-interactive, ChatGPT login only.
+forced_login_method = "chatgpt"
+approval_policy = "never"
+sandbox_mode = "read-only"
+model_reasoning_effort = "high"
+history.persistence = "save-all"
+
+[agents]
+max_concurrent_threads_per_session = 4

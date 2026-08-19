@@ -1,6 +1,27 @@
 [project]
-name = "gnosis"
-version = "0.1.0"
-description = "Gnosis autonomous AI software-engineering system, M0 bootstrap kernel."
-requires-python = ">=3.10"
+name = "gnosis-agent-ai"
+version = "0.0.0"
+description = "GNOSIS autonomous multi-agent engineering system"
+requires-python = ">=3.12"
 dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.9",
+  "mypy>=1.14"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true

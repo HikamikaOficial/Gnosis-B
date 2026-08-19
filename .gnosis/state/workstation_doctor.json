@@ -1,0 +1,88 @@
+{
+  "schema_version": 2,
+  "root": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi",
+  "platform": "Windows-11-10.0.26100-SP0",
+  "tools": {
+    "git": {
+      "status": "FOUND",
+      "path": "C:\\Program Files\\Git\\cmd\\git.EXE",
+      "version": "git version 2.55.0.windows.4"
+    },
+    "python": {
+      "status": "FOUND",
+      "path": "C:\\Users\\nicol\\AppData\\Local\\Microsoft\\WindowsApps\\python.EXE",
+      "version": "Python 3.13.14"
+    },
+    "python3": {
+      "status": "FOUND",
+      "path": "C:\\Users\\nicol\\AppData\\Local\\Microsoft\\WindowsApps\\python3.EXE",
+      "version": "Python 3.13.14"
+    },
+    "uv": {
+      "status": "FOUND",
+      "path": "C:\\Users\\nicol\\.local\\bin\\uv.EXE",
+      "version": "uv 0.12.5 (210d1f678 2026-08-14 x86_64-pc-windows-msvc)"
+    },
+    "claude": {
+      "status": "FOUND",
+      "path": "C:\\Users\\nicol\\.local\\bin\\claude.EXE",
+      "version": "2.1.233 (Claude Code)"
+    },
+    "codex": {
+      "status": "MISSING",
+      "path": null,
+      "version": null
+    },
+    "docker": {
+      "status": "MISSING",
+      "path": null,
+      "version": null
+    },
+    "node": {
+      "status": "FOUND",
+      "path": "C:\\Program Files\\nodejs\\node.EXE",
+      "version": "v24.19.0"
+    },
+    "npm": {
+      "status": "FOUND",
+      "path": "C:\\Program Files\\nodejs\\npm.CMD",
+      "version": "11.17.0"
+    },
+    "rg": {
+      "status": "MISSING",
+      "path": null,
+      "version": null
+    },
+    "m3": {
+      "status": "MISSING",
+      "path": null,
+      "version": null
+    },
+    "zmem": {
+      "status": "MISSING",
+      "path": null,
+      "version": null
+    }
+  },
+  "issues": [
+    {
+      "severity": "HIGH",
+      "message": "Codex CLI missing: independent Codex review unavailable."
+    },
+    {
+      "severity": "LOW",
+      "message": "Docker missing; not a Phase-1 blocker, useful later for sandbox/integration."
+    },
+    {
+      "severity": "HIGH",
+      "message": "M3 Memory CLI not installed yet; Memory Fabric is not ready."
+    },
+    {
+      "severity": "HIGH",
+      "message": "ZMem CLI not installed yet; Memory Fabric is not ready."
+    }
+  ],
+  "strengths": [
+    "Claude Code: 2.1.233 (Claude Code)"
+  ]
+}

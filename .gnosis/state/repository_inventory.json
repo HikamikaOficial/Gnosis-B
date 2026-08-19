@@ -1,0 +1,924 @@
+{
+  "schema_version": 2,
+  "project_root": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi",
+  "scan_roots": [
+    "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories",
+    "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\repos",
+    "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\repositories"
+  ],
+  "found": 0,
+  "missing": 130,
+  "results": [
+    {
+      "name": "Paperclip",
+      "tier": "B",
+      "github_url": "https://github.com/paperclipai/paperclip",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "AWS CLI Agent Orchestrator (CAO)",
+      "tier": "B",
+      "github_url": "https://github.com/awslabs/cli-agent-orchestrator",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Agent Orchestrator",
+      "tier": "A",
+      "github_url": "https://github.com/Untrivial-ai/agent-orchestrator",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "MetaSwarm",
+      "tier": "B",
+      "github_url": "https://github.com/dsifry/metaswarm",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Codex Orchestrator",
+      "tier": "B",
+      "github_url": "https://github.com/kingbootoshi/codex-orchestrator",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Claudexor",
+      "tier": "A",
+      "github_url": "https://github.com/razzant/claudexor",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Ouroboros",
+      "tier": "C",
+      "github_url": "https://github.com/razzant/ouroboros",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Ruflo",
+      "tier": "B",
+      "github_url": "https://github.com/ruvnet/ruflo",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Kodo",
+      "tier": "B",
+      "github_url": "https://github.com/ikamensh/kodo",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Bernstein",
+      "tier": "S",
+      "github_url": "https://github.com/sipyourdrink-ltd/bernstein",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "OMK (Open Multi-Agent Kit)",
+      "tier": "B",
+      "github_url": "https://github.com/dmae97/omk",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Maestro",
+      "tier": "B",
+      "github_url": "https://github.com/RunMaestro/Maestro",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Cezar",
+      "tier": "S",
+      "github_url": "https://github.com/open-mercato/cezar",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Ralphex",
+      "tier": "S",
+      "github_url": "https://github.com/umputun/ralphex",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Omnigent",
+      "tier": "A",
+      "github_url": "https://github.com/omnigent-ai/omnigent",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "A Fable of Codexes",
+      "tier": "A",
+      "github_url": "https://github.com/jvogan/a-fable-of-codexes",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Tutti",
+      "tier": "A",
+      "github_url": "https://github.com/nutthouse/tutti",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "OpenAI Symphony",
+      "tier": "S",
+      "github_url": "https://github.com/openai/symphony",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "AgentsMesh",
+      "tier": "B",
+      "github_url": "https://github.com/AgentsMesh/AgentsMesh",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Agent Teams AI",
+      "tier": "B",
+      "github_url": "https://github.com/777genius/agent-teams-ai",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Operator OSS",
+      "tier": "B",
+      "github_url": "https://github.com/iishyfishyy/operator-oss",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Superset",
+      "tier": "B",
+      "github_url": "https://github.com/superset-sh/superset",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Genesis",
+      "tier": "A",
+      "github_url": "https://github.com/AmRitJain0442/Genesis",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Smithers",
+      "tier": "S",
+      "github_url": "https://github.com/smithersai/smithers",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Buildplane",
+      "tier": "A",
+      "github_url": "https://github.com/SollanSystems/buildplane",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Joshua Agent",
+      "tier": "A",
+      "github_url": "https://github.com/jorgevazquez-vagojo/joshua-agent",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Crewplane",
+      "tier": "B",
+      "github_url": "https://github.com/crewplaneai/crewplane",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "VirtusLab Orca",
+      "tier": "S",
+      "github_url": "https://github.com/VirtusLab/orca",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "OpenView",
+      "tier": "B",
+      "github_url": "https://github.com/iii-experimental/openview",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Drover",
+      "tier": "B",
+      "github_url": "https://github.com/cloud-shuttle/drover",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Shipwright",
+      "tier": "B",
+      "github_url": "https://github.com/sethdford/shipwright",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Agent Hive",
+      "tier": "B",
+      "github_url": "https://github.com/tctinh/agent-hive",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Podiom",
+      "tier": "B",
+      "github_url": "https://github.com/Podiom/Podiom",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "LoopTroop",
+      "tier": "B",
+      "github_url": "https://github.com/looptroop-ai/LoopTroop",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "sd0x-dev-flow",
+      "tier": "B",
+      "github_url": "https://github.com/sd0xdev/sd0x-dev-flow",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Agentic Control Stack",
+      "tier": "C",
+      "github_url": "https://github.com/sd0xdev/agentic-control-stack",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "GitHub Spec Kit",
+      "tier": "S",
+      "github_url": "https://github.com/github/spec-kit",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Superpowers",
+      "tier": "S",
+      "github_url": "https://github.com/obra/superpowers",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Hoyeon",
+      "tier": "A",
+      "github_url": "https://github.com/team-attention/hoyeon",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Beads",
+      "tier": "S",
+      "github_url": "https://github.com/gastownhall/beads",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Gas Town",
+      "tier": "A",
+      "github_url": "https://github.com/gastownhall/gastown",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Software Build Assurance Kit",
+      "tier": "B",
+      "github_url": "https://github.com/kknipe2k/Software-Build-Assurance-Kit",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Agent Workspace Fabric (AWF)",
+      "tier": "S",
+      "github_url": "https://github.com/dimileeh/agent-workspace-fabric",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Grit",
+      "tier": "S",
+      "github_url": "https://github.com/rtk-ai/grit",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Symlock",
+      "tier": "A",
+      "github_url": "https://github.com/echoVic/symlock",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "parallel-cc",
+      "tier": "B",
+      "github_url": "https://github.com/frankbria/parallel-cc",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Polywave Protocol",
+      "tier": "A",
+      "github_url": "https://github.com/blackwell-systems/polywave-protocol",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Polywave",
+      "tier": "B",
+      "github_url": "https://github.com/blackwell-systems/polywave",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Polywave Go",
+      "tier": "B",
+      "github_url": "https://github.com/blackwell-systems/polywave-go",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Agent Arena",
+      "tier": "S",
+      "github_url": "https://github.com/zhjai/agent-arena",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Senate",
+      "tier": "A",
+      "github_url": "https://github.com/SebastianElvis/senate",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "LLM Council",
+      "tier": "B",
+      "github_url": "https://github.com/sherifkozman/the-llm-council",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Agent Review Panel",
+      "tier": "B",
+      "github_url": "https://github.com/wan-huiyan/agent-review-panel",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "OpenAI Codex Plugin for Claude Code",
+      "tier": "A",
+      "github_url": "https://github.com/openai/codex-plugin-cc",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "TwinRouterBench",
+      "tier": "S",
+      "github_url": "https://github.com/CommonstackAI/TwinRouterBench",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "UncommonRoute",
+      "tier": "B",
+      "github_url": "https://github.com/CommonstackAI/UncommonRoute",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "AgentFlow",
+      "tier": "A",
+      "github_url": "https://github.com/lupantech/AgentFlow",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Graph of Skills",
+      "tier": "A",
+      "github_url": "https://github.com/davidliuk/graph-of-skills",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "SkillFlow",
+      "tier": "A",
+      "github_url": "https://github.com/ZhangZi-a/SkillFlow",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Memento-Skills",
+      "tier": "B",
+      "github_url": "https://github.com/Memento-Teams/Memento-Skills",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Awesome Agent Skills",
+      "tier": "C",
+      "github_url": "https://github.com/VoltAgent/awesome-agent-skills",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "plaited/agent-eval-harness",
+      "tier": "B",
+      "github_url": "https://github.com/plaited/agent-eval-harness",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "OpenDataHub Agent Eval Harness",
+      "tier": "B",
+      "github_url": "https://github.com/opendatahub-io/agent-eval-harness",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "linny006/agent-eval-harness",
+      "tier": "C",
+      "github_url": "https://github.com/linny006/agent-eval-harness",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "coding-agent-eval-harness",
+      "tier": "B",
+      "github_url": "https://github.com/zackproser/coding-agent-eval-harness",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "WildClawBench",
+      "tier": "B",
+      "github_url": "https://github.com/InternLM/WildClawBench",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "ProofAgent Harness",
+      "tier": "A",
+      "github_url": "https://github.com/ProofAgent-ai/proofagent-harness",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "AI Code Quality Framework",
+      "tier": "B",
+      "github_url": "https://github.com/0xUXDesign/ai-code-quality-framework",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Test-Forge",
+      "tier": "B",
+      "github_url": "https://github.com/manjeetsharma0796/Test-Forge",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Canary",
+      "tier": "B",
+      "github_url": "https://github.com/0xnyn/canary",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "CodeGraph MCP",
+      "tier": "A",
+      "github_url": "https://github.com/StarQuant/codegraph-mcp",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Sverklo",
+      "tier": "S",
+      "github_url": "https://github.com/sverklo/sverklo",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Code Context Engine",
+      "tier": "A",
+      "github_url": "https://github.com/elara-labs/code-context-engine",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "context-mode",
+      "tier": "B",
+      "github_url": "https://github.com/mksglu/context-mode",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "UltraCode (faxenoff)",
+      "tier": "B",
+      "github_url": "https://github.com/faxenoff/ultracode",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Sense",
+      "tier": "B",
+      "github_url": "https://github.com/luuuc/sense",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "code-review-graph",
+      "tier": "B",
+      "github_url": "https://github.com/tirth8205/code-review-graph",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Graft",
+      "tier": "B",
+      "github_url": "https://github.com/NanoNets/Graft",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Cartographer",
+      "tier": "B",
+      "github_url": "https://github.com/kingbootoshi/cartographer",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Wonk",
+      "tier": "C",
+      "github_url": "https://github.com/etr/wonk",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "roam-code",
+      "tier": "C",
+      "github_url": "https://github.com/Cranot/roam-code",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "AgentMemory",
+      "tier": "A",
+      "github_url": "https://github.com/rohitg00/agentmemory",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "cass_memory_system",
+      "tier": "S",
+      "github_url": "https://github.com/Dicklesworthstone/cass_memory_system",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "coding_agent_session_search",
+      "tier": "A",
+      "github_url": "https://github.com/Dicklesworthstone/coding_agent_session_search",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "agent-hop",
+      "tier": "B",
+      "github_url": "https://github.com/hetpatel-11/agent-hop",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Mulch",
+      "tier": "B",
+      "github_url": "https://github.com/jayminwest/mulch",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Codevira",
+      "tier": "B",
+      "github_url": "https://github.com/sachinshelke/codevira",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "world-model-mcp",
+      "tier": "A",
+      "github_url": "https://github.com/SaravananJaichandar/world-model-mcp",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "agent-traces",
+      "tier": "B",
+      "github_url": "https://github.com/edwarddgao/agent-traces",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Entire CLI",
+      "tier": "B",
+      "github_url": "https://github.com/entireio/cli",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "claude-replay",
+      "tier": "B",
+      "github_url": "https://github.com/es617/claude-replay",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "ReplayPack",
+      "tier": "B",
+      "github_url": "https://github.com/Atomics-hub/replaypack",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Microsoft Agent Governance Toolkit",
+      "tier": "S",
+      "github_url": "https://github.com/microsoft/agent-governance-toolkit",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "AgentJail",
+      "tier": "S",
+      "github_url": "https://github.com/LuD1161/agentjail",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "nono",
+      "tier": "S",
+      "github_url": "https://github.com/nolabs-ai/nono",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Agent Sandbox",
+      "tier": "A",
+      "github_url": "https://github.com/mattolson/agent-sandbox",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Sandbox Probe",
+      "tier": "S",
+      "github_url": "https://github.com/controlplaneio/sandbox-probe",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Vigils",
+      "tier": "A",
+      "github_url": "https://github.com/duncatzat/vigils",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Gensee Crate",
+      "tier": "A",
+      "github_url": "https://github.com/GenseeAI/gensee-crate",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "h5i",
+      "tier": "A",
+      "github_url": "https://github.com/h5i-dev/h5i",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Awesome Agent Runtime Security",
+      "tier": "C",
+      "github_url": "https://github.com/bureado/awesome-agent-runtime-security",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Agentic AI Security Starter Kit",
+      "tier": "B",
+      "github_url": "https://github.com/aembit/agentic-ai-security-starter-kit",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Reprise",
+      "tier": "S",
+      "github_url": "https://github.com/itsshreyasbhardwaj-design/reprise",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "llmreplay",
+      "tier": "A",
+      "github_url": "https://github.com/dmallya93/llmreplay",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Agent Capsule",
+      "tier": "S",
+      "github_url": "https://github.com/quantumpipes/agent-capsule",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Catacomb",
+      "tier": "S",
+      "github_url": "https://github.com/realkarych/catacomb",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "OpenTraces",
+      "tier": "S",
+      "github_url": "https://github.com/jayfarei/opentraces",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "OpenTelemetry Collector",
+      "tier": "S",
+      "github_url": "https://github.com/open-telemetry/opentelemetry-collector",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Prometheus",
+      "tier": "A",
+      "github_url": "https://github.com/prometheus/prometheus",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Grafana",
+      "tier": "A",
+      "github_url": "https://github.com/grafana/grafana",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Agent Deck",
+      "tier": "B",
+      "github_url": "https://github.com/asheshgoplani/agent-deck",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Dagger",
+      "tier": "S",
+      "github_url": "https://github.com/dagger/dagger",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Syft",
+      "tier": "A",
+      "github_url": "https://github.com/anchore/syft",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Grype",
+      "tier": "A",
+      "github_url": "https://github.com/anchore/grype",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Cosign / Sigstore",
+      "tier": "A",
+      "github_url": "https://github.com/sigstore/cosign",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "SLSA Verifier",
+      "tier": "A",
+      "github_url": "https://github.com/slsa-framework/slsa-verifier",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Renovate",
+      "tier": "B",
+      "github_url": "https://github.com/renovatebot/renovate",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Restate AI Examples",
+      "tier": "B",
+      "github_url": "https://github.com/restatedev/ai-examples",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Dapr Agents",
+      "tier": "B",
+      "github_url": "https://github.com/dapr/dapr-agents",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Chaos Mesh",
+      "tier": "C",
+      "github_url": "https://github.com/chaos-mesh/chaos-mesh",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Murmur",
+      "tier": "A",
+      "github_url": "https://github.com/instavm/murmur",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Best of Agent Harnesses",
+      "tier": "B",
+      "github_url": "https://github.com/RyanAlberts/best-of-Agent-Harnesses",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Awesome CLI Coding Agents",
+      "tier": "B",
+      "github_url": "https://github.com/bradAGI/awesome-cli-coding-agents",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Awesome Agent Orchestrators",
+      "tier": "B",
+      "github_url": "https://github.com/andyrewlee/awesome-agent-orchestrators",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Awesome Harness Engineering",
+      "tier": "B",
+      "github_url": "https://github.com/ai-boost/awesome-harness-engineering",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Awesome Agent Harness",
+      "tier": "C",
+      "github_url": "https://github.com/Picrew/awesome-agent-harness",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "ZMem",
+      "tier": "S+",
+      "github_url": "https://github.com/zerkerlabs/zmem",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "M3 Memory",
+      "tier": "S+",
+      "github_url": "https://github.com/skynetcmd/m3-memory",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Graphify",
+      "tier": "A+ OPTIONAL",
+      "github_url": "https://github.com/Graphify-Labs/graphify",
+      "status": "MISSING",
+      "matches": []
+    },
+    {
+      "name": "Obsidian Mind",
+      "tier": "B OPTIONAL",
+      "github_url": "https://github.com/breferrari/obsidian-mind",
+      "status": "MISSING",
+      "matches": []
+    }
+  ],
+  "unknown_git_repositories": []
+}

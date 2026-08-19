@@ -1,44 +1,93 @@
-__pycache__/
-*.pyc
-.venv/
-venv/
-.pytest_cache/
-*.egg-info/
+# Machine-local Claude/Codex state
+.claude/settings.local.json
+.claude/agent-memory-local/
+.codex/local/
+.env
+.env.*
+!.env.example
 
-runs/*
-!runs/.gitkeep
+# External repositories are research sources, never commit them
+external/repositories/*
+!external/repositories/.gitkeep
+!external/repositories/README.md
 
-# .gnosis/state/baselines.json IS tracked (milestone evidence); only the
-# operational Director inbox/outbox/worktree contents below are runtime
-# data and excluded.
-.gnosis/director/inbox/*
-!.gnosis/director/inbox/.gitkeep
-.gnosis/director/processed/*
-!.gnosis/director/processed/.gitkeep
-.gnosis/director/rejected/*
-!.gnosis/director/rejected/.gitkeep
-.gnosis/director/outbox/*
-!.gnosis/director/outbox/.gitkeep
-.gnosis/director/escalations/*
-!.gnosis/director/escalations/.gitkeep
-.gnosis/director/state/briefs/*
-!.gnosis/director/state/briefs/.gitkeep
-.gnosis/worktrees/*
-!.gnosis/worktrees/.gitkeep
+# Environment pack archive (contents are extracted at repo root)
+GNOSIS_FABLE5_ENVIRONMENT_V0.3_NICOL.zip
 
-# M2.1 lab: candidates/tools are reproducible (npm/uv installs, portable
-# Node download); fixture-repo* dirs are reproducible via build_fixture.py
-# and are themselves git repos (would otherwise show up as gitlinks).
-# results/ (scorecards + raw command output) and the fixture builder +
-# ground truth ARE kept as evidence.
+# Unrelated leftover audit data (minecraft-skin repos; not GNOSIS) — kept on
+# disk pending operator confirmation, never committed to this repository.
+security-audit/
+
+# Lab: candidates/tools are reproducible installs (uv venvs, npm, portable
+# downloads); fixture/dataset dirs are rebuildable and contain nested git
+# repos (would show up as gitlinks). results/ stays tracked as evidence.
 .gnosis/lab/code-intelligence/candidates/
 .gnosis/lab/code-intelligence/tools/
 .gnosis/lab/code-intelligence/datasets/fixture-repo/
 .gnosis/lab/code-intelligence/datasets/fixture-repo-c1/
 .gnosis/lab/code-intelligence/datasets/fixture-repo-c1-then-c4/
-
-# M3 memory lab: candidates/ (uv venvs, pip installs) and datasets/ (real
-# SQLite workspaces) are reproducible; results/ (scorecards, the license
-# finding) is kept as evidence.
 .gnosis/lab/memory/candidates/
 .gnosis/lab/memory/datasets/
+
+# Runtime / generated
+.gnosis/runtime/
+.gnosis/workspaces/
+.gnosis/tmp/
+.gnosis/logs/
+.gnosis/traces/
+.gnosis/artifacts/
+.gnosis/state/*.db
+.gnosis/state/*.db-*
+.gnosis/state/*.sqlite*
+.gnosis/state/*.lock
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Node
+node_modules/
+
+# Rust
+target/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets / keys
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Large model artifacts
+*.ckpt
+*.safetensors
+*.pth
+*.pt
+*.onnx
+*.gguf
+
+
+# GNOSIS memory engines / local indexes
+.zerker/
+.m3/
+memory/*.db
+memory/*.sqlite*
+memory/indexes/
+resources/locations.local.json
+
+# Optional human vault local app metadata
+memory/obsidian-vault/.obsidian/

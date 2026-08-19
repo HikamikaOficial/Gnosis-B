@@ -1,0 +1,20 @@
+{
+  "model": "fable",
+  "effortLevel": "xhigh",
+  "autoMemoryEnabled": true,
+  "fileCheckpointingEnabled": true,
+  "workflowSizeGuideline": "medium",
+  "permissions": {
+    "disableBypassPermissionsMode": "disable",
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)",
+      "Read(./credentials/**)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "PowerShell(git push *)"
+    ]
+  }
+}

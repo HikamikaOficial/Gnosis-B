@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "mode": "hybrid_governed",
+  "backends": {
+    "m3": {
+      "enabled": true,
+      "role": [
+        "candidate_recall",
+        "cross_agent_continuity",
+        "hybrid_search"
+      ],
+      "authority": "candidate",
+      "canonical_repo": "https://github.com/skynetcmd/m3-memory"
+    },
+    "zmem": {
+      "enabled": true,
+      "role": [
+        "governance",
+        "trusted_memory",
+        "lineage",
+        "receipts",
+        "revocation"
+      ],
+      "authority": "governed",
+      "canonical_repo": "https://github.com/zerkerlabs/zmem"
+    },
+    "graphify": {
+      "enabled": false,
+      "role": [
+        "structural_code_graph"
+      ],
+      "promotion": "benchmark_required",
+      "canonical_repo": "https://github.com/Graphify-Labs/graphify"
+    },
+    "obsidian": {
+      "enabled": false,
+      "role": [
+        "human_readable_mirror"
+      ],
+      "authority": "none",
+      "canonical_candidate": "https://github.com/breferrari/obsidian-mind"
+    },
+    "claude_auto_memory": {
+      "enabled": true,
+      "authority": "low_convenience"
+    }
+  },
+  "truth_precedence": [
+    "runtime_execution_and_tests",
+    "git_source_spec_adr",
+    "fresh_governed_zmem",
+    "fresh_provenanced_m3_candidate",
+    "claude_auto_memory",
+    "unverified_memory"
+  ],
+  "rules": {
+    "no_blind_dual_write": true,
+    "deduplicate_before_context": true,
+    "freshness_check_required_for_code_memory": true,
+    "high_risk_requires_governed_memory_or_fresh_truth_verification": true,
+    "memory_conflicts_are_explicit": true
+  }
+}

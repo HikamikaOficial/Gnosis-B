@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "project": "GNOSIS",
+  "phase": "environment_bootstrap",
+  "status": "not_started_on_target_machine",
+  "next_action": "run bootstrap then 01_START_HERE.md"
+}

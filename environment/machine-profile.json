@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "machine_owner": "Nicol",
+  "project_name": "GNOSIS",
+  "project_root_windows": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi",
+  "repositories_root_windows": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\external\\repositories",
+  "preferred_execution": {
+    "primary": "native_windows_claude_code",
+    "shell": "Git Bash when useful; PowerShell otherwise",
+    "wsl2": "auxiliary_for_linux_only_tools_and_sandboxing",
+    "single_source_of_truth": "Windows project root above"
+  },
+  "resource_policy": {
+    "external_repositories_read_only": true,
+    "canonical_links_always_available": true,
+    "local_paths_resolved_by_git_origin": true,
+    "missing_resources_may_be_cloned_by_agent": true
+  }
+}

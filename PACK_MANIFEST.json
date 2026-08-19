@@ -1,0 +1,485 @@
+{
+  "name": "GNOSIS Fable 5 Autonomous Environment — Nicol",
+  "version": "0.3.0",
+  "canonical_windows_root": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi",
+  "registered_resources": 130,
+  "memory_fabric": [
+    "M3 Memory",
+    "ZMem",
+    "Graphify optional",
+    "Obsidian optional"
+  ],
+  "validation": {
+    "catalog_126": true,
+    "total_resources_130": true,
+    "zmem_registered": true,
+    "m3_registered": true,
+    "graphify_registered": true,
+    "nicol_path_in_start": true,
+    "memory_spec_exists": true,
+    "inventory_script_exists": true,
+    "launcher_exists": true
+  },
+  "files": {
+    ".claude/agent-memory/benchmark-engineer/MEMORY.md": {
+      "sha256": "e445cbfa0945bc233cd040a753fd937323d120f51666d84d8769258f3dd891a1",
+      "bytes": 388
+    },
+    ".claude/agent-memory/chief-architect/MEMORY.md": {
+      "sha256": "00bdd5ac322184697eeacc740194f6dad5dbe18733a2afd9670c81bf54ce5f6a",
+      "bytes": 385
+    },
+    ".claude/agent-memory/codex-adversarial-reviewer/MEMORY.md": {
+      "sha256": "e0812c60e8ad9f4596d48aed68e7cd4cc288e3e9ba7e1252da980dbb1daefb29",
+      "bytes": 396
+    },
+    ".claude/agent-memory/context-engineer/MEMORY.md": {
+      "sha256": "1d5740729e9c3a756fd2e560f0dddab9858d75a7f150e713fee6fab18829c89b",
+      "bytes": 386
+    },
+    ".claude/agent-memory/dependency-auditor/MEMORY.md": {
+      "sha256": "8bac11b5d1e97032edf7297e6ac31d7d63eba580ba6f39d0dc072a733647e34a",
+      "bytes": 388
+    },
+    ".claude/agent-memory/evidence-reviewer/MEMORY.md": {
+      "sha256": "961052d8eada17866d820afd27c90189c5a361a54ba3b3fdafb4c79d6d1d6daa",
+      "bytes": 387
+    },
+    ".claude/agent-memory/kernel-engineer/MEMORY.md": {
+      "sha256": "24603fd6d51a6e86f6b011da27e27962f82c6e0a0d15adadca7587c1699eb38f",
+      "bytes": 385
+    },
+    ".claude/agent-memory/memory-curator/MEMORY.md": {
+      "sha256": "a104ae957680712adee8e7d5642d2c821a50421e45c3f009581bf0308285db11",
+      "bytes": 384
+    },
+    ".claude/agent-memory/reliability-chaos-engineer/MEMORY.md": {
+      "sha256": "c9308fb9ccbd2fff0252b883d82467ae1fb66e4225ee7b6dbf56dd936e781a9e",
+      "bytes": 396
+    },
+    ".claude/agent-memory/research-analyst/MEMORY.md": {
+      "sha256": "ef2ef58fe1a411ded8c3a24d7b3497c9e3d05564729d323f6f517751c078d359",
+      "bytes": 386
+    },
+    ".claude/agent-memory/security-reviewer/MEMORY.md": {
+      "sha256": "85954ca0608ae8f8dcf08cc5820f122a211e4a8621b55e16520a5e48a5eb47bf",
+      "bytes": 387
+    },
+    ".claude/agents/benchmark-engineer.md": {
+      "sha256": "2041169934916309cd3050ab4c402729e2f0af04a23a36ad72ec9f8abf57d1fd",
+      "bytes": 633
+    },
+    ".claude/agents/chief-architect.md": {
+      "sha256": "9a95c064d0fd0082a8c512f95c0fcdea27ff4ba410b3682207fe471abe232f9b",
+      "bytes": 961
+    },
+    ".claude/agents/codex-adversarial-reviewer.md": {
+      "sha256": "927f5bd7f66010007a91bfe2797cda07c56592bc4b1f5bfaf4d8dea44bab9fad",
+      "bytes": 836
+    },
+    ".claude/agents/context-engineer.md": {
+      "sha256": "642d56be25b943681bf93a70ff71f7254e510577e200522c13afac6f46e40768",
+      "bytes": 589
+    },
+    ".claude/agents/dependency-auditor.md": {
+      "sha256": "63c8ca629fdfc3049ef7f888c6ae4f3f2666938296e03b042241d6a639ab7863",
+      "bytes": 591
+    },
+    ".claude/agents/evidence-reviewer.md": {
+      "sha256": "aa123121602387273ecf053fde0a3a87a674ac73aa6843cf2311b746a242078b",
+      "bytes": 757
+    },
+    ".claude/agents/kernel-engineer.md": {
+      "sha256": "b42334135bafe3bf9ebf5c6b4d23766bc0050e9fc2162d02c9e749c33115b82e",
+      "bytes": 719
+    },
+    ".claude/agents/memory-curator.md": {
+      "sha256": "6c005cd27be5cac04bbbb19c60787b3ac92e5a9bd9ce2a624818ec114e6fef99",
+      "bytes": 716
+    },
+    ".claude/agents/memory-fabric-architect.md": {
+      "sha256": "c87b0f17d64f03f53ac36bd3ab751f5b5e3bd834b924d0866a6925133da25990",
+      "bytes": 1371
+    },
+    ".claude/agents/reliability-chaos-engineer.md": {
+      "sha256": "b255ea86638331143c96c68b39321273c8c0820821bfe852d20d041692d5811b",
+      "bytes": 731
+    },
+    ".claude/agents/research-analyst.md": {
+      "sha256": "17eca8f75f4affffa077b30698090228a11680991aceaa681409e26856b05e2c",
+      "bytes": 810
+    },
+    ".claude/agents/security-reviewer.md": {
+      "sha256": "8855f6f52f2cf9e49cc5d84489712c09c2b327ab2ebd89885d9bebd1d3d50cf4",
+      "bytes": 829
+    },
+    ".claude/hooks/__pycache__/audit_event.cpython-313.pyc": {
+      "sha256": "d83095f2c2a3c674468d1deedfd2aa40324267d5e469ccf55ba099724ac57f07",
+      "bytes": 2270
+    },
+    ".claude/hooks/__pycache__/policy_gate.cpython-313.pyc": {
+      "sha256": "16601e05bbd261e012eb099bce7d3f6db69864b5ccd4ca0fb180be4a6728921c",
+      "bytes": 3244
+    },
+    ".claude/hooks/__pycache__/session_context.cpython-313.pyc": {
+      "sha256": "6b951ffe002ad4cc3c10944a87c8762ec51d70d3360b33600d92f57f3ea3262d",
+      "bytes": 965
+    },
+    ".claude/hooks/audit_event.py": {
+      "sha256": "730d3459fada26128f848e6f66c6630b7b0126d37af5d7d1d488ead37ae2d28e",
+      "bytes": 1073
+    },
+    ".claude/hooks/policy_gate.py": {
+      "sha256": "57c65657f73e1ea1f2691b63695ff26153e0458fa56d4e594b1a49b60a21d38a",
+      "bytes": 2102
+    },
+    ".claude/hooks/session_context.py": {
+      "sha256": "059ebe7c02facf7682bd4871beb8fe27a4f297589beb66351341a4ababe325ad",
+      "bytes": 416
+    },
+    ".claude/settings.json": {
+      "sha256": "466988aee9d57fcd30ead35aaecdc1e7fa245baa506ee21549e905c62af10bff",
+      "bytes": 424
+    },
+    ".claude/skills/gnosis-adr/SKILL.md": {
+      "sha256": "c5c56c672428882d78a8621d6ce023643f0c71fd685d7bc826b519a395ec7954",
+      "bytes": 606
+    },
+    ".claude/skills/gnosis-codex-review/SKILL.md": {
+      "sha256": "2e2faea64ef56e99dc46be6a4384c8ffd8e10aa93010ae51e61a98343873aaa2",
+      "bytes": 432
+    },
+    ".claude/skills/gnosis-context-pack/SKILL.md": {
+      "sha256": "655092a77baa3c6007f7aca5b8b18450e24f6a107b59ef239a7cf8db22808954",
+      "bytes": 458
+    },
+    ".claude/skills/gnosis-learning-loop/SKILL.md": {
+      "sha256": "31d818e3aa133b9ee85db260a70912706e655beb4562344b571278574ea4e89f",
+      "bytes": 607
+    },
+    ".claude/skills/gnosis-memory-fabric/SKILL.md": {
+      "sha256": "73da4ef831a3fc0af816a8acda9c6c6b0063a2c662c5db2b7d2a17c52368aab3",
+      "bytes": 754
+    },
+    ".claude/skills/gnosis-proof-packet/SKILL.md": {
+      "sha256": "e44e66581f23f670293900bb73ffe695470c4d2661a410f03967a979b110161c",
+      "bytes": 561
+    },
+    ".claude/skills/gnosis-recovery/SKILL.md": {
+      "sha256": "dfd930a32d27c3f1dfd0684435262f59fd72a6657fb766f342a5aeaa3705c463",
+      "bytes": 493
+    },
+    ".claude/skills/gnosis-repository-analysis/SKILL.md": {
+      "sha256": "0877fe2ddc13cca6631431a1c8fbd75646050252b0af78d1ca91540ddbfb9480",
+      "bytes": 426
+    },
+    ".claude/skills/gnosis-self-correction/SKILL.md": {
+      "sha256": "6fe167a8d10ae96c166d55ecf0cebf8890bcc59857a08b5972ba8f61a84aa13e",
+      "bytes": 588
+    },
+    ".claude/skills/gnosis-threat-model/SKILL.md": {
+      "sha256": "07c6b8ddb5ff6d3a3ab8c4bf3bee0b7f91706cdef9f2c628bfac5d505f0cccca",
+      "bytes": 544
+    },
+    ".codex/config.toml": {
+      "sha256": "46a04ad1803c5e3bb71ca65ccd36ad9d11632aeee0244c443e2239d637e35cff",
+      "bytes": 308
+    },
+    ".editorconfig": {
+      "sha256": "9ecc80ae7e8fe6fbbff5d274a1a491fda669887532492606995996492c45a4a0",
+      "bytes": 292
+    },
+    ".gitattributes": {
+      "sha256": "b28470c1be7b8351f18cec373f65c88ea5d5dd102896b854ca50d8ac9125246b",
+      "bytes": 279
+    },
+    ".gitignore": {
+      "sha256": "4e7cd0f309e45f3ee1b785f6fbd767d62eaf628e5964799efebb550cf5d354c7",
+      "bytes": 1024
+    },
+    ".gnosis/artifacts/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    ".gnosis/logs/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    ".gnosis/memory/README.md": {
+      "sha256": "e1527caf35b7268a6a72cf96d5ed34d860a8b8e5fdec033c6a9ee23806227d79",
+      "bytes": 231
+    },
+    ".gnosis/runtime/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    ".gnosis/state/progress.json": {
+      "sha256": "fa0263cd70be986bdeb4415d1c943699e41cdc0fccc0c34975e0d7fdace826e8",
+      "bytes": 185
+    },
+    ".gnosis/traces/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    ".gnosis/workspaces/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "00_SETUP.md": {
+      "sha256": "34aa42080f38e272501e2beb16e23acfc0afb47f31792dd1b7c71809061a8306",
+      "bytes": 2204
+    },
+    "01_START_HERE.md": {
+      "sha256": "56429c0d7f4b7ff368e17aa9688ce751761292626210486ab43e5172b57679a4",
+      "bytes": 2588
+    },
+    "AGENTS.md": {
+      "sha256": "1d04f6661d15e02d48ed54c317e37bc62a96b1953189d20197915eabbb580e00",
+      "bytes": 1433
+    },
+    "CLAUDE.md": {
+      "sha256": "92d8b47c25df5d97f0399ae077fa271bc64e50f62a5529dd4ced10c1d28f9d5c",
+      "bytes": 7124
+    },
+    "PACK_README.md": {
+      "sha256": "085cdc447060c57ddf69dc6996f95e86ed3a15cfbe5c639466c97f9421d6f0ad",
+      "bytes": 1524
+    },
+    "benchmarks/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "docs/ASSUMPTIONS.md": {
+      "sha256": "8c7c3fe12859b44f2eca4f15cfa40889cec464ed770e2b22151bbf01a6004ff7",
+      "bytes": 697
+    },
+    "docs/DECISIONS.md": {
+      "sha256": "cab932122d3c8e341e2addb00565a83e33fa11b404086e3fd26051ebb1b1a669",
+      "bytes": 2517
+    },
+    "docs/LEARNINGS.md": {
+      "sha256": "51f63fcb81dc8b8369fbc1acd1f9d40e338b8b4ea20296842946acaa8e49b695",
+      "bytes": 267
+    },
+    "docs/NEXT_ACTIONS.md": {
+      "sha256": "bd9660fa10a9fcc6b8dcf6da3b97d70463d64d0bc533220fe6d8074b9fc2c303",
+      "bytes": 827
+    },
+    "docs/PROJECT_STATE.md": {
+      "sha256": "ca05154acf3e4269dfbd7bb12ee5467556ac3a8da6ba04d808a8a5e3afabd022",
+      "bytes": 1292
+    },
+    "docs/research/OFFICIAL_TOOLING_NOTES.md": {
+      "sha256": "f08312e49e6449f4c4dda881d4971900570cc61c025aec19cb4003a4a98955ea",
+      "bytes": 883
+    },
+    "docs/security/THREAT_MODEL.md": {
+      "sha256": "bbf9a23ac69cdf0b20f01c70eece616d853c191c303457578ebbfefd58469401",
+      "bytes": 1003
+    },
+    "environment/machine-profile.json": {
+      "sha256": "e841e7dba2118922579e93c2c3271c3be436b943e75852920e32e836aa23cb0d",
+      "bytes": 772
+    },
+    "experiments/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "external/repositories/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "external/repositories/README.md": {
+      "sha256": "9e51b191e33504f015c5a969c4c629104219b02b7ee0e81b29ff849b106ca045",
+      "bytes": 306
+    },
+    "gnosis-spec/ARCHITECTURE_TARGET.md": {
+      "sha256": "fbb4cfd2d520c6c0c3eedb3b99fe3694fd3bdf2745140c9ca03f3dd5c8af12eb",
+      "bytes": 1491
+    },
+    "gnosis-spec/AUTONOMY_POLICY.md": {
+      "sha256": "7793195203db52ecc80dca8f290be0fda4055e5fded6cef34f1c49fbecda22e1",
+      "bytes": 962
+    },
+    "gnosis-spec/FAILURE_TAXONOMY.md": {
+      "sha256": "ce5586d5e9414ad92839720df80debe4b485639141b10f327bd31e5017819fa9",
+      "bytes": 801
+    },
+    "gnosis-spec/GNOSIS_SYSTEM_BLUEPRINT.md": {
+      "sha256": "98855c0affefafcc582ef096b51e099914bf5bd03f1d14a65152962792dac66d",
+      "bytes": 2121
+    },
+    "gnosis-spec/MASTER_AUTONOMOUS_BUILD_DIRECTIVE.md": {
+      "sha256": "1de00d6808482fa7f41a0bf8b68ce2508d79a09d529d4265c8973ce9e5169e9a",
+      "bytes": 8657
+    },
+    "gnosis-spec/MEMORY_AND_LEARNING.md": {
+      "sha256": "dce8f736a28e2d6f94162aee7c6498d91b50ac2b7b3ccda206ebb027013bfaa0",
+      "bytes": 2835
+    },
+    "gnosis-spec/MEMORY_FABRIC.md": {
+      "sha256": "4427c7b9fbc21ef8c5fe4fff9e0db904033212e5eaf048a87df4318271be8a3a",
+      "bytes": 4918
+    },
+    "gnosis-spec/MEMORY_INSTALL_AND_VALIDATION.md": {
+      "sha256": "ff7ba3e93f67281550a55648bc6cf97219b01ed8d8ab0d1595e4ea50a5676a8f",
+      "bytes": 2278
+    },
+    "gnosis-spec/REPOSITORY_ANALYSIS_PROTOCOL.md": {
+      "sha256": "e6c58d2d12fbeb7cb3decd3d253367642c87f18aab05067c0abf1ba4e41d2989",
+      "bytes": 1562
+    },
+    "gnosis-spec/RESOURCE_STRATEGY.md": {
+      "sha256": "ef7fc715b76b178746c81e10965e26b935aad1655fd7cf2ef6d06ff3b51525f4",
+      "bytes": 1167
+    },
+    "gnosis-spec/V1_DEFINITION_OF_DONE.md": {
+      "sha256": "bc718779af4375eab4a138eef5f5abcefdfceacd8e61189a632183404a9c1d97",
+      "bytes": 1279
+    },
+    "lab/learning/README.md": {
+      "sha256": "dc052f951aaacefa1bbb2a8782d2ba34fc4f76b288f8068ddf1c838cd0c153d9",
+      "bytes": 249
+    },
+    "lab/learning/candidates/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "lab/learning/promoted/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "lab/training/README.md": {
+      "sha256": "d96ceb85588c731b2f5b3a011fa0e9932a781ff0e3181f3ba1679408d1ac8244",
+      "bytes": 433
+    },
+    "lab/training/datasets/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "lab/training/experiments/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "lab/training/models/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "memory/README.md": {
+      "sha256": "935b5ead0036d5d963289fc005acbcff585b99a5573187a197b79f022f3ee7e8",
+      "bytes": 344
+    },
+    "memory/adapters/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "memory/fabric-policy.json": {
+      "sha256": "e39df22b1dc607be5c28a10b0f150886e3d4e76cae2534b94d8d058d24df782e",
+      "bytes": 1580
+    },
+    "memory/obsidian-vault/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "pyproject.toml": {
+      "sha256": "91f2ce29ded2100b6d04a16563b186daa789e4ed573bc15c25879f36b00aa928",
+      "bytes": 473
+    },
+    "research/GNOSIS_REPOSITORIOS_COMPLETOS.md": {
+      "sha256": "a3364e0d37537e7d12446dbed6830e8de56e8a67bdb959d1881a008e72288bbe",
+      "bytes": 96333
+    },
+    "research/GNOSIS_REPOSITORIOS_SELECCIONADOS.md": {
+      "sha256": "73e5fa2c114360ccc78f1f3042a0a0f3e19f3b7846c7bcb312ba79146d007f58",
+      "bytes": 45873
+    },
+    "research/README.md": {
+      "sha256": "d662c126d3aef278be98d596e37505145a35fd46e822ab6b809d1fa70d19d057",
+      "bytes": 245
+    },
+    "resources/REPOSITORY_MAP.md": {
+      "sha256": "81cc394a570cecf4881909e463b1b766f53f9d8a254e5561231434b748122b05",
+      "bytes": 26664
+    },
+    "resources/TIER_S_QUICK_REFERENCE.md": {
+      "sha256": "bc2682342a01502c175c3c374956fa2b5ef3b77f050140b74283c07b5fdce6f6",
+      "bytes": 4665
+    },
+    "resources/repositories.json": {
+      "sha256": "6e5ad2ab14f73de440d88f76e8deacf95c834f87bc16bac64572a0925c195c5b",
+      "bytes": 76427
+    },
+    "scripts/__pycache__/doctor.cpython-313.pyc": {
+      "sha256": "2f138aefeafc46ee87b5763f3e366edb0ba8173c2ab43e23b3654b688a7212bc",
+      "bytes": 5983
+    },
+    "scripts/__pycache__/inventory_repositories.cpython-313.pyc": {
+      "sha256": "851c13554dec049574f0c5bb0c5641bad180ef91d2d5b238aa92ed88f1bda14a",
+      "bytes": 9447
+    },
+    "scripts/__pycache__/memory_doctor.cpython-313.pyc": {
+      "sha256": "b28bbc2990ed6d46baf58c1cd1aac31e3da7edddb01ba9614ca5f87cdfc1ac39",
+      "bytes": 4911
+    },
+    "scripts/bootstrap-nicol.ps1": {
+      "sha256": "26d0f2339761c1f18217a168605e3f02a7cd06389d5ab8b550330c57164a48d6",
+      "bytes": 1742
+    },
+    "scripts/bootstrap.ps1": {
+      "sha256": "29fbc502d881e723d4c9e04b5554c2abce0553f72b1a60d3a3c366026ac3e3f5",
+      "bytes": 3628
+    },
+    "scripts/bootstrap.sh": {
+      "sha256": "a202b2be067fda0d95853352088a65007faf3609dca478e7188cc8ba7cc78788",
+      "bytes": 2605
+    },
+    "scripts/doctor.py": {
+      "sha256": "66cdf29a13466bf500e3d788c709c9ad54fd3978323f3e4605368c885feb9bcd",
+      "bytes": 3595
+    },
+    "scripts/environment-audit.ps1": {
+      "sha256": "eb4a15b8356c0fbd4cca3071d04f90f87f52cba226ff02a4c8bd41d0487a5f07",
+      "bytes": 1150
+    },
+    "scripts/environment-audit.sh": {
+      "sha256": "345d6c1c890cb2c37de1000bb31bd6c00ef699721f65597c6ac474eb25677b20",
+      "bytes": 814
+    },
+    "scripts/inventory_repositories.py": {
+      "sha256": "552f37046fdd8472cd9f653c785321df50db0c027a6ecbadef5841a3d5478375",
+      "bytes": 5557
+    },
+    "scripts/launch-gnosis-claude.ps1": {
+      "sha256": "49f9a29692d1e555fe55904c510bee786205ffd51a0655afdfe4a4ef6f2db0b5",
+      "bytes": 733
+    },
+    "scripts/memory_doctor.py": {
+      "sha256": "e7d90021cc3035ff44ca6063c60f817e0fbdd22fcee10b3b1b6f643840fa56e0",
+      "bytes": 2837
+    },
+    "src/gnosis/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "tests/chaos/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "tests/integration/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "tests/recovery/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "tests/security/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "tests/unit/.gitkeep": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  }
+}
