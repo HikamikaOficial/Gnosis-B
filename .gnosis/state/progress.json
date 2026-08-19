@@ -2,11 +2,11 @@
   "schema_version": 1,
   "project": "GNOSIS",
   "phase": "phase_minus_1",
-  "status": "complete_except_codex_login",
+  "status": "phase_minus_1_complete",
   "gates": {
     "bootstrap": "PASS",
     "workstation_doctor": "PASS_WITH_NOTES",
-    "codex_cli": "INSTALLED_NEEDS_HUMAN_LOGIN",
+    "codex_cli": "PASS_AUTHENTICATED_QUOTA_RESETS_2026_08_20",
     "repository_inventory": "PASS_27_OF_130_TIER_S_COMPLETE",
     "m3_install_verify": "PASS",
     "zmem_install_verify": "PASS",
@@ -15,6 +15,6 @@
     "initial_adrs": "PASS",
     "quality_gates": "RUFF_CLEAN_AUTOFIX_MYPY_STRICT_ZERO"
   },
-  "next_action": "human: codex login; then M4 memory-provider ADR and Phase 1 kernel continuation per REFERENCE_REPOSITORY_FINDINGS directives",
+  "next_action": "2026-08-20: codex read-only smoke + adversarial review of 843a72e/1e176a9; then Directive 4 part two (claims plane)",
   "updated": "2026-08-19"
 }

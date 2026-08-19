@@ -25,7 +25,7 @@ constitution names `src/gnosis/` (currently an empty scaffold).
 
 - [x] Bootstrap executed (doctor/inventory state present).
 - [x] Claude Code Fable 5 + Ultracode validated (this session runs on it).
-- [~] Codex CLI installed (0.148.0) — **NOT authenticated; needs human `codex login`**.
+- [x] Codex CLI installed (0.148.0) and authenticated ("Logged in using ChatGPT", 2026-08-19 evening). Usage quota exhausted until 2026-08-20; adversarial review parked as RATE_LIMITED until then.
 - [x] External repos inventoried: 27/130 resolved locally (all Tier S/S+ except the license-blocked one; report: `.gnosis/state/clone_report.json`).
 - [x] M3 installed/configured/smoke-tested (uv tool, PYTHONUTF8=1, env-pinned roots; ADR-0001).
 - [x] ZMem installed/configured/smoke-tested (uv tool; governance loop revalidated on 0.1.17).
