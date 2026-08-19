@@ -1,0 +1,6 @@
+[project]
+name = "gnosis"
+version = "0.1.0"
+description = "Gnosis autonomous AI software-engineering system, M0 bootstrap kernel."
+requires-python = ">=3.10"
+dependencies = []
