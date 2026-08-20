@@ -18,6 +18,7 @@ from gnosis.kernel.lease import LeaseStore, StaleLeaseError
 from gnosis.kernel.run_store import RunStore
 from gnosis.kernel.state_machine import RunState, TaskState
 from gnosis.kernel.verification import CommandVerifier, VerificationResult, Verifier
+from gnosis.kernel.worktree import WorktreeError, WorktreeManager
 from gnosis.runner.capture import ExecutionResult
 from gnosis.runner.claude_cli_runner import McpRunnerConfig
 from gnosis.runner.retry import RetryPolicy
@@ -419,6 +420,338 @@ class TestTaskEngineWorkAuthority(unittest.TestCase):
         reclaimed = self.authority.sweep()
         self.assertEqual([c.task_id for c in reclaimed], ["TASK-AUTH"])
         self.assertEqual(self.claims.get("TASK-AUTH").status, ClaimStatus.RECLAIMED)
+
+
+class _WorkspaceWritingRunner(_FakeCliRunner):
+    """Writes an artifact into its cwd, like a real repo-mutating agent."""
+
+    def run(self, prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs):
+        (Path(cwd) / "agent_artifact.txt").write_text("wrote", encoding="utf-8")
+        return super().run(prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs)
+
+
+class _WritingThenDeposedRunner(_WorkspaceWritingRunner):
+    """Writes into cwd, then gets deposed while still 'running'."""
+
+    def __init__(self, depose):
+        super().__init__(["succeed"])
+        self._depose = depose
+
+    def run(self, prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs):
+        result = super().run(prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs)
+        self._depose()
+        return result
+
+
+class TestGuardedRunStore(unittest.TestCase):
+    """The store-boundary enforcement (ADR-0006 follow-up): every durable
+    write re-proves ownership; a forgotten guard() call cannot stale-write."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.raw = RunStore(Path(self.tmp.name) / "runs")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_failing_guard_blocks_every_durable_write(self):
+        from gnosis.kernel.engine import _GuardedRunStore
+
+        def deposed_guard() -> None:
+            raise StaleLeaseError("deposed")
+
+        self.raw.create_run("RUN-X", "TASK-X")  # pre-existing state to write to
+        guarded = _GuardedRunStore(self.raw, deposed_guard)
+        with self.assertRaises(StaleLeaseError):
+            guarded.create_run("RUN-Y", "TASK-X")
+        with self.assertRaises(StaleLeaseError):
+            guarded.update_state("RUN-X", RunState.RUNNING)
+        with self.assertRaises(StaleLeaseError):
+            guarded.heartbeat("RUN-X")
+        with self.assertRaises(StaleLeaseError):
+            guarded.ledger_for("RUN-X").append("RUN-X", "evil.write", {})
+        # Reads stay open: evidence inspection is never fenced.
+        self.assertTrue(guarded.paths_for("RUN-X").root.exists())
+        self.assertEqual(guarded.ledger_for("RUN-X").read_all(), [])
+
+    def test_passing_guard_delegates(self):
+        from gnosis.kernel.engine import _GuardedRunStore
+
+        guarded = _GuardedRunStore(self.raw, lambda: None)
+        guarded.create_run("RUN-OK", "TASK-OK")
+        guarded.update_state("RUN-OK", RunState.RUNNING)
+        guarded.ledger_for("RUN-OK").append("RUN-OK", "run.progress", {})
+        self.assertEqual(self.raw.read_meta("RUN-OK").state, "RUNNING")
+
+
+class TestTaskEngineWorktreeIsolation(unittest.TestCase):
+    """ADR-0006 + ADR-0007 composition: the repository-writing child runs
+    inside the task's kernel-minted worktree, never the shared repo."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        subprocess.run(["git", "init"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "e@x.com"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=self.repo, check=True)
+        (self.repo / "README.md").write_text("root\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=self.repo,
+                       check=True, capture_output=True)
+        self.store = RunStore(self.root / "runs")
+        self.clock = _FakeClock()
+        self.claims = ClaimStore(self.root / "claims.json", clock=self.clock)
+        self.leases = LeaseStore(self.root / "leases.json", clock=self.clock)
+        self.authority = WorkAuthority(
+            self.claims, self.leases, default_ttl_s=60,
+            reclaim_grace_s=30, clock=self.clock,
+        )
+        self.worktrees = WorktreeManager(self.repo, self.root / "worktrees")
+        self.passing_verifier = CommandVerifier(
+            "noop-pass", [sys.executable, "-c", "import sys; sys.exit(0)"],
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _repo_is_pristine(self) -> bool:
+        status = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=self.repo,
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        return status == "" and not (self.repo / "agent_artifact.txt").exists()
+
+    def test_governed_run_executes_inside_task_worktree(self):
+        engine = TaskEngine(run_store=self.store, cli_runner=_WorkspaceWritingRunner(["succeed"]))
+        outcome = engine.execute_task(
+            task_id="TASK-ISO", objective="Demo", prompt="do it", repo_path=self.repo,
+            verifier=self.passing_verifier, authority=self.authority,
+            worker_id="worker-a", worktrees=self.worktrees,
+        )
+        self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
+        handle = self.worktrees.load_handle("TASK-ISO")
+        self.assertTrue((Path(handle.path) / "agent_artifact.txt").exists())
+        self.assertTrue(self._repo_is_pristine())
+        self.assertEqual(self.claims.get("TASK-ISO").status, ClaimStatus.RESOLVED)
+        # The worktree is recorded as run evidence.
+        events = self.store.ledger_for(outcome.run_ids[0]).read_all()
+        started = next(e for e in events if e.event_type == "run.attempt_started")
+        self.assertEqual(started.data["worktree"], handle.to_dict())
+
+    def test_deposed_child_cannot_touch_shared_repo(self):
+        def depose():
+            self.clock.advance(61)
+            self.authority.sweep()
+            self.authority.acquire("TASK-ISO", "worker-b")
+
+        engine = TaskEngine(run_store=self.store, cli_runner=_WritingThenDeposedRunner(depose))
+        with self.assertRaises((StaleLeaseError, StaleClaimError)):
+            engine.execute_task(
+                task_id="TASK-ISO", objective="Demo", prompt="do it", repo_path=self.repo,
+                verifier=self.passing_verifier, authority=self.authority,
+                worker_id="worker-a", worktrees=self.worktrees,
+            )
+        # The deposed child's writes landed in the isolated worktree only.
+        handle = self.worktrees.load_handle("TASK-ISO")
+        self.assertTrue((Path(handle.path) / "agent_artifact.txt").exists())
+        self.assertTrue(self._repo_is_pristine())
+
+    def test_isolation_works_without_authority_too(self):
+        engine = TaskEngine(run_store=self.store, cli_runner=_WorkspaceWritingRunner(["succeed"]))
+        outcome = engine.execute_task(
+            task_id="TASK-FREE", objective="Demo", prompt="do it", repo_path=self.repo,
+            worktrees=self.worktrees,
+        )
+        self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
+        handle = self.worktrees.load_handle("TASK-FREE")
+        self.assertTrue((Path(handle.path) / "agent_artifact.txt").exists())
+        self.assertTrue(self._repo_is_pristine())
+
+    def test_verification_runs_inside_the_worktree_not_the_shared_repo(self):
+        # Verification is the DONE gate: validating the pristine shared
+        # repo instead of the worktree the agent wrote in would be an
+        # INVALID DONE (adversarial review: the cwd was unpinned).
+        verifier = _CwdRecordingVerifier()
+        engine = TaskEngine(run_store=self.store, cli_runner=_WorkspaceWritingRunner(["succeed"]))
+        engine.execute_task(
+            task_id="TASK-ISO", objective="Demo", prompt="do it", repo_path=self.repo,
+            verifier=verifier, authority=self.authority,
+            worker_id="worker-a", worktrees=self.worktrees,
+        )
+        handle = self.worktrees.load_handle("TASK-ISO")
+        self.assertEqual(verifier.cwds, [Path(handle.path)])
+        self.assertNotEqual(verifier.cwds[0].resolve(), self.repo.resolve())
+
+    def test_worktree_manager_repo_mismatch_is_refused(self):
+        other = self.root / "other_repo"
+        other.mkdir()
+        subprocess.run(["git", "init"], cwd=other, check=True, capture_output=True)
+        mismatched = WorktreeManager(other, self.root / "worktrees-other")
+        engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
+        with self.assertRaises(ValueError):
+            engine.execute_task(
+                task_id="TASK-MISMATCH", objective="Demo", prompt="do it",
+                repo_path=self.repo, verifier=self.passing_verifier,
+                authority=self.authority, worker_id="worker-a", worktrees=mismatched,
+            )
+        # Nothing was executed against the wrong repository.
+        self.assertEqual(self.store.list_run_ids(), [])
+
+    def test_worktree_creation_failure_does_not_leak_the_pump(self):
+        # Reported independently by four reviewers: a create() failure
+        # outside the try/finally left the daemon pump renewing a dead
+        # worker's lease forever, making the task unreclaimable.
+        poisoned = self.root / "worktrees" / "TASK-POISON"
+        poisoned.mkdir(parents=True)
+        (poisoned / "squatter.txt").write_text("unregistered", encoding="utf-8")
+        engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
+        with self.assertRaises(WorktreeError):
+            engine.execute_task(
+                task_id="TASK-POISON", objective="Demo", prompt="do it",
+                repo_path=self.repo, verifier=self.passing_verifier,
+                authority=self.authority, worker_id="worker-a", worktrees=self.worktrees,
+                lease_heartbeat_interval_s=0.05,
+            )
+        # The lease must now expire on schedule and the sweep must be able
+        # to reclaim the claim: no surviving pump keeps renewing it.
+        time.sleep(0.2)  # a leaked pump would have renewed by now
+        self.clock.advance(61)
+        reclaimed = self.authority.sweep()
+        self.assertEqual([c.task_id for c in reclaimed], ["TASK-POISON"])
+
+    def test_heartbeat_callback_never_escapes_into_the_runner_loop(self):
+        # A deposition surfaces as cooperative cancellation; any other
+        # heartbeat failure is swallowed. Either way the callback must not
+        # raise inside the runner's poll loop (which would leak the child).
+        runner = _HeartbeatingRunner(beats=4)
+        engine = TaskEngine(run_store=self.store, cli_runner=runner)
+
+        original_heartbeat = self.store.heartbeat
+        calls = {"n": 0}
+
+        def flaky_heartbeat(run_id, fingerprint=None):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("transient sharing violation")
+            original_heartbeat(run_id, fingerprint)
+
+        self.store.heartbeat = flaky_heartbeat  # type: ignore[method-assign]
+        try:
+            outcome = engine.execute_task(
+                task_id="TASK-ISO", objective="Demo", prompt="do it", repo_path=self.repo,
+                verifier=self.passing_verifier, authority=self.authority,
+                worker_id="worker-a", worktrees=self.worktrees,
+            )
+        finally:
+            self.store.heartbeat = original_heartbeat  # type: ignore[method-assign]
+        # The transient failure did not kill a healthy run.
+        self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
+        self.assertGreaterEqual(calls["n"], 2)
+
+    def test_deposition_during_verification_is_blocked_at_the_store_boundary(self):
+        # Proves the engine actually ROUTES writes through the guarded
+        # store: the verification-result ledger append happens after the
+        # last explicit guard(), so only the boundary can stop it.
+        class _DeposingVerifier(Verifier):
+            name = "deposing"
+
+            def __init__(self, depose):
+                self._depose = depose
+
+            def run(self, cwd):
+                self._depose()
+                return VerificationResult(
+                    name=self.name, passed=True, exit_code=0, duration_s=0.01,
+                    stdout_excerpt="", stderr_excerpt="",
+                )
+
+        def depose():
+            self.clock.advance(61)
+            self.authority.sweep()
+            self.authority.acquire("TASK-ISO", "worker-b")
+
+        engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
+        with self.assertRaises((StaleLeaseError, StaleClaimError)):
+            engine.execute_task(
+                task_id="TASK-ISO", objective="Demo", prompt="do it", repo_path=self.repo,
+                verifier=_DeposingVerifier(depose), authority=self.authority,
+                worker_id="worker-a", worktrees=self.worktrees,
+            )
+        # NO INVALID DONE: the deposed worker never resolved the claim.
+        self.assertEqual(self.claims.get("TASK-ISO").holder, "worker-b")
+        self.assertEqual(self.claims.get("TASK-ISO").status, ClaimStatus.ACTIVE)
+
+    def test_failed_run_keeps_worktree_and_retry_reattaches_it(self):
+        failing = TaskEngine(
+            run_store=self.store, cli_runner=_FakeCliRunner(["fail"]),
+            retry_policy=RetryPolicy(max_attempts=1),
+        )
+        outcome = failing.execute_task(
+            task_id="TASK-ISO", objective="Demo", prompt="do it", repo_path=self.repo,
+            verifier=self.passing_verifier, authority=self.authority,
+            worker_id="worker-a", worktrees=self.worktrees,
+        )
+        self.assertEqual(outcome.final_task_state, TaskState.FAILED)
+        first_handle = self.worktrees.load_handle("TASK-ISO")
+        self.assertTrue(Path(first_handle.path).exists())
+
+        # Same worker retries (its lease is still live): the claim retry is
+        # idempotent and the worktree is reattached, not recreated. The
+        # marker alone proves nothing (create()'s idempotent path never
+        # rewrites it), so pin where execution ACTUALLY happened.
+        verifier = _CwdRecordingVerifier()
+        retry = TaskEngine(run_store=self.store, cli_runner=_WorkspaceWritingRunner(["succeed"]))
+        outcome2 = retry.execute_task(
+            task_id="TASK-ISO", objective="Demo", prompt="do it", repo_path=self.repo,
+            verifier=verifier, authority=self.authority,
+            worker_id="worker-a", worktrees=self.worktrees,
+        )
+        self.assertEqual(outcome2.final_task_state, TaskState.COMPLETED)
+        self.assertEqual(self.worktrees.load_handle("TASK-ISO"), first_handle)
+        self.assertEqual(verifier.cwds, [Path(first_handle.path)])  # reattached, not shared repo
+        self.assertTrue((Path(first_handle.path) / "agent_artifact.txt").exists())
+        self.assertEqual(self.claims.get("TASK-ISO").status, ClaimStatus.RESOLVED)
+
+
+class _CwdRecordingVerifier(Verifier):
+    """Records the directory it was actually run in, so a verifier
+    silently validating the pristine shared repo cannot pass unnoticed."""
+
+    name = "cwd-recording"
+
+    def __init__(self):
+        self.cwds: list[Path] = []
+
+    def run(self, cwd):
+        self.cwds.append(Path(cwd))
+        return VerificationResult(
+            name=self.name, passed=True, exit_code=0, duration_s=0.01,
+            stdout_excerpt="", stderr_excerpt="",
+        )
+
+
+class _HeartbeatingRunner(_FakeCliRunner):
+    """Actually invokes heartbeat_fn like the real CLIRunner does, so the
+    engine's liveness callback has execution coverage."""
+
+    def __init__(self, beats=3, outcomes=("succeed",)):
+        super().__init__(list(outcomes))
+        self.beats = beats
+        self.observed_cancel = False
+
+    def run(self, prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs):
+        heartbeat_fn = kwargs.get("heartbeat_fn")
+        token = kwargs.get("cancellation_token")
+        for _ in range(self.beats):
+            if heartbeat_fn is not None:
+                heartbeat_fn(4242)  # must never raise into the poll loop
+            if token is not None and token.is_cancelled():
+                self.observed_cancel = True
+                break
+            time.sleep(0.02)
+        return super().run(prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs)
 
 
 class _FakeCodeIntelligenceProvider(CodeIntelligenceProvider):

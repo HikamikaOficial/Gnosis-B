@@ -24,11 +24,14 @@ from typing import cast
 
 from ..contracts.director_brief import DirectorBrief
 from ..contracts.engineer_report import EngineerReport, ReportStatus
+from ..kernel.claims import ClaimConflictError, StaleClaimError, WorkAuthority
 from ..kernel.engine import TaskEngine, TaskExecutionOutcome
 from ..kernel.ids import new_task_id
+from ..kernel.lease import StaleLeaseError
 from ..kernel.run_store import RunStore
 from ..kernel.state_machine import RunState
 from ..kernel.verification import Verifier
+from ..kernel.worktree import WorktreeError, WorktreeManager
 from ..runner.recovery import RecoveryManager
 from .brief_record import BriefRecord, BriefRecordState, BriefRecordStore
 from .inbox import DirectorInbox
@@ -51,6 +54,10 @@ class DirectorOrchestrator:
         repo_path: Path,
         task_engine: TaskEngine | None = None,
         prompt_builder: Callable[[DirectorBrief], str] | None = None,
+        authority: WorkAuthority | None = None,
+        worker_id: str | None = None,
+        worktrees: WorktreeManager | None = None,
+        lease_ttl_s: float | None = None,
     ) -> None:
         self.inbox = DirectorInbox(director_root)
         self.records = BriefRecordStore(director_root / "state" / "briefs")
@@ -61,6 +68,28 @@ class DirectorOrchestrator:
         # decision left to the caller; default is a simple, literal
         # rendering good enough for M1 plumbing tests.
         self.prompt_builder = prompt_builder or _default_prompt_builder
+        # Governed mode (ADR-0006..0008 follow-up): when a WorkAuthority is
+        # configured, every brief execution runs under a fenced grant (the
+        # engine enforces the verifier-required evidence gate) and, when a
+        # WorktreeManager is configured, inside the task's own worktree.
+        # The inbox's best-effort brief claim remains as brief-level dedup;
+        # task ownership authority is the claims/lease plane.
+        if authority is not None and not worker_id:
+            raise ValueError("worker_id is required when the orchestrator is given a WorkAuthority")
+        if authority is not None and worktrees is None:
+            # Governed briefs must be workspace-isolated: without a
+            # WorktreeManager a deposed child keeps writing the SHARED repo
+            # until it observes cooperative cancellation (Codex review).
+            # The engine primitive still allows the combination; the
+            # production entry point does not.
+            raise ValueError(
+                "a governed orchestrator requires a WorktreeManager: "
+                "authority-fenced briefs must run in the task's own worktree"
+            )
+        self.authority = authority
+        self.worker_id = worker_id
+        self.worktrees = worktrees
+        self.lease_ttl_s = lease_ttl_s
 
     def run_pending(self, verifier: Verifier | None = None) -> list[IngestOutcome]:
         outcomes: list[IngestOutcome] = []
@@ -79,13 +108,33 @@ class DirectorOrchestrator:
         self.records.create(brief.brief_id, task_id, BriefRecordState.ASSIGNED)
         self.records.update(brief.brief_id, state=BriefRecordState.IN_PROGRESS)
 
-        outcome = self.task_engine.execute_task(
-            task_id=task_id,
-            objective=brief.title,
-            prompt=self.prompt_builder(brief),
-            repo_path=self.repo_path,
-            verifier=verifier,
-        )
+        try:
+            outcome = self.task_engine.execute_task(
+                task_id=task_id,
+                objective=brief.title,
+                prompt=self.prompt_builder(brief),
+                repo_path=self.repo_path,
+                verifier=verifier,
+                authority=self.authority,
+                worker_id=self.worker_id,
+                lease_ttl_s=self.lease_ttl_s,
+                worktrees=self.worktrees,
+            )
+        except (StaleClaimError, StaleLeaseError, ClaimConflictError, WorktreeError, ValueError) as exc:
+            # Governed mode makes deposition, claim conflicts, workspace
+            # failures and precondition violations EXPECTED outcomes of a
+            # brief, not batch-aborting crashes: the brief was already
+            # consumed from the inbox, so it must end in a durable, visible
+            # FAILED state instead of stranding IN_PROGRESS with no report
+            # and killing the rest of the batch (adversarial review).
+            self.records.update(
+                brief.brief_id, state=BriefRecordState.FAILED,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return IngestOutcome(
+                brief_id=brief.brief_id, task_id=task_id, accepted=True,
+                reason=f"execution failed: {type(exc).__name__}: {exc}",
+            )
 
         report_path = self._write_report(outcome.report)
         final_state = (

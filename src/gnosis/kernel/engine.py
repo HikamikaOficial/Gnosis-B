@@ -20,14 +20,17 @@ from ..contracts.engineer_report import EngineerReport, ReportStatus
 from ..runner.capture import ExecutionResult
 from ..runner.claude_cli_runner import CancellationToken, ClaudeCodeCLIRunner, McpRunnerConfig
 from ..runner.retry import RetryPolicy, execute_with_retry
-from .claims import GrantHeartbeatPump, WorkAuthority, WorkGrant
+from .claims import GrantHeartbeatPump, StaleClaimError, WorkAuthority, WorkGrant
 from .code_intelligence import CodeIntelligenceProvider, CodeIntelligenceUnavailable
 from .git_evidence import capture_git_evidence
 from .ids import new_run_id
+from .lease import StaleLeaseError
+from .ledger import LedgerEvent, RunLedger
 from .redaction import redact
-from .run_store import RunStore
+from .run_store import RunMeta, RunPaths, RunStore
 from .state_machine import RunState, TaskState, TaskStateMachine
 from .verification import VerificationResult, Verifier
+from .worktree import WorktreeHandle, WorktreeManager
 
 
 def _gather_code_intelligence_context(
@@ -98,6 +101,58 @@ def _gather_code_intelligence_context(
     return "\n\n".join(blocks), evidence
 
 
+class _GuardedLedger:
+    """RunLedger wrapper that re-proves ownership before every append, so
+    a forgotten guard() call in the engine cannot produce a stale ledger
+    write. Reads are unguarded."""
+
+    def __init__(self, inner: RunLedger, guard: Callable[[], None]):
+        self._inner = inner
+        self._guard = guard
+
+    def append(self, run_id: str, event_type: str, data: dict[str, Any] | None = None) -> LedgerEvent:
+        self._guard()
+        return self._inner.append(run_id, event_type, data)
+
+    def read_all(self, tolerant: bool = True) -> list[LedgerEvent]:
+        return self._inner.read_all(tolerant=tolerant)
+
+
+class _GuardedRunStore:
+    """RunStore wrapper enforcing the ownership guard structurally at
+    every durable write path the engine uses (ADR-0006 follow-up: token
+    enforcement at the store boundary, not by call-site convention)."""
+
+    def __init__(self, inner: RunStore, guard: Callable[[], None]):
+        self._inner = inner
+        self._guard = guard
+
+    def create_run(self, run_id: str, task_id: str) -> RunPaths:
+        self._guard()
+        return self._inner.create_run(run_id, task_id)
+
+    def update_state(self, run_id: str, state: RunState) -> RunMeta:
+        self._guard()
+        return self._inner.update_state(run_id, state)
+
+    def heartbeat(self, run_id: str, fingerprint: Any | None = None) -> None:
+        self._guard()
+        self._inner.heartbeat(run_id, fingerprint)
+
+    def ledger_for(self, run_id: str) -> _GuardedLedger:
+        return _GuardedLedger(self._inner.ledger_for(run_id), self._guard)
+
+    def paths_for(self, run_id: str) -> RunPaths:
+        return self._inner.paths_for(run_id)
+
+    def write_evidence(self, path: Path, text: str) -> None:
+        """Guarded write for the run directory's raw evidence files
+        (result.json, code_intelligence.json, git/pre|post.json), so no
+        durable run-directory write is left to call-site convention."""
+        self._guard()
+        path.write_text(text, encoding="utf-8")
+
+
 @dataclass
 class TaskExecutionOutcome:
     task_id: str
@@ -139,6 +194,7 @@ class TaskEngine:
         worker_id: str | None = None,
         lease_ttl_s: float | None = None,
         lease_heartbeat_interval_s: float | None = None,
+        worktrees: WorktreeManager | None = None,
     ) -> TaskExecutionOutcome:
         # Two-plane ownership (Directive 4 / ADR-0006): when a WorkAuthority
         # is supplied, this engine invocation must hold the durable claim
@@ -192,9 +248,39 @@ class TaskEngine:
                 authority.assert_current(grant)
 
         try:
+            # Workspace isolation (ADR-0006 + ADR-0007 composition): with a
+            # WorktreeManager the repository-writing child runs with its cwd
+            # inside the task's kernel-minted worktree instead of the shared
+            # repo, so its ordinary relative-path work lands on the task's
+            # own isolated branch. Ownership first, workspace second: the
+            # grant is already held. The worktree deliberately survives this
+            # call regardless of outcome (bound to the unresolved/integrable
+            # work; removal is the integration milestone's decision).
+            #
+            # This creation MUST stay inside the try: it can raise (corrupt
+            # marker, unregistered directory, git failure) and the finally
+            # below is the only thing that stops the heartbeat pump — a leak
+            # here would renew a dead worker's lease forever and make the
+            # task permanently unreclaimable (adversarial review, reported
+            # independently by four reviewers with a live reproduction).
+            worktree_handle: WorktreeHandle | None = None
+            exec_root = repo_path
+            if worktrees is not None:
+                if worktrees.source_repo.resolve() != Path(repo_path).resolve():
+                    # Otherwise the task would silently execute, verify and
+                    # report against a DIFFERENT repository than the caller
+                    # named (Codex review).
+                    raise ValueError(
+                        f"worktree manager operates on {worktrees.source_repo}, "
+                        f"but this task was given repo_path {repo_path}"
+                    )
+                worktree_handle = worktrees.create(task_id)  # idempotent/reattach
+                exec_root = Path(worktree_handle.path)
+
             return self._execute_guarded(
                 task_id=task_id, objective=objective, prompt=prompt,
-                repo_path=repo_path, verifier=verifier, timeout_s=timeout_s,
+                exec_root=exec_root, worktree=worktree_handle,
+                verifier=verifier, timeout_s=timeout_s,
                 cancellation_token=cancellation_token, mcp=mcp,
                 code_intelligence=code_intelligence, focus_symbols=focus_symbols,
                 max_context_chars=max_context_chars, authority=authority,
@@ -209,7 +295,8 @@ class TaskEngine:
         task_id: str,
         objective: str,
         prompt: str,
-        repo_path: Path,
+        exec_root: Path,
+        worktree: WorktreeHandle | None,
         verifier: Verifier | None,
         timeout_s: float,
         cancellation_token: CancellationToken | None,
@@ -225,7 +312,11 @@ class TaskEngine:
         task_sm.transition(TaskState.PLANNED)
         task_sm.transition(TaskState.IN_PROGRESS)
 
-        pre_git = capture_git_evidence(repo_path)
+        # Every durable run-store write below re-proves ownership at the
+        # store boundary — a forgotten guard() call cannot stale-write.
+        store = _GuardedRunStore(self.run_store, guard)
+
+        pre_git = capture_git_evidence(exec_root)
         run_ids: list[str] = []
         last_result: ExecutionResult | None = None
 
@@ -233,30 +324,54 @@ class TaskEngine:
         effective_prompt = prompt
         if code_intelligence is not None and focus_symbols:
             context_block, ci_evidence = _gather_code_intelligence_context(
-                code_intelligence, repo_path, focus_symbols, max_context_chars,
+                code_intelligence, exec_root, focus_symbols, max_context_chars,
             )
             if context_block:
                 effective_prompt = f"{context_block}\n\n---\n\n{prompt}"
+
+        heartbeat_failures: list[str] = []
+
+        def on_heartbeat(run_id: str) -> None:
+            # NOTHING may escape this callback: it runs inside the runner's
+            # polling loop, and an exception there unwinds past the child
+            # process and leaks it (adversarial review). A deposition
+            # cancels the child cooperatively; any other failure (lock
+            # timeout under contention, a transient Windows sharing
+            # violation on heartbeat.json — the L-0002 class) is a liveness
+            # hiccup that must not kill a healthy run: the ownership guards
+            # and the recovery scanner remain the authority.
+            try:
+                store.heartbeat(run_id)
+            except (StaleClaimError, StaleLeaseError):
+                if cancellation_token is not None:
+                    cancellation_token.cancel()
+            except Exception as exc:  # noqa: BLE001 - see above: never unwind the poll loop
+                # Kept as data on the run instead of vanishing: the next
+                # guarded write records it, and a heartbeat gap is already
+                # visible to the recovery scanner.
+                heartbeat_failures.append(repr(exc))
 
         def attempt(attempt_number: int) -> ExecutionResult:
             nonlocal last_result
             guard()
             run_id = new_run_id()
             run_ids.append(run_id)
-            paths = self.run_store.create_run(run_id, task_id)
-            ledger = self.run_store.ledger_for(run_id)
+            paths = store.create_run(run_id, task_id)
+            ledger = store.ledger_for(run_id)
             if attempt_number == 1 and ci_evidence is not None:
                 ledger.append(run_id, "code_intelligence.context_gathered", ci_evidence)
-                (paths.root / "code_intelligence.json").write_text(
-                    json.dumps(ci_evidence, indent=2, sort_keys=True), encoding="utf-8",
+                store.write_evidence(
+                    paths.root / "code_intelligence.json",
+                    json.dumps(ci_evidence, indent=2, sort_keys=True),
                 )
             ledger.append(run_id, "run.attempt_started", {
                 "attempt": attempt_number, "objective": objective,
                 "mcp": mcp.to_dict() if mcp is not None else None,
                 "code_intelligence_used": ci_evidence is not None,
+                "worktree": worktree.to_dict() if worktree is not None else None,
             })
-            self.run_store.update_state(run_id, RunState.RUNNING)
-            self.run_store.heartbeat(run_id)
+            store.update_state(run_id, RunState.RUNNING)
+            store.heartbeat(run_id)
 
             # Last re-proof before the repository-writing child launches
             # (Codex review): shrinks the pre-launch stale window from
@@ -266,9 +381,9 @@ class TaskEngine:
             # enforcement inside RunStore) is tracked in NEXT_ACTIONS.
             guard()
             result = self.cli_runner.run(
-                prompt=effective_prompt, cwd=repo_path, stdout_path=paths.stdout, stderr_path=paths.stderr,
+                prompt=effective_prompt, cwd=exec_root, stdout_path=paths.stdout, stderr_path=paths.stderr,
                 timeout_s=timeout_s, cancellation_token=cancellation_token, mcp=mcp,
-                heartbeat_fn=lambda pid: self.run_store.heartbeat(run_id),
+                heartbeat_fn=lambda pid: on_heartbeat(run_id),
             )
 
             # The CLI run is a long window in which a deposition can happen
@@ -285,13 +400,18 @@ class TaskEngine:
             else:
                 final_state = RunState.FAILED
 
-            self.run_store.update_state(run_id, final_state)
+            store.update_state(run_id, final_state)
             ledger.append(run_id, "run.attempt_finished", {
                 "attempt": attempt_number, "exit_code": result.exit_code,
                 "timed_out": result.timed_out, "cancelled": result.cancelled,
                 "duration_s": result.duration_s,
+                # Liveness hiccups swallowed by on_heartbeat surface here
+                # rather than vanishing (they never abort a healthy run).
+                "heartbeat_failures": list(heartbeat_failures),
             })
-            paths.result.write_text(json.dumps(result.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
+            store.write_evidence(
+                paths.result, json.dumps(result.to_dict(), indent=2, sort_keys=True),
+            )
             last_result = result
             return result
 
@@ -301,12 +421,12 @@ class TaskEngine:
         execute_with_retry(attempt, should_retry, self.retry_policy)
 
         guard()
-        post_git = capture_git_evidence(repo_path)
+        post_git = capture_git_evidence(exec_root)
         latest_run_id = run_ids[-1] if run_ids else None
         if latest_run_id:
-            git_dir = self.run_store.paths_for(latest_run_id).git_dir
-            (git_dir / "pre.json").write_text(json.dumps(pre_git.to_dict(), indent=2), encoding="utf-8")
-            (git_dir / "post.json").write_text(json.dumps(post_git.to_dict(), indent=2), encoding="utf-8")
+            git_dir = store.paths_for(latest_run_id).git_dir
+            store.write_evidence(git_dir / "pre.json", json.dumps(pre_git.to_dict(), indent=2))
+            store.write_evidence(git_dir / "post.json", json.dumps(post_git.to_dict(), indent=2))
 
         cli_succeeded = bool(last_result and last_result.succeeded)
         verification_result: VerificationResult | None = None
@@ -314,9 +434,9 @@ class TaskEngine:
         if cli_succeeded:
             task_sm.transition(TaskState.VERIFYING)
             if verifier is not None:
-                verification_result = verifier.run(repo_path)
+                verification_result = verifier.run(exec_root)
                 if latest_run_id:
-                    self.run_store.ledger_for(latest_run_id).append(
+                    store.ledger_for(latest_run_id).append(
                         latest_run_id, "task.verification_result", verification_result.to_dict(),
                     )
             verification_passed = verification_result.passed if verification_result else True
@@ -334,7 +454,7 @@ class TaskEngine:
 
         problems: tuple[str, ...] = ()
         if not cli_succeeded and latest_run_id:
-            stderr_path = self.run_store.paths_for(latest_run_id).stderr
+            stderr_path = store.paths_for(latest_run_id).stderr
             if stderr_path.exists():
                 tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-2000:]
                 problems = (redact(tail),) if tail.strip() else ()

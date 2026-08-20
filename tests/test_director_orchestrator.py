@@ -1,5 +1,6 @@
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,9 +8,13 @@ from pathlib import Path
 from gnosis.contracts.director_brief import BriefSource, DirectorBrief
 from gnosis.director.brief_record import BriefRecordState
 from gnosis.director.orchestrator import DirectorOrchestrator
+from gnosis.kernel.claims import ClaimStatus, ClaimStore, WorkAuthority
 from gnosis.kernel.engine import TaskEngine
+from gnosis.kernel.lease import LeaseStore
 from gnosis.kernel.run_store import RunStore
 from gnosis.kernel.state_machine import RunState
+from gnosis.kernel.verification import CommandVerifier
+from gnosis.kernel.worktree import WorktreeManager
 from gnosis.runner.capture import ExecutionResult
 from gnosis.runner.retry import RetryPolicy
 
@@ -47,6 +52,9 @@ class TestDirectorOrchestrator(unittest.TestCase):
         subprocess.run(["git", "init"], cwd=self.repo, check=True, capture_output=True)
         subprocess.run(["git", "config", "user.email", "e@x.com"], cwd=self.repo, check=True)
         subprocess.run(["git", "config", "user.name", "T"], cwd=self.repo, check=True)
+        (self.repo / "README.md").write_text("root" + chr(10), encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=self.repo, check=True, capture_output=True)
         self.run_store = RunStore(self.root / "runs")
         self.director_root = self.root / ".gnosis" / "director"
 
@@ -122,7 +130,7 @@ class TestDirectorOrchestrator(unittest.TestCase):
 
         # Simulate a run that was RUNNING when the process died: no
         # heartbeat is ever written, so RecoveryManager will flag it.
-        run_paths = self.run_store.create_run("RUN-ORPHAN", task_id)
+        self.run_store.create_run("RUN-ORPHAN", task_id)
         self.run_store.update_state("RUN-ORPHAN", RunState.RUNNING)
         orch.records.update(claim.brief.brief_id, run_ids=["RUN-ORPHAN"])
 
@@ -150,6 +158,110 @@ class TestDirectorOrchestrator(unittest.TestCase):
 
         self.assertEqual(recovered, [])
         self.assertEqual(orch.records.get("BRIEF-1").state, BriefRecordState.IN_PROGRESS.value)
+
+
+class TestGovernedOrchestrator(unittest.TestCase):
+    """Orchestrator claim migration (ADR-0006..0008 follow-up): with a
+    WorkAuthority + WorktreeManager configured, every brief runs under a
+    fenced grant inside the task's own worktree."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        subprocess.run(["git", "init"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "e@x.com"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=self.repo, check=True)
+        (self.repo / "README.md").write_text("root" + chr(10), encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=self.repo, check=True, capture_output=True)
+        self.run_store = RunStore(self.root / "runs")
+        self.director_root = self.root / ".gnosis" / "director"
+        self.claims = ClaimStore(self.root / "claims.json")
+        self.leases = LeaseStore(self.root / "leases.json")
+        self.authority = WorkAuthority(self.claims, self.leases, default_ttl_s=300)
+        self.worktrees = WorktreeManager(self.repo, self.root / "worktrees")
+        self.verifier = CommandVerifier(
+            "noop-pass", [sys.executable, "-c", "import sys; sys.exit(0)"],
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _drop_brief(self, brief_id: str) -> None:
+        orch = DirectorOrchestrator(self.director_root, self.run_store, self.repo)
+        brief = DirectorBrief(brief_id=brief_id, title="Governed thing",
+                              mission="Ship it.", source=BriefSource.MANUAL)
+        path = orch.inbox.layout.inbox / f"{brief.brief_id}.json"
+        path.write_text(json.dumps(brief.to_dict()), encoding="utf-8")
+
+    def test_governed_brief_resolves_claim_inside_worktree(self):
+        self._drop_brief("BRIEF-GOV-1")
+        engine = TaskEngine(
+            run_store=self.run_store, cli_runner=_FakeCliRunner(["succeed"]),
+            retry_policy=_FAST_RETRY,
+        )
+        orch = DirectorOrchestrator(
+            director_root=self.director_root, run_store=self.run_store,
+            repo_path=self.repo, task_engine=engine,
+            authority=self.authority, worker_id="orchestrator-1",
+            worktrees=self.worktrees,
+        )
+        outcomes = orch.run_pending(verifier=self.verifier)
+        self.assertEqual(len(outcomes), 1)
+        self.assertTrue(outcomes[0].accepted)
+        task_id = outcomes[0].task_id
+        claim = self.claims.get(task_id)
+        self.assertEqual(claim.status, ClaimStatus.RESOLVED)
+        self.assertEqual(claim.holder, "orchestrator-1")
+        handle = self.worktrees.load_handle(task_id)
+        self.assertTrue(Path(handle.path).exists())
+        record = orch.records.get("BRIEF-GOV-1")
+        self.assertEqual(record.state, BriefRecordState.COMPLETED.value)
+
+    def test_authority_without_worker_id_is_refused_at_construction(self):
+        with self.assertRaises(ValueError):
+            DirectorOrchestrator(
+                director_root=self.director_root, run_store=self.run_store,
+                repo_path=self.repo, authority=self.authority,
+            )
+
+    def test_authority_without_worktrees_is_refused_at_construction(self):
+        # Governed briefs must be workspace-isolated (Codex review).
+        with self.assertRaises(ValueError):
+            DirectorOrchestrator(
+                director_root=self.director_root, run_store=self.run_store,
+                repo_path=self.repo, authority=self.authority,
+                worker_id="orchestrator-1",
+            )
+
+    def test_governed_failure_fails_the_brief_without_aborting_the_batch(self):
+        # Deposition / workspace failure / precondition violations are
+        # EXPECTED in governed mode: the brief must end FAILED and visible,
+        # and the rest of the batch must still run (adversarial review).
+        self._drop_brief("BRIEF-GOV-BAD")
+        self._drop_brief("BRIEF-GOV-OK")
+        orch = DirectorOrchestrator(
+            director_root=self.director_root, run_store=self.run_store,
+            repo_path=self.repo,
+            task_engine=TaskEngine(
+                run_store=self.run_store, cli_runner=_FakeCliRunner(["succeed"] * 4),
+                retry_policy=_FAST_RETRY,
+            ),
+            authority=self.authority, worker_id="orchestrator-1",
+            worktrees=self.worktrees,
+        )
+        # No verifier: the engine's evidence gate refuses every governed
+        # brief with ValueError, the batch must survive it.
+        outcomes = orch.run_pending()
+        self.assertEqual(len(outcomes), 2)
+        self.assertTrue(all(o.accepted for o in outcomes))
+        self.assertTrue(all("execution failed" in o.reason for o in outcomes))
+        for brief_id in ("BRIEF-GOV-BAD", "BRIEF-GOV-OK"):
+            self.assertEqual(
+                orch.records.get(brief_id).state, BriefRecordState.FAILED.value,
+            )
 
 
 if __name__ == "__main__":
