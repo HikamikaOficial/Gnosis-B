@@ -151,6 +151,16 @@ class TaskEngine:
         if authority is not None:
             if not worker_id:
                 raise ValueError("worker_id is required when a WorkAuthority is supplied")
+            if verifier is None:
+                # Resolving a claim is the durable DONE, and the
+                # constitution is absolute: no DONE without evidence. A
+                # bare CLI exit code is not evidence (Codex review,
+                # INVALID DONE finding). Callers must choose a verifier
+                # consciously — even a cheap one — or run ungoverned.
+                raise ValueError(
+                    "a WorkAuthority-governed task requires a verifier: "
+                    "claims resolve to DONE only on verification evidence"
+                )
             grant = authority.acquire(task_id, worker_id, ttl_s=lease_ttl_s)
             if cancellation_token is None:
                 # Deposition detected mid-run cancels the child process
@@ -248,6 +258,13 @@ class TaskEngine:
             self.run_store.update_state(run_id, RunState.RUNNING)
             self.run_store.heartbeat(run_id)
 
+            # Last re-proof before the repository-writing child launches
+            # (Codex review): shrinks the pre-launch stale window from
+            # "attempt entry -> launch" to milliseconds. The in-flight
+            # child window that remains is handled cooperatively by the
+            # pump; its structural closure (worktree isolation + token
+            # enforcement inside RunStore) is tracked in NEXT_ACTIONS.
+            guard()
             result = self.cli_runner.run(
                 prompt=effective_prompt, cwd=repo_path, stdout_path=paths.stdout, stderr_path=paths.stderr,
                 timeout_s=timeout_s, cancellation_token=cancellation_token, mcp=mcp,

@@ -100,6 +100,33 @@ Also hardened while repairing: `atomic_write_text` absorbs transient
 Windows sharing violations on `os.replace` with a bounded retry (the
 L-0002 class, hit live by these tests under AV scanning).
 
+## Independent Codex review addendum (2026-08-20, post-commit ed32fa2)
+
+`codex exec --sandbox read-only --json` reviewed the committed unit
+independently; verdict FAIL with three findings, all verified true and
+repaired in the follow-up commit:
+
+1. **Pre-launch stale window (reported critical, repaired + residual
+   documented).** Between the attempt-entry guard and the CLI launch, a
+   worker paused past its TTL could start a repository-writing child
+   under a dead grant. Repair: a final `guard()` immediately before
+   `cli_runner.run`, shrinking the window to milliseconds. Residual: an
+   already-running child is only stopped cooperatively by the pump; the
+   structural closure (per-task worktree isolation for governed runs +
+   token enforcement inside RunStore) is tracked in NEXT_ACTIONS. The
+   deposed worker's own run-directory writes are benign (fresh run_id
+   namespace).
+2. **INVALID DONE with no verifier (major).** `verifier=None` +
+   authority resolved the claim to COMPLETED on a bare exit code —
+   violating "no DONE without evidence" at the root. Repair: an
+   authority-governed run without a verifier is refused at entry
+   (ValueError); pinned by `test_verifier_required_with_authority`.
+3. **Pump stop race (minor).** A renewal already past `stop.wait()` (or
+   blocked on the store lock) can land after `stop()`, extending an
+   unresolved task's lease by at most one TTL. Repair: pre-heartbeat
+   stop re-check narrows the window; the lock-blocked remainder is
+   documented as liveness-delay-only.
+
 ## Accepted limitations (documented in code)
 
 - Known benign race: a heartbeat can revive a lease concurrently with a

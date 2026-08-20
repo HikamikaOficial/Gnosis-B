@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "project": "GNOSIS",
-  "phase": "phase_minus_1",
-  "status": "phase_minus_1_complete",
+  "phase": "phase_1_kernel_hardening",
+  "status": "directives_1_to_5_implemented_and_reviewed",
   "gates": {
     "bootstrap": "PASS",
     "workstation_doctor": "PASS_WITH_NOTES",
-    "codex_cli": "PASS_AUTHENTICATED_QUOTA_RESETS_2026_08_20",
+    "codex_cli": "PASS_AUTH_AND_FIRST_ADVERSARIAL_REVIEW_DELIVERED",
     "repository_inventory": "PASS_27_OF_130_TIER_S_COMPLETE",
     "m3_install_verify": "PASS",
     "zmem_install_verify": "PASS",
@@ -15,6 +15,6 @@
     "initial_adrs": "PASS",
     "quality_gates": "RUFF_CLEAN_AUTOFIX_MYPY_STRICT_ZERO"
   },
-  "next_action": "2026-08-20: codex read-only smoke + adversarial review of 843a72e/1e176a9; then Directive 4 part two (claims plane)",
-  "updated": "2026-08-19"
+  "next_action": "worktree isolation for governed runs (ADR-0006+0007 composition), RunStore token enforcement, orchestrator claim migration; then directives 6-9",
+  "updated": "2026-08-20"
 }

@@ -477,7 +477,14 @@ class GrantHeartbeatPump:
 
     def _run(self) -> None:
         while not self._stop.wait(self._interval_s):
+            if self._stop.is_set():
+                return  # stop() raced the wait timeout: do not renew again
             try:
+                # Known narrow race (Codex review): if stop() lands while
+                # this call is already blocked on the store lock, one last
+                # renewal can slip through, extending an unresolved task's
+                # lease by at most one TTL. Liveness delay only — the sweep
+                # reclaims one interval later; ownership is unaffected.
                 self._authority.heartbeat(self._grant)
             except (StaleClaimError, StaleLeaseError) as exc:
                 self.deposed = exc

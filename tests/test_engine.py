@@ -248,6 +248,11 @@ class TestTaskEngineWorkAuthority(unittest.TestCase):
             self.claims, self.leases, default_ttl_s=60,
             reclaim_grace_s=30, clock=self.clock,
         )
+        # Authority-governed runs now REQUIRE a verifier (no DONE without
+        # evidence — Codex review); tests that reach resolve use this one.
+        self.passing_verifier = CommandVerifier(
+            "noop-pass", [sys.executable, "-c", "import sys; sys.exit(0)"],
+        )
 
     def _depose_via_rival(self):
         """Expire worker-a's lease, sweep, and hand the task to worker-b."""
@@ -262,6 +267,7 @@ class TestTaskEngineWorkAuthority(unittest.TestCase):
         engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
         outcome = engine.execute_task(
             task_id="TASK-AUTH", objective="Demo", prompt="do it", repo_path=self.repo,
+            verifier=self.passing_verifier,
             authority=self.authority, worker_id="worker-a",
         )
         self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
@@ -270,12 +276,24 @@ class TestTaskEngineWorkAuthority(unittest.TestCase):
         self.assertEqual(claim.outcome, "COMPLETED")
         self.assertIsNone(self.leases.current("task/TASK-AUTH"))
 
+    def test_verifier_required_with_authority(self):
+        # No DONE without evidence: an authority-governed run without a
+        # verifier is refused at entry (Codex review, INVALID DONE).
+        engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
+        with self.assertRaises(ValueError):
+            engine.execute_task(
+                task_id="TASK-AUTH", objective="Demo", prompt="do it",
+                repo_path=self.repo, authority=self.authority, worker_id="worker-a",
+            )
+        self.assertIsNone(self.claims.get("TASK-AUTH"))  # nothing was claimed
+
     def test_worker_id_required_with_authority(self):
         engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
         with self.assertRaises(ValueError):
             engine.execute_task(
                 task_id="TASK-AUTH", objective="Demo", prompt="do it",
-                repo_path=self.repo, authority=self.authority,
+                repo_path=self.repo, verifier=self.passing_verifier,
+                authority=self.authority,
             )
 
     def test_deposed_worker_aborts_without_writing_final_state(self):
@@ -284,7 +302,8 @@ class TestTaskEngineWorkAuthority(unittest.TestCase):
         with self.assertRaises((StaleLeaseError, StaleClaimError)):
             engine.execute_task(
                 task_id="TASK-AUTH", objective="Demo", prompt="do it",
-                repo_path=self.repo, authority=self.authority, worker_id="worker-a",
+                repo_path=self.repo, verifier=self.passing_verifier,
+                authority=self.authority, worker_id="worker-a",
             )
         # NO STALE WRITE: the deposed attempt never recorded its outcome —
         # the run's durable state still says RUNNING and the ledger stops
@@ -318,7 +337,8 @@ class TestTaskEngineWorkAuthority(unittest.TestCase):
             with self.assertRaises((StaleLeaseError, StaleClaimError)):
                 engine.execute_task(
                     task_id="TASK-AUTH", objective="Demo", prompt="do it",
-                    repo_path=self.repo, authority=self.authority,
+                    repo_path=self.repo, verifier=self.passing_verifier,
+                    authority=self.authority,
                     worker_id="worker-a", lease_heartbeat_interval_s=0.05,
                 )
         finally:
@@ -352,7 +372,8 @@ class TestTaskEngineWorkAuthority(unittest.TestCase):
             with self.assertRaises((StaleLeaseError, StaleClaimError)):
                 engine.execute_task(
                     task_id="TASK-AUTH", objective="Demo", prompt="do it",
-                    repo_path=self.repo, authority=self.authority,
+                    repo_path=self.repo, verifier=self.passing_verifier,
+                    authority=self.authority,
                     worker_id="worker-a", lease_heartbeat_interval_s=0.05,
                 )
         finally:
@@ -386,6 +407,7 @@ class TestTaskEngineWorkAuthority(unittest.TestCase):
         )
         outcome = engine.execute_task(
             task_id="TASK-AUTH", objective="Demo", prompt="do it", repo_path=self.repo,
+            verifier=self.passing_verifier,
             authority=self.authority, worker_id="worker-a",
         )
         self.assertEqual(outcome.final_task_state, TaskState.FAILED)
