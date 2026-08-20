@@ -575,7 +575,8 @@ class TestEnforcementMatrix(unittest.TestCase):
         self.assertEqual(soft, {("worktree", "shared_repo_isolation"),
                                 ("worktree", "orphaned_child_termination"),
                                 ("policy", "rule_purity"),
-                                ("policy", "agent_launch_gate")})
+                                ("policy", "agent_launch_gate"),
+                                ("convergence", "reviewer_read_only")})
 
     def test_gnosis_matrix_is_pinned_exactly(self):
         # Four mutants survived the previous suite: deleting a claim,
@@ -589,6 +590,7 @@ class TestEnforcementMatrix(unittest.TestCase):
             ("replay", "no_network_in_strict_replay"): EnforcementLevel.HARD,
             ("claims", "no_stale_write_after_deposition"): EnforcementLevel.HARD,
             ("policy", "deny_by_default"): EnforcementLevel.HARD,
+            ("convergence", "reviewer_read_only"): EnforcementLevel.SANDBOX_APPROX,
             ("policy", "rule_purity"): EnforcementLevel.IGNORED,
             ("policy", "agent_launch_gate"): EnforcementLevel.PROMPT_ONLY,
         }

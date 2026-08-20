@@ -1,6 +1,6 @@
 # GNOSIS Project State
 
-**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE 2/4
+**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE 3/4
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
 **Last update:** 2026-08-20
@@ -72,11 +72,20 @@ governs the order of work here: **prefer wiring over documenting**.
   cassette, byte-exact, reproducing the stdout/stderr files the engine
   reads — proven by a Director brief recorded once and replayed with the
   live runner replaced by one that raises if called.
-- [ ] `ConvergenceLoop` → real reviewer/fixer adapters.
+- [x] **`ConvergenceLoop` → real reviewer/fixer adapters** (ADR-0015).
+  New `gnosis/adapters/` package (nothing in `kernel/` imports it, which
+  is what makes provider-neutrality checkable). Rule 9 is enforced twice
+  at two honest strengths: edit tools withheld (the provider's promise)
+  AND a before/after workspace fingerprint that refuses a reviewer which
+  moved the tree (the kernel's evidence, recorded as SANDBOX_APPROX
+  because detection is not prevention). An unreadable review raises
+  rather than becoming a verdict nobody gave; an unreadable FIX report is
+  inconclusive rather than `cannot_fix`, because `cannot_fix` ends the
+  loop. Not yet independently reviewed — Codex is parked.
 - [ ] Hold/park plane + `boot_sweep` under a scheduler (no production
   caller today, stated in ADR-0012).
 
-Suite: **488 tests, all passing**; mypy strict clean (43 files); ruff
+Suite: **521 tests, all passing**; mypy strict clean (46 files); ruff
 clean on all touched files (20 pre-existing findings elsewhere in the
 repo, listed in NEXT_ACTIONS 3).
 

@@ -59,3 +59,9 @@ Both a policy approval and a replay cassette must answer "is this the same call?
 
 ## D-020 — What cannot be enforced is recorded in the enforcement matrix, never implied away
 Rule bodies are in-process operator code and can act before returning a verdict (`policy/rule_purity = IGNORED`); the launch gate is opt-in until a default rule set exists (`policy/agent_launch_gate = PROMPT_ONLY`, with `policy.ungoverned` ledger events and `require_policy=True` available now). Python cannot enforce purity; the matrix is where that stops being a silent assumption. Details/evidence: ADR-0013 Codex addendum.
+
+## D-021 — Provider translation lives in `gnosis/adapters/`, and the kernel never imports it
+A new top-level package holds everything provider-specific (prompt shapes, output envelopes, payload parsing). The rule that makes "provider-neutral by adapters" checkable rather than aspirational is one-directional: `adapters/` imports `kernel/`, never the reverse. Details/evidence: ADR-0015.
+
+## D-022 — A reviewer's read-only posture is claimed by the provider and verified by the kernel
+Review agents run with edit tools withheld, and `CliReviewer` fingerprints the workspace either side of the run, refusing a reviewer that moved it — checked BEFORE its output is parsed. The matrix records `convergence/reviewer_read_only = SANDBOX_APPROX`: detection after the fact is not prevention, and the table says so. Details/evidence: ADR-0015.

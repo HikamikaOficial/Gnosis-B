@@ -798,6 +798,15 @@ GNOSIS_ENFORCEMENT = EnforcementMatrix([
         ),
     ),
     EnforcementClaim(
+        "convergence", "reviewer_read_only", EnforcementLevel.SANDBOX_APPROX,
+        note=(
+            "the review agent runs with edit tools withheld (a permission "
+            "promise, not a sandbox), and the adapter fingerprints the tree "
+            "either side and refuses a reviewer that moved it — detection "
+            "after the fact, not prevention (ADR-0015, rule 9)"
+        ),
+    ),
+    EnforcementClaim(
         "policy", "agent_launch_gate", EnforcementLevel.PROMPT_ONLY,
         note=(
             "opt-in: a TaskEngine or DirectorOrchestrator built without a "
