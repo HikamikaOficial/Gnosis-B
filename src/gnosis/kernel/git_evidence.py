@@ -7,11 +7,14 @@ claim about what it changed.
 """
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+_SHA_RE = re.compile(r"[0-9a-f]{40,64}\Z")
 
 
 @dataclass(frozen=True)
@@ -33,11 +36,18 @@ class GitEvidence:
 def _run_git(repo_path: Path, args: list[str]) -> tuple[int, str]:
     try:
         proc = subprocess.run(
-            ["git", *args], cwd=str(repo_path), capture_output=True, text=True, timeout=30,
+            ["git", *args], cwd=str(repo_path), capture_output=True, text=True,
+            timeout=30, check=False,  # rc is returned and handled by callers
         )
         return proc.returncode, (proc.stdout or proc.stderr).strip()
     except FileNotFoundError:
         return 127, "git executable not found"
+    except subprocess.TimeoutExpired:
+        return 124, "git timed out"
+    except OSError as exc:
+        # Evidence capture is read-only and must fail closed as data, not
+        # as an exception escaping a probe (convergence relies on this).
+        return 126, f"git could not run: {exc}"
 
 
 def capture_git_evidence(repo_path: Path) -> GitEvidence:
@@ -52,7 +62,10 @@ def capture_git_evidence(repo_path: Path) -> GitEvidence:
 
     return GitEvidence(
         is_repo=True,
-        head_sha=head_sha if not head_sha.lower().startswith("fatal") else None,
+        # `git rev-parse HEAD` on a repo with no commits echoes the literal
+        # string "HEAD" to stdout (the fatal goes to stderr), so a prefix
+        # check alone recorded a bogus head. Only a real sha counts.
+        head_sha=head_sha if _SHA_RE.fullmatch(head_sha) else None,
         branch=branch,
         status_porcelain=status,
         diff_stat=diff_stat,
