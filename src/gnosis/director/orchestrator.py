@@ -17,6 +17,7 @@ resubmit as a new brief.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,15 +25,14 @@ from typing import cast
 
 from ..contracts.director_brief import DirectorBrief
 from ..contracts.engineer_report import EngineerReport, ReportStatus
-from ..kernel.claims import ClaimConflictError, StaleClaimError, WorkAuthority
+from ..kernel.claims import WorkAuthority
 from ..kernel.engine import TaskEngine, TaskExecutionOutcome
 from ..kernel.ids import new_task_id
-from ..kernel.lease import StaleLeaseError
 from ..kernel.policy import ApprovalStore, PolicyEngine
 from ..kernel.run_store import RunStore
 from ..kernel.state_machine import RunState
 from ..kernel.verification import Verifier
-from ..kernel.worktree import WorktreeError, WorktreeManager
+from ..kernel.worktree import WorktreeManager
 from ..runner.recovery import RecoveryManager
 from .brief_record import BriefRecord, BriefRecordState, BriefRecordStore
 from .inbox import DirectorInbox
@@ -62,6 +62,7 @@ class DirectorOrchestrator:
         policy: PolicyEngine | None = None,
         approvals: ApprovalStore | None = None,
         policy_actor: str | None = None,
+        require_policy: bool = False,
     ) -> None:
         self.inbox = DirectorInbox(director_root)
         self.records = BriefRecordStore(director_root / "state" / "briefs")
@@ -102,6 +103,18 @@ class DirectorOrchestrator:
         # through.
         if approvals is not None and policy is None:
             raise ValueError("an ApprovalStore without a PolicyEngine gates nothing")
+        # Deny-by-default is a constitution rule (13), but no default rule
+        # set exists yet, so the gate is opt-in and an ungoverned run says
+        # so on its own ledger. `require_policy` is how an operator gets
+        # fail-closed TODAY rather than waiting for that rule set: without
+        # it, the ungoverned path is a construction-time choice a reviewer
+        # can only find by reading call sites (Codex review).
+        if require_policy and policy is None:
+            raise ValueError(
+                "require_policy=True but no PolicyEngine was given: this "
+                "orchestrator would launch agents with no verdict"
+            )
+        self.require_policy = require_policy
         self.policy = policy
         self.approvals = approvals
         # Whoever an approval is granted to is the identity the escalation
@@ -140,13 +153,22 @@ class DirectorOrchestrator:
                 approvals=self.approvals,
                 policy_actor=self.policy_actor,
             )
-        except (StaleClaimError, StaleLeaseError, ClaimConflictError, WorktreeError, ValueError) as exc:
+        except Exception as exc:  # noqa: BLE001 - see below: a consumed brief must never strand
             # Governed mode makes deposition, claim conflicts, workspace
             # failures and precondition violations EXPECTED outcomes of a
             # brief, not batch-aborting crashes: the brief was already
             # consumed from the inbox, so it must end in a durable, visible
             # FAILED state instead of stranding IN_PROGRESS with no report
             # and killing the rest of the batch (adversarial review).
+            #
+            # Widened from a named tuple of exceptions to everything: the
+            # named list was a bet that the engine's failure modes were
+            # fully enumerated, and a hostile rule detail falsified it
+            # (Codex review). The brief is already gone from the inbox, so
+            # an unanticipated exception either becomes a FAILED record
+            # carrying its type, or becomes a brief that no operator and no
+            # recovery pass can account for. The exception is not
+            # swallowed: it is the record's `error`.
             self.records.update(
                 brief.brief_id, state=BriefRecordState.FAILED,
                 error=f"{type(exc).__name__}: {exc}",
@@ -170,16 +192,15 @@ class DirectorOrchestrator:
 
     def _write_report(self, report: EngineerReport) -> Path:
         layout = self.inbox.layout
+        payload = json.dumps(report.to_dict(), indent=2, sort_keys=True)
+        markdown = report.to_markdown()
         json_path = layout.outbox / f"{report.task_id}.json"
-        md_path = layout.outbox / f"{report.task_id}.md"
-        json_path.write_text(json.dumps(report.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
-        md_path.write_text(report.to_markdown(), encoding="utf-8")
+        _atomic_write(json_path, payload)
+        _atomic_write(layout.outbox / f"{report.task_id}.md", markdown)
 
         if report.status == ReportStatus.ESCALATION_REQUIRED:
-            esc_json = layout.escalations / f"{report.task_id}.json"
-            esc_md = layout.escalations / f"{report.task_id}.md"
-            esc_json.write_text(json.dumps(report.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
-            esc_md.write_text(report.to_markdown(), encoding="utf-8")
+            _atomic_write(layout.escalations / f"{report.task_id}.json", payload)
+            _atomic_write(layout.escalations / f"{report.task_id}.md", markdown)
 
         return json_path
 
@@ -208,6 +229,20 @@ class DirectorOrchestrator:
             if meta.state in (RunState.PENDING.value, RunState.RUNNING.value, RunState.SUCCEEDED.value):
                 return True
         return False
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Write via a temp file and one rename.
+
+    A reader polling `escalations/` sees the whole refusal or nothing —
+    never a half-written record it then treats as the operator's copy of
+    what happened (Codex review). `Path.replace` is atomic on both POSIX
+    and Windows for a same-directory rename.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
 
 
 def _default_prompt_builder(brief: DirectorBrief) -> str:

@@ -788,4 +788,22 @@ GNOSIS_ENFORCEMENT = EnforcementMatrix([
         "policy", "deny_by_default", EnforcementLevel.HARD,
         note="unconfigured point / undeclared tool / no rule all deny (ADR-0011)",
     ),
+    EnforcementClaim(
+        "policy", "rule_purity", EnforcementLevel.IGNORED,
+        note=(
+            "rules are in-process operator code: a rule body can spawn a "
+            "process or write the repo BEFORE returning its verdict, and "
+            "nothing here stops it (Codex review, ADR-0013). The rule set "
+            "is trusted configuration, at the same privilege as the kernel"
+        ),
+    ),
+    EnforcementClaim(
+        "policy", "agent_launch_gate", EnforcementLevel.PROMPT_ONLY,
+        note=(
+            "opt-in: a TaskEngine or DirectorOrchestrator built without a "
+            "policy launches agents with no verdict. Ungoverned runs record "
+            "policy.ungoverned; require_policy=True makes it fail closed "
+            "(ADR-0013)"
+        ),
+    ),
 ])

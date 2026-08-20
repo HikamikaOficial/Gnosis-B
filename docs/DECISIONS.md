@@ -53,3 +53,9 @@ External memory engines are installed as isolated `uv tool` environments built f
 
 ## D-018 — The policy gate is reachable from the Director entry point, and evaluated twice
 Briefs pass through `DirectorOrchestrator`, so that is where a gate has to be enableable; a refusal lands as an `ESCALATED` brief record plus an `escalations/` file. The intervention point is evaluated before anything reads the repository (`pre_context`) and again after kernel context is prepended (`final_prompt`), because the prompt that runs is not the prompt the first verdict judged. An `ApprovalStore` without a `PolicyEngine` is refused at construction. Details/evidence: ADR-0013.
+
+## D-019 — Action identity and cassette identity are the same problem, solved once
+Both a policy approval and a replay cassette must answer "is this the same call?". Both now key on content rather than paths: `workspace_fingerprint()` (HEAD + branch + hash of dirty state) and content hashes of MCP configs, shared from `kernel/git_evidence.py`. Consequence accepted deliberately: an approval granted against one tree state does not carry to another, including a retry after an attempt modified the tree. Details/evidence: ADR-0013, ADR-0014.
+
+## D-020 — What cannot be enforced is recorded in the enforcement matrix, never implied away
+Rule bodies are in-process operator code and can act before returning a verdict (`policy/rule_purity = IGNORED`); the launch gate is opt-in until a default rule set exists (`policy/agent_launch_gate = PROMPT_ONLY`, with `policy.ungoverned` ledger events and `require_policy=True` available now). Python cannot enforce purity; the matrix is where that stops being a silent assumption. Details/evidence: ADR-0013 Codex addendum.

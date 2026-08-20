@@ -1,6 +1,6 @@
 # GNOSIS Project State
 
-**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE 1/4
+**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE 2/4
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
 **Last update:** 2026-08-20
@@ -53,20 +53,30 @@ The four mechanisms that existed but nothing called. Directive 9's rule
 governs the order of work here: **prefer wiring over documenting**.
 
 - [x] **PolicyEngine → a real intervention point** (ADR-0013). The gate
-  runs at `before_agent_run`, before ANY child process exists, and again
-  after kernel context is prepended; refusals are durable evidence
-  (`policy.decision` + classification + `escalations/` file) and undo the
-  workspace they minted. Enableable from `DirectorOrchestrator`, the path
-  real briefs travel. Workflow review: 21 findings adjudicated by hand
-  (the verify phase died on quota), including two criticals — the ADR's
-  headline invariant was false, and no production path could enable the
-  gate at all. Both repaired; see L-0005..L-0007.
-- [ ] `InteractionStore` → `ClaudeCodeCLIRunner` (record/replay real runs).
+  runs at `before_agent_run` before any process that could act on the
+  repository or on the agent's behalf, again after kernel context is
+  prepended, and again before every retry; refusals are durable evidence
+  (`policy.decision` + classification + `escalations/` file). Enableable
+  from `DirectorOrchestrator`, the path real briefs travel. **Two
+  independent reviews, and both found the headline invariant false**: the
+  workflow review (21 findings, adjudicated by hand after the verify
+  phase died on quota) caught code intelligence shelling out before the
+  gate and no production path being able to enable it; Codex then caught
+  `git worktree add` still running first, retries riding the first
+  attempt's authorization, and the identity not binding the workspace.
+  All repaired. What cannot be enforced (rule purity, the opt-in gate) is
+  recorded in the enforcement matrix rather than implied away. See
+  L-0005..L-0010, D-018..D-020.
+- [x] **`InteractionStore` → the real CLI runner** (ADR-0014).
+  `ReplayingCLIRunner` records and replays actual runs through the
+  cassette, byte-exact, reproducing the stdout/stderr files the engine
+  reads — proven by a Director brief recorded once and replayed with the
+  live runner replaced by one that raises if called.
 - [ ] `ConvergenceLoop` → real reviewer/fixer adapters.
 - [ ] Hold/park plane + `boot_sweep` under a scheduler (no production
   caller today, stated in ADR-0012).
 
-Suite: **462 tests, all passing**; mypy strict clean (42 files); ruff
+Suite: **488 tests, all passing**; mypy strict clean (43 files); ruff
 clean on all touched files (20 pre-existing findings elsewhere in the
 repo, listed in NEXT_ACTIONS 3).
 

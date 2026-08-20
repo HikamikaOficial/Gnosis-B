@@ -351,6 +351,46 @@ class TestPolicyGatedOrchestrator(unittest.TestCase):
         self.assertEqual(
             orch.records.get("BRIEF-POL-2").state, BriefRecordState.COMPLETED.value)
 
+    def test_an_unanticipated_engine_failure_never_strands_a_consumed_brief(self):
+        # The brief is already gone from the inbox, so an exception the
+        # orchestrator did not enumerate must still become a visible
+        # record rather than a permanent IN_PROGRESS (Codex review).
+        class _Exploding:
+            def execute_task(self, **kwargs):
+                raise KeyError("something nobody listed")
+
+        orch = DirectorOrchestrator(
+            director_root=self.director_root, run_store=self.run_store,
+            repo_path=self.repo, task_engine=_Exploding(),
+        )
+        self._drop_brief("BRIEF-BOOM")
+        self._drop_brief("BRIEF-AFTER")
+        outcomes = orch.run_pending()
+
+        self.assertEqual(len(outcomes), 2)           # the batch survived
+        record = orch.records.get("BRIEF-BOOM")
+        self.assertEqual(record.state, BriefRecordState.FAILED.value)
+        self.assertIn("KeyError", record.error)      # not swallowed
+
+    def test_require_policy_refuses_an_ungated_orchestrator_at_construction(self):
+        with self.assertRaises(ValueError):
+            DirectorOrchestrator(
+                director_root=self.director_root, run_store=self.run_store,
+                repo_path=self.repo, require_policy=True,
+            )
+
+    def test_a_report_is_never_visible_half_written(self):
+        self._drop_brief("BRIEF-ATOMIC")
+        orch = self._orchestrator(_FakeCliRunner(["succeed"]))
+        outcomes = orch.run_pending()
+        task_id = outcomes[0].task_id
+        # No temp file survives, and the JSON parses as a whole document.
+        leftovers = list(orch.inbox.layout.outbox.glob("*.tmp"))
+        self.assertEqual(leftovers, [])
+        payload = json.loads(
+            (orch.inbox.layout.outbox / f"{task_id}.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["task_id"], task_id)
+
     def test_approvals_without_a_policy_are_refused_at_construction(self):
         # It reads as governed, authorises nothing, and would let
         # everything through.

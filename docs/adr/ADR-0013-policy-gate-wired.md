@@ -3,11 +3,11 @@
 - Status: ACCEPTED
 - Date: 2026-08-20
 - Deciders: Claude Fable 5 (autonomous, per standing mandate)
-- Evidence: `tests/test_engine.py::TestPolicyGate` (18 tests),
+- Evidence: `tests/test_engine.py::TestPolicyGate` (27 tests),
   `tests/test_director_orchestrator.py::TestPolicyGatedOrchestrator`
-  (3 tests); suite 462/462; mypy strict clean; ruff clean on every file
-  this ADR touches. See the workflow addendum below — the first version
-  of this ADR was reviewed and several of its claims were false.
+  (6 tests); suite 488/488; mypy strict clean; ruff clean on every file
+  this ADR touches. **Dual adversarial review, and both rounds found the
+  headline invariant false** — see the two addenda below.
 - Builds on: ADR-0011 (the engine), ADR-0009 (worktree-scoped execution),
   ADR-0012 (typed failures).
 
@@ -24,15 +24,23 @@ first.
 
 `TaskEngine.execute_task(policy=, approvals=, policy_actor=)` consults
 the policy engine at a declared intervention point, `before_agent_run`,
-**before any child process exists at all** — see addendum finding 1 for
-why that phrasing is deliberately stronger than the original.
+**before any process that could act on the repository or on the agent's
+behalf**. The exact wording matters: two successive reviews falsified
+the stronger phrasing this ADR used to carry (see both addenda), and the
+kernel legitimately runs read-only `git` probes first because computing
+the identity of the action being judged is part of judging it.
 
-The point is evaluated **twice**, and both verdicts are recorded:
+The point is evaluated **at every stage that changes the action**, and
+every verdict is recorded:
 
-- `stage="pre_context"`, before anything reads the repository;
+- `stage="pre_context"`, before anything reads the repository and before
+  the worktree is minted;
 - `stage="final_prompt"`, after kernel-generated context has been
   prepended, because the prompt that actually runs is not the prompt the
-  first verdict judged.
+  first verdict judged;
+- `stage="attempt_N"`, before each retry, because a retry is a fresh
+  launch and the MCP config and the workspace can both have changed
+  since the first verdict.
 
 ### What the rules actually see
 
@@ -69,17 +77,23 @@ left no trace would be indistinguishable from a task nobody attempted —
 and the reason code flowing into the taxonomy is exactly the Directive 9
 contract, now composing across both units.
 
-### A refusal undoes the workspace it minted
+### A refusal leaves no workspace behind
 
-Self-review found the gate leaving its own side effect: a `DENY` still
-minted `gnosis/<task_id>` and a worktree, because the kernel creates the
-workspace before asking (rules are told where the agent *would* run,
-which needs the real path). Verified, then fixed — a refusal now removes
-the workspace through ADR-0007's provenance-gated `remove()`, and **only
-one this call created**: a reattached worktree may hold a previous
-attempt's work, so it is never touched. Cleanup is best-effort; a
-refusal that cannot tidy up is still a refusal, and forcing removal is
-what ADR-0007 forbids.
+This took two rounds. Self-review first found a `DENY` still minting
+`gnosis/<task_id>` and a worktree, and fixed it by *cleaning up* after
+the refusal. Codex then pointed out that cleaning up after a side effect
+is not the same as not having it: `git worktree add` had already run, a
+branch had already existed, and on a denied action neither should ever
+have happened.
+
+So the ordering changed instead. The first verdict now precedes creation
+entirely — rules are told where the agent *would* run via
+`planned_path()` and `planned_branch()`, which create nothing. Cleanup
+survives for the later stages, where a refusal genuinely can arrive
+after the workspace exists, and it removes **only a workspace this call
+created**: a reattached worktree may hold a previous attempt's work.
+Cleanup stays best-effort — a refusal that cannot tidy up is still a
+refusal, and forcing removal is what ADR-0007 forbids.
 
 ### Reachable from the entry point briefs actually travel through
 
@@ -91,11 +105,16 @@ named. An `ApprovalStore` passed without a `PolicyEngine` is refused at
 construction: it reads as governed, authorises nothing, and would let
 everything through.
 
-### Opt-in at this milestone
+### Opt-in at this milestone, but never silent
 
-A run without a `policy` behaves exactly as before. The gate is not yet
-mandatory because no default rule set exists; making it mandatory is the
-right end state and belongs with the rule-authoring work.
+A run without a `policy` behaves exactly as before, because no default
+rule set exists yet; making the gate mandatory belongs with the
+rule-authoring work. Two things keep "opt-in" from meaning "invisible":
+an ungoverned run appends `policy.ungoverned` to its own ledger, so an
+auditor can prove which runs had no verdict; and
+`DirectorOrchestrator(require_policy=True)` refuses at construction, so
+an operator can have fail-closed today. The enforcement matrix carries
+the honest level: `policy/agent_launch_gate = PROMPT_ONLY`.
 
 ## Known limitations (stated, not implied)
 
@@ -164,6 +183,76 @@ also cover `resume`, that the worktree cleanup should be forced, and
 that `policy_actor` should default to the process identity. The first
 two contradict ADR-0007; the third would attribute an approval to the
 kernel rather than to the worker it was granted to.
+
+## Codex review addendum (2026-08-20, independent, post-repair)
+
+`codex exec --sandbox read-only --json` over the repaired gate returned
+**FAIL, 7 findings**. Transcript:
+`.gnosis/lab/kernel-reviews/codex-review-2026-08-20-policy-gate.jsonl`.
+Five were reproducible defects; two were true statements about design
+that the honest response is to *record*, not to pretend away.
+
+1. *(critical, repaired)* **The headline invariant was false a second
+   time.** The previous review moved the gate ahead of code intelligence;
+   Codex found the gate still ran after `worktrees.create()`, and `git
+   worktree add` is a child process that creates a branch and a
+   directory. A DENIED governed action therefore still mutated the
+   repository. Creation now happens *after* the verdict, and rules are
+   told where the agent would run via `planned_path()` /
+   `planned_branch()`. Pinned by a test asserting no branch and no
+   directory exist after a DENY.
+2. *(major, repaired)* **Only the first attempt was gated.** The verdict
+   was taken once before the retry loop, so attempt 2 launched under
+   attempt 1's authorization — and since the CLI re-reads its MCP config
+   from disk, a config rewritten after the approval was consumed
+   ungated. Every attempt now re-gates (`stage="attempt_N"`), and a
+   refusal mid-retry exits as a refusal rather than as an agent failure.
+3. *(major, repaired)* **The identity did not bind the workspace.** Same
+   prompt, same paths, same actor ⇒ same `action_id`, even after HEAD
+   moved. An approval for "run the migration" survived the tree changing
+   underneath it. The snapshot now carries
+   `workspace_fingerprint()` — HEAD, branch, and a hash of the dirty
+   state. Consequence, stated deliberately: an escalation approved
+   against one tree state does **not** carry to another, including a
+   retry after an attempt modified the tree. That is the correct
+   semantics for a human-approved action, and it is why the fingerprint
+   is content rather than a path.
+4. *(major, repaired)* **Only the last verdict was recorded.** The
+   pre-context and final-prompt verdicts shared one slot, so what was
+   authorized *before* repository-derived context existed was never
+   auditable. All verdicts are appended now.
+5. *(major, repaired)* **A refusal could die on its own evidence.**
+   `_safe_detail` called `repr()` outside the protective `try`, so a
+   rule detail whose `__repr__` raises killed the refusal path — the one
+   path that exists to keep refusals alive. It is total now. The
+   orchestrator also caught only an enumerated tuple of exceptions,
+   leaving an already-consumed brief stranded `IN_PROGRESS`; it now
+   records any failure as a visible `FAILED` brief carrying the
+   exception type, and report/escalation files are written atomically so
+   a poller never reads half a refusal.
+6. *(major, recorded not repaired)* **The launch gate is opt-in**, so a
+   default-constructed engine or orchestrator launches agents with no
+   verdict. Making it mandatory needs a default rule set that does not
+   exist yet. Two things changed instead: an ungoverned run appends
+   `policy.ungoverned` to its own ledger, so silence is no longer
+   indistinguishable from "nothing was asked"; and
+   `DirectorOrchestrator(require_policy=True)` gives an operator
+   fail-closed today. The matrix now carries
+   `policy/agent_launch_gate = PROMPT_ONLY`.
+7. *(major, recorded not repaired)* **Rules are not sandboxed.** A rule
+   body is in-process operator code and can spawn a process or write the
+   repository before returning its verdict. Python cannot enforce purity,
+   and pretending otherwise is what the enforcement matrix exists to
+   prevent: `policy/rule_purity = IGNORED`, with the note that the rule
+   set is trusted configuration at kernel privilege.
+
+**The invariant, restated precisely** — because "no child process at
+all" has now been falsified twice and a claim that keeps being wrong
+should stop being made: *no process that could act on the repository or
+on the agent's behalf runs before the verdict.* The kernel does run
+read-only `git` probes first, because computing the identity of the
+action being judged is part of judging it. That is stated here rather
+than discovered by a third reviewer.
 
 ## Repository-wide lint note
 

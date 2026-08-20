@@ -567,11 +567,15 @@ class TestEnforcementMatrix(unittest.TestCase):
         self.assertEqual(GNOSIS_ENFORCEMENT.undeclared("worktree", required), [])
         soft = {(c.adapter, c.restriction)
                 for c in GNOSIS_ENFORCEMENT.not_mechanically_enforced()}
-        # These two are exactly the residuals ADR-0009 documents; if a
-        # future change makes one HARD, this test must be updated
-        # deliberately rather than the claim drifting silently.
+        # Exactly the residuals the ADRs document; if a future change makes
+        # one HARD, this test must be updated deliberately rather than the
+        # claim drifting silently. The two `policy` entries are the ones
+        # Codex's review of ADR-0013 forced into the open: a rule body is
+        # unsandboxed operator code, and the launch gate is opt-in.
         self.assertEqual(soft, {("worktree", "shared_repo_isolation"),
-                                ("worktree", "orphaned_child_termination")})
+                                ("worktree", "orphaned_child_termination"),
+                                ("policy", "rule_purity"),
+                                ("policy", "agent_launch_gate")})
 
     def test_gnosis_matrix_is_pinned_exactly(self):
         # Four mutants survived the previous suite: deleting a claim,
@@ -585,6 +589,8 @@ class TestEnforcementMatrix(unittest.TestCase):
             ("replay", "no_network_in_strict_replay"): EnforcementLevel.HARD,
             ("claims", "no_stale_write_after_deposition"): EnforcementLevel.HARD,
             ("policy", "deny_by_default"): EnforcementLevel.HARD,
+            ("policy", "rule_purity"): EnforcementLevel.IGNORED,
+            ("policy", "agent_launch_gate"): EnforcementLevel.PROMPT_ONLY,
         }
         actual = {(c.adapter, c.restriction): c.level
                   for c in GNOSIS_ENFORCEMENT.claims()}

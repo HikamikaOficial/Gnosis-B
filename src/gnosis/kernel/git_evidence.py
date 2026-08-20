@@ -14,6 +14,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .canonical import hash_canonical
+
 _SHA_RE = re.compile(r"[0-9a-f]{40,64}\Z")
 
 
@@ -70,3 +72,34 @@ def capture_git_evidence(repo_path: Path) -> GitEvidence:
         status_porcelain=status,
         diff_stat=diff_stat,
     )
+
+
+def workspace_fingerprint(path: Path) -> dict[str, Any]:
+    """Identify a workspace by what an agent can SEE in it, not by where it is.
+
+    A path string is the wrong identity twice over: it is machine-local,
+    so anything keyed on it cannot travel; and it is stable across
+    completely different tree contents, so anything keyed on it treats two
+    materially different situations as one. Both matter — a replay
+    cassette needs the first (ADR-0010) and a policy approval needs the
+    second (ADR-0013: an approval to "run the migration" must not survive
+    the tree changing underneath it).
+
+    The dirty state is hashed rather than inlined: a porcelain listing of
+    a large tree would dominate whatever record this goes into, and only
+    its identity is load-bearing.
+
+    Read-only. It runs `git` — which is why the gate's invariant is
+    stated as "no process that could act on the repository or on the
+    agent's behalf", not "no process at all": computing the identity of
+    the thing being judged is part of judging it.
+    """
+    evidence = capture_git_evidence(path)
+    if not evidence.is_repo:
+        return {"is_repo": False}
+    return {
+        "is_repo": True,
+        "head_sha": evidence.head_sha,
+        "branch": evidence.branch,
+        "dirty_sha256": hash_canonical(evidence.status_porcelain),
+    }

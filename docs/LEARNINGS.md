@@ -67,3 +67,27 @@ Format:
 - Lesson: asserting the changed field would have passed and hidden it. Assert what the change is *for*.
 - Operational consequence: repair tests assert downstream consequences, not the edited field.
 - Revalidation condition: standing rule; no expiry.
+
+## L-0008 — A claim that has been falsified twice should be restated, not re-asserted more carefully
+- Status: VERIFIED
+- Evidence: ADR-0013. "No child process exists before the verdict" was falsified by the workflow review (code intelligence shells out), repaired, re-asserted — and falsified again by Codex (`git worktree add` runs before the gate and creates a branch).
+- Scope: absolute invariants in ADRs and docstrings.
+- Lesson: the second falsification was not bad luck; the claim was the wrong shape. An absolute over "any process" invites a counterexample from every helper on the path. The invariant that survives names the property that matters — *no process that could act on the repository or on the agent's behalf* — and states the deliberate exception (read-only probes that compute the identity being judged).
+- Operational consequence: when a review falsifies an invariant, fix the code AND ask whether the invariant is stated in a form that can be true. Re-asserting a repaired absolute is how the same review lands twice.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0009 — Cleaning up after a side effect is not the same as not having it
+- Status: VERIFIED
+- Evidence: ADR-0013. A DENY minted `gnosis/<task>` plus a worktree; the first repair removed them afterwards, which passed review. Codex then noted the branch had still existed and the subprocess had still run — the fix was ordering (`planned_path()`/`planned_branch()` describe the workspace without creating it), not compensation.
+- Scope: any gate whose subject needs an identity that seems to require the resource first.
+- Lesson: "create, ask, undo on refusal" leaves a window where the forbidden thing existed, and it fails whenever cleanup can fail (which ADR-0007 guarantees it can, since it refuses to force). If a decision needs a name, give it a *planned* name.
+- Operational consequence: gates get planned-identity accessors instead of provisioning-then-rollback.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0010 — Gate once, and the second attempt runs on the first attempt's authority
+- Status: VERIFIED
+- Evidence: ADR-0013 Codex finding 2. The verdict was taken before the retry loop; the CLI re-reads its MCP config from disk on every launch, so a config rewritten after approval was consumed with no new decision.
+- Scope: any authorization taken outside a loop that launches something inside it.
+- Lesson: an approval is for one launch, not for a task. Where the authorized inputs are re-read at launch time (config files, working trees, environment), a single pre-loop verdict is a TOCTOU hole by construction.
+- Operational consequence: the gate runs per attempt, and the action identity includes the workspace, so a material change re-escalates instead of riding the earlier decision.
+- Revalidation condition: standing rule; no expiry.

@@ -147,6 +147,14 @@ class WorktreeManager:
         _validate_task_id(task_id)
         return self.worktrees_root / task_id
 
+    def planned_branch(self, task_id: str) -> str:
+        """The branch this task WOULD use. Creates nothing.
+
+        Same reason as `planned_path`: a decision taken before the side
+        effect cannot be handed a name that only exists afterwards."""
+        _validate_task_id(task_id)
+        return BRANCH_PREFIX + task_id
+
     def exists(self, task_id: str) -> bool:
         """True when this task already has a kernel-minted worktree."""
         _validate_task_id(task_id)

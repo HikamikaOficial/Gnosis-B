@@ -33,7 +33,7 @@ from .failures import (
     SchedulerAction,
     scheduler_action,
 )
-from .git_evidence import capture_git_evidence
+from .git_evidence import capture_git_evidence, workspace_fingerprint
 from .ids import new_run_id
 from .lease import StaleLeaseError
 from .ledger import LedgerEvent, RunLedger
@@ -65,6 +65,18 @@ class _GateResult:
     outcome: TaskExecutionOutcome | None
 
 
+class _PolicyRefused(Exception):
+    """Carries a refusal out of the retry loop.
+
+    A per-attempt gate cannot return a refusal through `attempt()`, whose
+    contract is an ExecutionResult; inventing a fake failed result would
+    misreport a policy decision as an agent failure."""
+
+    def __init__(self, outcome: TaskExecutionOutcome) -> None:
+        super().__init__("policy refused this attempt")
+        self.outcome = outcome
+
+
 def _safe_detail(detail: Mapping[str, Any]) -> dict[str, Any]:
     """Rule-supplied detail, guaranteed to survive canonical JSON.
 
@@ -73,12 +85,28 @@ def _safe_detail(detail: Mapping[str, Any]) -> dict[str, Any]:
     and an unserializable value turned a refusal into an unhandled
     TypeError with no durable record (adversarial review). A refusal must
     always be recordable.
+
+    The fallback is itself guarded: `repr()` is arbitrary rule code too,
+    and a `__repr__` that raises would kill the refusal on the very path
+    that exists to keep refusals alive (Codex review). Nothing a rule
+    supplies gets to decide whether a denial is recorded.
     """
     try:
-        hash_canonical(dict(detail))
+        materialized = dict(detail)
+    except Exception:  # noqa: BLE001 - a hostile Mapping must not kill a denial
+        return {"_unencodable_detail": "<detail could not be materialized>"}
+    try:
+        hash_canonical(materialized)
     except (TypeError, ValueError):
-        return {"_unencodable_detail": repr(dict(detail))[:2000]}
-    return dict(detail)
+        pass
+    except Exception:  # noqa: BLE001 - see above
+        return {"_unencodable_detail": "<detail raised during encoding>"}
+    else:
+        return materialized
+    try:
+        return {"_unencodable_detail": repr(materialized)[:2000]}
+    except Exception:  # noqa: BLE001 - a __repr__ that raises is still not our failure
+        return {"_unencodable_detail": "<detail repr raised>"}
 
 
 def _safe_decision(decision: PolicyDecision) -> dict[str, Any]:
@@ -416,35 +444,32 @@ class TaskEngine:
             # here would renew a dead worker's lease forever and make the
             # task permanently unreclaimable (adversarial review, reported
             # independently by four reviewers with a live reproduction).
-            worktree_handle: WorktreeHandle | None = None
-            worktree_was_fresh = False
-            exec_root = repo_path
-            if worktrees is not None:
-                if worktrees.source_repo.resolve() != Path(repo_path).resolve():
-                    # Otherwise the task would silently execute, verify and
-                    # report against a DIFFERENT repository than the caller
-                    # named (Codex review).
-                    raise ValueError(
-                        f"worktree manager operates on {worktrees.source_repo}, "
-                        f"but this task was given repo_path {repo_path}"
-                    )
-                # Whether we minted it matters: a policy refusal may
-                # only undo the workspace THIS call created, never one
-                # that already held a previous attempt's work.
-                worktree_was_fresh = not worktrees.exists(task_id)
-                worktree_handle = worktrees.create(task_id)  # idempotent/reattach
-                exec_root = Path(worktree_handle.path)
+            if worktrees is not None and worktrees.source_repo.resolve() != Path(repo_path).resolve():
+                # Otherwise the task would silently execute, verify and
+                # report against a DIFFERENT repository than the caller
+                # named (Codex review).
+                raise ValueError(
+                    f"worktree manager operates on {worktrees.source_repo}, "
+                    f"but this task was given repo_path {repo_path}"
+                )
 
+            # The worktree is NOT minted here any more. `git worktree add`
+            # is a child process that creates a branch and a directory, and
+            # it used to run before the first verdict — so a DENIED action
+            # still mutated the repository, falsifying this unit's headline
+            # invariant for a second time (Codex review). Creation now
+            # happens inside _execute_guarded, after the gate; rules are
+            # told where the agent WOULD run via `planned_path()`.
             return self._execute_guarded(
                 task_id=task_id, objective=objective, prompt=prompt,
-                exec_root=exec_root, worktree=worktree_handle,
+                repo_path=Path(repo_path),
                 verifier=verifier, timeout_s=timeout_s,
                 cancellation_token=cancellation_token, mcp=mcp,
                 code_intelligence=code_intelligence, focus_symbols=focus_symbols,
                 max_context_chars=max_context_chars, authority=authority,
                 grant=grant, guard=guard, policy=policy, approvals=approvals,
                 policy_actor=policy_actor or worker_id or "agent://unattributed",
-                worktrees=worktrees, worktree_was_fresh=worktree_was_fresh,
+                worktrees=worktrees,
             )
         finally:
             if pump is not None:
@@ -452,8 +477,8 @@ class TaskEngine:
 
     def _gate(
         self, *, stage: str, task_id: str, objective: str, prompt: str,
-        exec_root: Path, mcp: McpRunnerConfig | None,
-        worktree: WorktreeHandle | None, policy: PolicyEngine,
+        exec_root: Path, planned_root: Path, mcp: McpRunnerConfig | None,
+        worktree_branch: str | None, policy: PolicyEngine,
         approvals: ApprovalStore | None, policy_actor: str,
         code_intelligence: CodeIntelligenceProvider | None,
         focus_symbols: Sequence[str] | None,
@@ -466,7 +491,9 @@ class TaskEngine:
             intervention_point=AGENT_RUN_INTERVENTION_POINT,
             tool="claude_cli", actor=policy_actor,
             intent=agent_run_intent(
-                _runner_binary(self.cli_runner), exec_root,
+                # Where the agent WOULD run, which before the worktree is
+                # minted is not where the identity is measured.
+                _runner_binary(self.cli_runner), planned_root,
                 permission_mode=DEFAULT_PERMISSION_MODE, model=None, mcp=mcp,
             ),
             payload={
@@ -483,13 +510,20 @@ class TaskEngine:
                     type(code_intelligence).__name__ if code_intelligence else None
                 ),
                 "focus_symbols": sorted(focus_symbols or ()),
+                # What the agent can SEE. Without it an approval for "run
+                # the migration" survived HEAD moving underneath it: same
+                # prompt, same paths, same action_id, materially different
+                # action (Codex review). Read-only git probes are the one
+                # thing the kernel runs before a verdict, because computing
+                # the identity being judged is part of judging it.
+                "workspace": workspace_fingerprint(exec_root),
                 # Stable worktree identity only: `created_at` is a
                 # per-submission value that made every approval
                 # un-reusable, defeating the documented "approve, then
                 # resubmit" flow (adversarial review).
-                "worktree_branch": worktree.branch if worktree else None,
+                "worktree_branch": worktree_branch,
             },
-            context={"exec_root": str(exec_root)},
+            context={"exec_root": str(planned_root)},
         )
         decision = policy.decide(snapshot)
         if approvals is not None:
@@ -498,7 +532,7 @@ class TaskEngine:
             return _GateResult(decision=decision, outcome=None)
         return _GateResult(decision=None, outcome=self._refused_outcome(
             task_id, objective, decision, store, task_sm, run_ids,
-            classifications, worktrees=worktrees, worktree=worktree,
+            classifications, worktrees=worktrees, task_key=task_id,
         ))
 
     def _refused_outcome(
@@ -511,31 +545,28 @@ class TaskEngine:
         run_ids: list[str],
         classifications: list[FailureClassification],
         worktrees: WorktreeManager | None = None,
-        worktree: WorktreeHandle | None = None,
+        task_key: str | None = None,
     ) -> TaskExecutionOutcome:
-        """Materialize a policy refusal as durable evidence, and undo the
-        workspace this call minted.
+        """Materialize a policy refusal as durable evidence, and undo any
+        workspace this call had already minted.
 
         A refused action still opens a run: "policy said no" must leave a
         trace with the same shape as any other outcome, or a denial is
-        indistinguishable from a task that was never attempted. No child
-        process is created and the repository is never touched.
+        indistinguishable from a task that was never attempted.
 
-        The kernel does mint the task's worktree before asking (rules are
-        told where the agent would run, which needs the real path), so a
-        refusal cleans up after itself: a branch minted for an action that
-        was then forbidden is a side effect the gate should not have left
-        behind (verified: a DENY used to leave `gnosis/<task>` behind).
-        Only a workspace THIS call created is removed — a reattached one
-        may hold a previous attempt's work, and ADR-0007's provenance gate
-        refuses anything dirty regardless.
+        The first verdict now precedes worktree creation entirely, so the
+        common refusal leaves nothing to undo. Cleanup remains for the
+        later stages — a refusal at `final_prompt` or on a retry happens
+        after the workspace exists — and it removes only a workspace THIS
+        call created: a reattached one may hold a previous attempt's work,
+        and ADR-0007's provenance gate refuses anything dirty regardless.
         """
-        if worktrees is not None and worktree is not None:
+        if worktrees is not None and task_key is not None:
             try:
-                worktrees.remove(worktree, delete_branch=True)
-            except WorktreeError:
-                # Cleanup is best-effort: a refusal that cannot tidy up is
-                # still a refusal, and ADR-0007 forbids forcing it.
+                worktrees.remove(worktrees.load_handle(task_key), delete_branch=True)
+            except (WorktreeError, FileNotFoundError, OSError):
+                # Best-effort: a refusal that cannot tidy up is still a
+                # refusal, and ADR-0007 forbids forcing it.
                 pass
         run_id = new_run_id()
         run_ids.append(run_id)
@@ -608,8 +639,7 @@ class TaskEngine:
         task_id: str,
         objective: str,
         prompt: str,
-        exec_root: Path,
-        worktree: WorktreeHandle | None,
+        repo_path: Path,
         verifier: Verifier | None,
         timeout_s: float,
         cancellation_token: CancellationToken | None,
@@ -624,7 +654,6 @@ class TaskEngine:
         approvals: ApprovalStore | None = None,
         policy_actor: str = "agent://unattributed",
         worktrees: WorktreeManager | None = None,
-        worktree_was_fresh: bool = False,
     ) -> TaskExecutionOutcome:
         task_sm = TaskStateMachine(TaskState.CREATED)
         task_sm.transition(TaskState.PLANNED)
@@ -637,26 +666,52 @@ class TaskEngine:
         run_ids: list[str] = []
         classifications: list[FailureClassification] = []
         last_result: ExecutionResult | None = None
-        refusal_worktrees = worktrees if worktree_was_fresh else None
+        # Verdicts awaiting a run to be recorded on. Every one of them is
+        # appended, not just the last: overwriting a single slot meant the
+        # pre-context verdict — what was authorized BEFORE repository-
+        # derived context existed — was never auditable (Codex review).
+        pending_decisions: list[PolicyDecision] = []
 
-        # Fail-closed gate BEFORE any child process exists at all.
-        # Stage 1 runs before code intelligence, which SHELLS OUT: the
-        # previous single gate sat after it, so a denied action had
-        # already run kernel-launched subprocesses against the workspace,
-        # falsifying this unit's headline invariant (adversarial review).
-        policy_decision: PolicyDecision | None = None
+        # Fail-closed gate before any process that could act on the
+        # repository or on the agent's behalf. Stage 1 runs before code
+        # intelligence, which SHELLS OUT, and before the worktree is
+        # minted, which is itself a `git worktree add` child that creates a
+        # branch — both used to happen first (two successive reviews).
+        planned_root = worktrees.planned_path(task_id) if worktrees is not None else repo_path
         if policy is not None:
             refusal = self._gate(
                 stage="pre_context", task_id=task_id, objective=objective,
-                prompt=prompt, exec_root=exec_root, mcp=mcp, worktree=worktree,
+                prompt=prompt,
+                # Nothing exists at planned_root yet, so the identity the
+                # rules judge is the SOURCE repo's — which is what the
+                # worktree will be cut from.
+                exec_root=repo_path, planned_root=planned_root, mcp=mcp,
+                worktree_branch=(
+                    worktrees.planned_branch(task_id) if worktrees is not None else None
+                ),
                 policy=policy, approvals=approvals, policy_actor=policy_actor,
                 code_intelligence=code_intelligence, focus_symbols=focus_symbols,
                 store=store, task_sm=task_sm, run_ids=run_ids,
-                classifications=classifications, worktrees=refusal_worktrees,
+                classifications=classifications, worktrees=None,
             )
             if refusal.outcome is not None:
                 return refusal.outcome
-            policy_decision = refusal.decision
+            if refusal.decision is not None:
+                pending_decisions.append(refusal.decision)
+
+        # Authorized: now the workspace may be minted.
+        worktree: WorktreeHandle | None = None
+        exec_root = repo_path
+        if worktrees is not None:
+            # Whether we minted it matters: a policy refusal may only undo
+            # the workspace THIS call created, never one that already holds
+            # a previous attempt's work.
+            worktree_was_fresh = not worktrees.exists(task_id)
+            worktree = worktrees.create(task_id)  # idempotent/reattach
+            exec_root = Path(worktree.path)
+        else:
+            worktree_was_fresh = False
+        refusal_worktrees = worktrees if worktree_was_fresh else None
 
         pre_git = capture_git_evidence(exec_root)
 
@@ -676,8 +731,10 @@ class TaskEngine:
                     # before a first verdict.
                     refusal = self._gate(
                         stage="final_prompt", task_id=task_id, objective=objective,
-                        prompt=effective_prompt, exec_root=exec_root, mcp=mcp,
-                        worktree=worktree, policy=policy, approvals=approvals,
+                        prompt=effective_prompt, exec_root=exec_root,
+                        planned_root=exec_root, mcp=mcp,
+                        worktree_branch=worktree.branch if worktree else None,
+                        policy=policy, approvals=approvals,
                         policy_actor=policy_actor,
                         code_intelligence=code_intelligence,
                         focus_symbols=focus_symbols, store=store, task_sm=task_sm,
@@ -686,7 +743,8 @@ class TaskEngine:
                     )
                     if refusal.outcome is not None:
                         return refusal.outcome
-                    policy_decision = refusal.decision
+                    if refusal.decision is not None:
+                        pending_decisions.append(refusal.decision)
 
         heartbeat_failures: list[str] = []
 
@@ -713,6 +771,28 @@ class TaskEngine:
         def attempt(attempt_number: int) -> ExecutionResult:
             nonlocal last_result
             guard()
+            if policy is not None and attempt_number > 1:
+                # Every attempt is a fresh launch and must carry a fresh
+                # verdict. Gating once before the loop let a retry consume
+                # an MCP config rewritten after the approval, and let a
+                # workspace changed by attempt 1 run under attempt 1's
+                # authorization (Codex review). The identity includes both,
+                # so a material change re-escalates instead of riding the
+                # earlier decision.
+                regate = self._gate(
+                    stage=f"attempt_{attempt_number}", task_id=task_id,
+                    objective=objective, prompt=effective_prompt,
+                    exec_root=exec_root, planned_root=exec_root, mcp=mcp,
+                    worktree_branch=worktree.branch if worktree else None,
+                    policy=policy, approvals=approvals, policy_actor=policy_actor,
+                    code_intelligence=code_intelligence, focus_symbols=focus_symbols,
+                    store=store, task_sm=task_sm, run_ids=run_ids,
+                    classifications=classifications, worktrees=refusal_worktrees,
+                )
+                if regate.outcome is not None:
+                    raise _PolicyRefused(regate.outcome)
+                if regate.decision is not None:
+                    pending_decisions.append(regate.decision)
             run_id = new_run_id()
             run_ids.append(run_id)
             paths = store.create_run(run_id, task_id)
@@ -723,11 +803,21 @@ class TaskEngine:
                     paths.root / "code_intelligence.json",
                     json.dumps(ci_evidence, indent=2, sort_keys=True),
                 )
-            if policy_decision is not None:
-                # The verdict the child actually ran under, on the run's
-                # own ledger: an allowed action is evidence too, not just
-                # a refused one.
-                ledger.append(run_id, "policy.decision", _safe_decision(policy_decision))
+            if policy is None:
+                # Silence is indistinguishable from "nothing was asked".
+                # The gate is opt-in at this milestone, so an ungoverned
+                # run says so on its own ledger and an auditor can prove
+                # which runs had no verdict (Codex review).
+                ledger.append(run_id, "policy.ungoverned", {
+                    "intervention_point": AGENT_RUN_INTERVENTION_POINT,
+                })
+            while pending_decisions:
+                # Every verdict reaches a ledger, including the ones taken
+                # before this run existed: an allowed action is evidence
+                # too, not just a refused one.
+                ledger.append(
+                    run_id, "policy.decision", _safe_decision(pending_decisions.pop(0)),
+                )
             ledger.append(run_id, "run.attempt_started", {
                 "attempt": attempt_number, "objective": objective,
                 "mcp": mcp.to_dict() if mcp is not None else None,
@@ -810,7 +900,12 @@ class TaskEngine:
             # stops rather than repeating an action nobody understood.
             return scheduler_action(classifications[-1]) is SchedulerAction.RETRY
 
-        execute_with_retry(attempt, should_retry, self.retry_policy)
+        try:
+            execute_with_retry(attempt, should_retry, self.retry_policy)
+        except _PolicyRefused as refused:
+            # A retry the policy declined is a refusal, not a task failure:
+            # it keeps the refusal's own state, report and reason code.
+            return refused.outcome
 
         guard()
         post_git = capture_git_evidence(exec_root)

@@ -575,6 +575,186 @@ class TestPolicyGate(unittest.TestCase):
         self.assertEqual(gap.classification.failure, FailureClass.NEEDS_HUMAN)
         self.assertFalse(gap.classification.penalizes_agent)
 
+    def test_a_denied_run_never_mints_a_worktree_or_a_branch(self):
+        # `git worktree add` is a child process that creates a branch and a
+        # directory, and it used to run BEFORE the first verdict — so the
+        # unit's headline invariant was false a second time (Codex review).
+        worktrees = WorktreeManager(self.repo, self.root / "worktrees")
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]),
+            retry_policy=RetryPolicy(max_attempts=1),
+        )
+        engine.execute_task(
+            task_id="TASK-POL", objective="Demo", prompt="do it", repo_path=self.repo,
+            worktrees=worktrees, policy_actor="agent://worker-a",
+            policy=self._engine_with(lambda s: RuleOutcome(Verdict.DENY, "security:no")),
+        )
+        self.assertFalse(worktrees.exists("TASK-POL"))
+        self.assertFalse(worktrees.planned_path("TASK-POL").exists())
+        branches = subprocess.run(
+            ["git", "branch", "--list", worktrees.planned_branch("TASK-POL")],
+            cwd=self.repo, capture_output=True, text=True, check=True,
+        ).stdout
+        self.assertEqual(branches.strip(), "")
+
+    def test_rules_are_told_where_the_agent_would_run_before_it_exists(self):
+        (self.repo / "seed.txt").write_text("seed", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "seed"], cwd=self.repo,
+                       check=True, capture_output=True)
+        worktrees = WorktreeManager(self.repo, self.root / "worktrees")
+        seen: list[ActionSnapshot] = []
+
+        def capture(snapshot):
+            seen.append(snapshot)
+            return RuleOutcome(Verdict.ALLOW, "ok:seen")
+
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]),
+            retry_policy=RetryPolicy(max_attempts=1),
+        )
+        engine.execute_task(
+            task_id="TASK-POL", objective="Demo", prompt="do it", repo_path=self.repo,
+            worktrees=worktrees, policy=self._engine_with(capture),
+            policy_actor="agent://worker-a",
+        )
+        planned = str(worktrees.planned_path("TASK-POL"))
+        self.assertEqual(seen[0].context["exec_root"], planned)
+        self.assertEqual(seen[0].payload["worktree_branch"],
+                         worktrees.planned_branch("TASK-POL"))
+
+    def test_every_attempt_is_gated_not_just_the_first(self):
+        # Gating once before the retry loop let attempt 2 launch under
+        # attempt 1's authorization (Codex review).
+        seen: list[str] = []
+
+        def capture(snapshot):
+            seen.append(snapshot.payload["stage"])
+            return RuleOutcome(Verdict.ALLOW, "ok:seen")
+
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=_FakeCliRunner(["fail", "fail"]),
+            retry_policy=_FAST_RETRY,
+        )
+        engine.execute_task(
+            task_id="TASK-POL", objective="Demo", prompt="do it", repo_path=self.repo,
+            policy=self._engine_with(capture), policy_actor="agent://worker-a",
+        )
+        self.assertIn("attempt_2", seen)
+
+    def test_a_retry_refused_by_policy_stops_and_reports_as_a_refusal(self):
+        calls = {"n": 0}
+
+        def deny_after_first(snapshot):
+            calls["n"] += 1
+            if snapshot.payload["stage"].startswith("attempt_"):
+                return RuleOutcome(Verdict.DENY, "security:revoked")
+            return RuleOutcome(Verdict.ALLOW, "ok:first")
+
+        runner = _FakeCliRunner(["fail", "fail", "fail"])
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=runner, retry_policy=_FAST_RETRY,
+        )
+        outcome = engine.execute_task(
+            task_id="TASK-POL", objective="Demo", prompt="do it", repo_path=self.repo,
+            policy=self._engine_with(deny_after_first), policy_actor="agent://worker-a",
+        )
+        self.assertEqual(runner.calls, 1)          # attempt 2 never launched
+        self.assertEqual(outcome.classification.reason_code, "security:revoked")
+        self.assertEqual(outcome.report.status, ReportStatus.ESCALATION_REQUIRED)
+
+    def test_an_mcp_rewrite_between_attempts_is_a_new_decision(self):
+        # The approved configuration and the configuration a retry consumes
+        # could differ: the CLI re-reads the file (Codex review).
+        config = self.repo / "tools.json"
+        config.write_text('{"mcpServers": {}}', encoding="utf-8")
+        fingerprints: list[object] = []
+
+        def capture(snapshot):
+            fingerprints.append(snapshot.payload["mcp"])
+            config.write_text('{"mcpServers": {"danger": {}}}', encoding="utf-8")
+            return RuleOutcome(Verdict.ALLOW, "ok:seen")
+
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=_FakeCliRunner(["fail", "fail"]),
+            retry_policy=_FAST_RETRY,
+        )
+        engine.execute_task(
+            task_id="TASK-POL", objective="Demo", prompt="do it", repo_path=self.repo,
+            mcp=McpRunnerConfig(config_paths=(str(config),)),
+            policy=self._engine_with(capture), policy_actor="agent://worker-a",
+        )
+        self.assertNotEqual(fingerprints[0], fingerprints[-1])
+
+    def test_the_workspace_state_is_part_of_the_action_identity(self):
+        # An approval for "run the migration" must not survive HEAD moving
+        # underneath it (Codex review).
+        ids: list[str] = []
+
+        def capture(snapshot):
+            ids.append(snapshot.action_id())
+            return RuleOutcome(Verdict.ALLOW, "ok:seen")
+
+        def run_once():
+            TaskEngine(
+                run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]),
+                retry_policy=RetryPolicy(max_attempts=1),
+            ).execute_task(
+                task_id="TASK-POL", objective="Demo", prompt="do it",
+                repo_path=self.repo, policy=self._engine_with(capture),
+                policy_actor="agent://worker-a",
+            )
+
+        run_once()
+        (self.repo / "moved.txt").write_text("changed", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "move HEAD"], cwd=self.repo,
+                       check=True, capture_output=True)
+        run_once()
+        self.assertNotEqual(ids[0], ids[-1])
+
+    def test_both_gate_verdicts_reach_a_ledger(self):
+        # Overwriting a single slot meant the pre-context verdict — what was
+        # authorized BEFORE repository-derived context existed — was never
+        # auditable (Codex review).
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]),
+            retry_policy=RetryPolicy(max_attempts=1),
+        )
+        outcome = engine.execute_task(
+            task_id="TASK-POL", objective="Demo", prompt="do it", repo_path=self.repo,
+            policy=self._engine_with(lambda s: RuleOutcome(Verdict.ALLOW, "ok:seen")),
+            code_intelligence=_FakeCodeIntelligenceProvider(), focus_symbols=["compute"],
+            policy_actor="agent://worker-a",
+        )
+        events = self.store.ledger_for(outcome.run_ids[-1]).read_all()
+        decisions = [e for e in events if e.event_type == "policy.decision"]
+        self.assertEqual(len(decisions), 2)
+
+    def test_a_rule_detail_whose_repr_raises_still_records_the_refusal(self):
+        # `repr()` is arbitrary rule code too, and it sat outside the
+        # protective try on the very path that keeps refusals alive.
+        class Hostile:
+            def __repr__(self):
+                raise RuntimeError("no repr for you")
+
+        outcome = self._run(self._engine_with(
+            lambda s: RuleOutcome(Verdict.DENY, "security:no", detail={"x": Hostile()})))
+        self.assertEqual(outcome.final_task_state, TaskState.FAILED)
+        self.assertIn("_unencodable_detail", outcome.classification.detail)
+
+    def test_an_ungoverned_run_says_so_on_its_own_ledger(self):
+        # The gate is opt-in at this milestone, so silence must not be
+        # indistinguishable from "nothing was asked" (Codex review).
+        engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
+        outcome = engine.execute_task(
+            task_id="TASK-UNGOVERNED", objective="Demo", prompt="do it",
+            repo_path=self.repo,
+        )
+        events = [e.event_type for e in self.store.ledger_for(outcome.run_ids[-1]).read_all()]
+        self.assertIn("policy.ungoverned", events)
+        self.assertNotIn("policy.decision", events)
+
     def test_a_run_without_a_policy_is_unchanged(self):
         # The gate is opt-in at this milestone; ungoverned runs behave
         # exactly as before.
