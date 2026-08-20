@@ -69,13 +69,36 @@ class HoldStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def place(self, hold: RateLimitHold) -> RateLimitHold:
-        with FileLock(lock_path_for(self.path), timeout_s=self._lock_timeout_s):
-            with self.path.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(hold.to_dict(), sort_keys=True) + "\n")
+        self._append({"row": "hold", **hold.to_dict()})
         return hold
 
+    def supersede(self, credential: str, at: float, reason: str) -> None:
+        """Draw a line: earlier rows for this credential no longer apply.
+
+        `reconcile` deliberately keeps the MOST RESTRICTIVE competing
+        hold, so two observations of a shut window can never relax each
+        other by arriving in the wrong order. But that also means an
+        appended row can never NARROW an existing hold — which made
+        `probe()` dead code, since a PROBE row simply lost to the ACCOUNT
+        row it was meant to replace. Its own test caught it.
+
+        So observations and decisions are different rows. An observation
+        competes; a decision supersedes. Both are durable and both name a
+        reason, which is the property that matters: a window is never
+        reopened silently, only by a recorded act.
+        """
+        self._append({"row": "supersede", "credential": credential,
+                      "at": at, "reason": reason})
+
+    def _append(self, payload: dict[str, Any]) -> None:
+        with (
+            FileLock(lock_path_for(self.path), timeout_s=self._lock_timeout_s),
+            self.path.open("a", encoding="utf-8") as fh,
+        ):
+            fh.write(json.dumps(payload, sort_keys=True) + "\n")
+
     def records(self) -> list[RateLimitHold]:
-        """Every durable hold row, torn tail tolerated.
+        """Live hold rows: everything after the last supersede per credential.
 
         A row half-written by a killed process is skipped rather than
         raising: the rest of the file is still true, and refusing to read
@@ -90,7 +113,12 @@ class HoldStore:
             if not line:
                 continue
             try:
-                holds.append(RateLimitHold.from_dict(json.loads(line)))
+                payload = json.loads(line)
+                if payload.get("row") == "supersede":
+                    credential = payload["credential"]
+                    holds = [h for h in holds if h.credential != credential]
+                    continue
+                holds.append(RateLimitHold.from_dict(payload))
             except (json.JSONDecodeError, KeyError, ValueError, TypeError):
                 continue
         return holds
@@ -205,9 +233,15 @@ class TaskScheduler:
         unattributed probe would admit every queued resume at once, which
         is the stampede a probe exists to prevent (ADR-0012).
         """
+        self.live_holds()
         current = self.registry.hold_for(self.credential)
         reason = current.reason_code if current else "rate_limited:probe"
         reset_at = current.reset_at if current else None
+        # Narrowing is a DECISION, not an observation: without drawing the
+        # line first, the broader ACCOUNT hold simply outranks this row
+        # and the probe never takes effect.
+        self.holds.supersede(
+            self.credential, self.clock(), reason=f"probe:{run_id}")
         return self.holds.place(RateLimitHold(
             credential=self.credential, scope=HoldScope.PROBE, reason_code=reason,
             reset_at=reset_at, placed_at=self.clock(), probe_holder=run_id,

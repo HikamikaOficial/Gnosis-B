@@ -1,6 +1,6 @@
 # GNOSIS Project State
 
-**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE 3/4
+**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE (4/4)
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
 **Last update:** 2026-08-20
@@ -47,7 +47,7 @@ findings repaired pre- or immediately post-commit:
 - L-0004: a refuted review finding resurrected as a real bug (shared
   FileLock instances) — refutation assumptions are now recorded.
 
-## Adapter milestone (1 of 4)
+## Adapter milestone (COMPLETE)
 
 The four mechanisms that existed but nothing called. Directive 9's rule
 governs the order of work here: **prefer wiring over documenting**.
@@ -91,13 +91,19 @@ governs the order of work here: **prefer wiring over documenting**.
   the internal reviewer agents died on usage credits. Self-review found
   three real defects, one critical — the rule-9 tamper check was blind
   in the normal case (an already-dirty tree), see L-0011.
-- [ ] Hold/park plane + `boot_sweep` under a scheduler (no production
-  caller today, stated in ADR-0012).
+- [x] **Hold/park plane + `boot_sweep` under a scheduler** (ADR-0016).
+  `TaskScheduler` consults holds before a launch (a refusal PARKS, never
+  fails), places a durable hold when a run classifies RATE_LIMITED, and
+  sweeps stranded runs at boot. Self-review found `probe()` was inert —
+  a PROBE row could never narrow an ACCOUNT hold under the
+  most-restrictive rule — so the store now separates observations (which
+  compete) from decisions (which supersede, with a reason). No
+  independent review: both channels are unavailable.
 
-Suite: **535 tests, all passing**; mypy strict clean (47 files); ruff at
+Suite: **552 tests, all passing**; mypy strict clean (47 files); ruff at
 the recorded backlog baseline (20 pre-existing findings in untouched
 files; `.gnosis/state/lint_baseline.json` fails the run if it rises).
-Captured transcript, not prose: `.gnosis/evidence/20260820T214621Z/`.
+Captured transcript, not prose: `.gnosis/evidence/20260820T215628Z/`.
 
 ## Fixed locations
 

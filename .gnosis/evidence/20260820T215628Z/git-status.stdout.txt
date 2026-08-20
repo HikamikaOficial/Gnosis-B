@@ -1,0 +1,8 @@
+ M .claude/agent-memory/evidence-reviewer/MEMORY.md
+ M src/gnosis/kernel/scheduler.py
+?? .claude/agent-memory/evidence-reviewer/learning_adr_evidence_lines_unverified.md
+?? .claude/agent-memory/evidence-reviewer/learning_replay_fingerprint_self_reference.md
+?? .gnosis/evidence/20260820T215628Z/
+?? .gnosis/lab/kernel-reviews/codex-review-2026-08-20-replay-runner.jsonl
+?? docs/adr/ADR-0016-scheduler-hold-plane.md
+?? tests/test_scheduler.py
