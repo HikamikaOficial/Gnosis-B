@@ -35,6 +35,7 @@ this table, so it is machine-checked rather than prose.
 """
 from __future__ import annotations
 
+import re
 import shlex
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -98,6 +99,10 @@ class CommandIntent:
     # Values attached to flags (`--output=/etc/x`), separated so a rule
     # sees them instead of them hiding inside an opaque flag token.
     flag_values: tuple[tuple[str, str], ...] = ()
+    # Tokens the SHELL will expand (`~/...`, `$HOME/...`, `%VAR%\...`).
+    # The kernel cannot resolve them purely and refuses to guess, so they
+    # are surfaced rather than laundered into a false in-workspace path.
+    unexpanded: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -106,6 +111,7 @@ class CommandIntent:
             "resolved_paths": list(self.resolved_paths),
             "cwd": self.cwd,
             "flag_values": [list(pair) for pair in self.flag_values],
+            "unexpanded": list(self.unexpanded),
         }
 
     def has_flag(self, *names: str) -> bool:
@@ -135,29 +141,36 @@ def parse_command(argv: Sequence[str] | str, cwd: Path | None = None) -> Command
     heuristic missed no longer slips past a workspace rule unseen. For a
     fail-closed engine, over-resolving is the safe direction.
     """
-    argv = shlex.split(argv, posix=False) if isinstance(argv, str) else list(argv)
-    if not argv:
+    tokens = _tokenize(argv) if isinstance(argv, str) else list(argv)
+    if not tokens:
         raise PolicyError("cannot parse an empty command")
-    program = argv[0]
+    program = tokens[0]
     flags: list[str] = []
     operands: list[str] = []
     flag_values: list[tuple[str, str]] = []
-    for token in argv[1:]:
-        if token.startswith("-") and token != "-":
+    for token in tokens[1:]:
+        if token.startswith("-") and token != "-" and token != "--":
             flags.append(token)
-            if "=" in token:
-                # `--output=/etc/passwd`: the value must be visible to
-                # rules, or the attached spelling silently bypasses the
-                # separated one (verified bypass).
-                name, _, value = token.partition("=")
-                if value:
-                    flag_values.append((name, value))
+            name, value = _split_attached_value(token)
+            if value:
+                flag_values.append((name, value))
         else:
             operands.append(token)
 
     candidates = [*operands, *(value for _, value in flag_values)]
     resolved: list[str] = []
+    unexpanded: list[str] = []
     for candidate_text in candidates:
+        if _needs_shell_expansion(candidate_text):
+            # `~/.ssh/id_rsa`, `$HOME/x`, `%USERPROFILE%\x`: the shell will
+            # turn these into absolute paths the kernel cannot compute
+            # purely. Anchoring them under cwd would MANUFACTURE a false
+            # in-workspace path — the exact laundering a workspace rule
+            # must not be handed (adversarial review). They are surfaced
+            # separately so a rule can deny on their mere presence.
+            if candidate_text not in unexpanded:
+                unexpanded.append(candidate_text)
+            continue
         if cwd is None and not _looks_like_path(candidate_text):
             continue  # no anchor to resolve against; do not invent one
         candidate = Path(candidate_text)
@@ -173,7 +186,52 @@ def parse_command(argv: Sequence[str] | str, cwd: Path | None = None) -> Command
         resolved_paths=tuple(resolved),
         cwd=_normalize(Path(cwd)) if cwd is not None else None,
         flag_values=tuple(flag_values),
+        unexpanded=tuple(unexpanded),
     )
+
+
+def _tokenize(command: str) -> list[str]:
+    """Tokenize a shell string with quotes REMOVED and backslashes kept.
+
+    `shlex.split(posix=False)` leaves the quote characters inside the
+    token, so `"/etc"` stops looking absolute and gets anchored under the
+    workspace — a one-character bypass of every path rule (adversarial
+    review, reproduced). Plain `posix=True` fixes that but eats Windows
+    backslashes (`C:\\Windows\\x` → `C:Windowsx`), which is the same bug
+    wearing a different hat. Disabling escape processing gives both.
+    """
+    lexer = shlex.shlex(command, posix=True)
+    lexer.whitespace_split = True
+    lexer.escape = ""       # keep `\` literal: Windows paths survive
+    lexer.commenters = ""   # `#` is a legal character in a path
+    try:
+        return list(lexer)
+    except ValueError as exc:
+        # An unbalanced quote is malformed input, not a parse we may guess
+        # at: raising a typed error keeps the caller fail-closed.
+        raise PolicyError(f"cannot tokenize command: {exc}") from exc
+
+
+def _split_attached_value(token: str) -> tuple[str, str | None]:
+    """Split `--output=/etc/x` and the separator-less `-o/etc/x`.
+
+    curl/gcc/tar/find all accept `-o<value>`; treating it as an opaque
+    flag hid its path from every rule (adversarial review).
+    """
+    if "=" in token:
+        name, _, value = token.partition("=")
+        return name, value or None
+    if (len(token) > 2 and not token.startswith("--")
+            and _looks_like_path(token[2:])):
+        return token[:2], token[2:]
+    return token, None
+
+
+_EXPANSION_RE = re.compile(r"(^~)|(\$\w+)|(\$\{)|(%\w+%)")
+
+
+def _needs_shell_expansion(token: str) -> bool:
+    return bool(_EXPANSION_RE.search(token))
 
 
 def _looks_like_path(token: str) -> bool:
@@ -182,17 +240,53 @@ def _looks_like_path(token: str) -> bool:
 
 
 def _normalize(path: Path) -> str:
-    """Lexical normalization (no symlink resolution: that needs the disk)."""
+    r"""Lexical normalization into a canonical identity.
+
+    No symlink resolution (that needs the disk and would break purity),
+    but everything that can be decided lexically is: `..` collapsing that
+    does NOT cancel a preserved `..` against another, and Windows
+    aliasing (case, `\\?\` prefixes, trailing dots/spaces) folded so one
+    real file has ONE identity — otherwise an approval or an allowlist
+    keyed on the string is trivially side-stepped by respelling
+    (adversarial review).
+    """
     text = str(path).replace("\\", "/")
-    pure = PureWindowsPath(text) if (len(text) > 1 and text[1] == ":") else PurePosixPath(text)
+    # `\\?\C:\x` and `\\?\UNC\host\share` are alternate spellings of the
+    # same target; strip the prefix before anything else looks at it.
+    # pathlib may collapse the leading pair, so accept both spellings.
+    for unc_prefix in ("//?/UNC/", "/?/UNC/"):
+        if text.startswith(unc_prefix):
+            text = "//" + text[len(unc_prefix):]
+            break
+    else:
+        for prefix in ("//?/", "/?/"):
+            if text.startswith(prefix):
+                text = text[len(prefix):]
+                break
+    windows_style = len(text) > 1 and text[1] == ":"
+    pure = PureWindowsPath(text) if windows_style else PurePosixPath(text)
     parts: list[str] = []
-    for part in pure.parts:
-        if part == ".." and parts and parts[-1] not in ("", "/", pure.anchor):
-            parts.pop()
+    for raw_part in pure.parts:
+        part = raw_part
+        if windows_style and part not in (pure.anchor,):
+            # NTFS silently drops trailing dots and spaces, so `x.` and
+            # `x ` open the same file as `x`.
+            part = part.rstrip(". ") or part
+        if part == "..":
+            # Only pop a segment that is a real name: popping a preserved
+            # `..` made two different targets share one identity, and
+            # erased leading traversal entirely when there was no anchor.
+            if parts and parts[-1] not in ("", "/", "..", pure.anchor):
+                parts.pop()
+                continue
+            parts.append(part)
             continue
         if part == ".":
             continue
         parts.append(part)
+    if windows_style:
+        # NTFS is case-insensitive: C:/Work and c:/work are one file.
+        parts = [p.casefold() for p in parts]
     joined = "".join(parts[:1]) + "/".join(parts[1:]) if parts and parts[0].endswith(("/", "\\")) \
         else "/".join(parts)
     return joined.replace("\\", "/")
@@ -309,16 +403,44 @@ class InterventionPoint:
     name: str
     declared_tools: frozenset[str]
     rules: tuple[tuple[str, Rule], ...] = ()   # (rule_id, rule)
+    # When the point's rules reason about a parsed command, a snapshot
+    # without one is an INCOMPLETE snapshot, and the contract says
+    # adapters build complete ones. Declaring the requirement lets the
+    # engine deny instead of letting intent-keyed rules see nothing and
+    # cheerfully allow (adversarial review).
+    requires_intent: bool = False
 
 
 class PolicyEngine:
     """Pure, stateless evaluator. One snapshot in, exactly one verdict out."""
 
     def __init__(self, intervention_points: Sequence[InterventionPoint]):
-        self._points = {point.name: point for point in intervention_points}
+        self._points: dict[str, InterventionPoint] = {}
+        for point in intervention_points:
+            if point.name in self._points:
+                # Last-wins would let a permissive registration silently
+                # replace a strict one — a configuration gap converted
+                # into consent (adversarial review).
+                raise PolicyError(
+                    f"duplicate intervention point {point.name!r}: refusing an "
+                    "ambiguous policy configuration"
+                )
+            self._points[point.name] = point
 
     def decide(self, snapshot: ActionSnapshot) -> PolicyDecision:
-        action_id = snapshot.action_id()
+        try:
+            action_id = snapshot.action_id()
+        except (TypeError, ValueError) as exc:
+            # decide() must be TOTAL: hashing an unserializable payload
+            # (NaN, bytes, a Path, non-str dict keys — all reachable from
+            # agent-supplied JSON) used to raise straight out of the gate,
+            # leaving the caller to decide what an exception means
+            # (adversarial review). It means deny.
+            return PolicyDecision(
+                Verdict.DENY, "runtime_error:unhashable_snapshot",
+                rule_id="engine", action_id="",
+                detail={"error": repr(exc)[:200]},
+            )
 
         point = self._points.get(snapshot.intervention_point)
         if point is None:
@@ -337,8 +459,16 @@ class PolicyEngine:
                 detail={"tool": snapshot.tool,
                         "declared": sorted(point.declared_tools)},
             )
+        if point.requires_intent and snapshot.intent is None:
+            return PolicyDecision(
+                Verdict.DENY, "policy_gap:incomplete_snapshot",
+                rule_id="engine", action_id=action_id,
+                detail={"missing": "intent"},
+            )
 
         best: PolicyDecision | None = None
+        transforms: list[PolicyDecision] = []
+        suppressed: list[dict[str, Any]] = []
         for rule_id, rule in point.rules:
             decision = self._evaluate(rule_id, rule, snapshot, action_id)
             if decision is None:
@@ -348,8 +478,31 @@ class PolicyEngine:
                 # trust one opinion it does not get to pretend the others
                 # are a complete picture.
                 return decision
+            if decision.verdict is Verdict.TRANSFORM:
+                transforms.append(decision)
             if best is None or _PRECEDENCE[decision.verdict] > _PRECEDENCE[best.verdict]:
+                if best is not None:
+                    suppressed.append(
+                        {"rule_id": best.rule_id, "verdict": best.verdict.value,
+                         "reason": best.reason},
+                    )
                 best = decision
+            else:
+                suppressed.append(
+                    {"rule_id": decision.rule_id, "verdict": decision.verdict.value,
+                     "reason": decision.reason},
+                )
+
+        if len(transforms) > 1:
+            # Two rules demanding different rewrites is not a tie the
+            # engine may break by precedence: silently applying one and
+            # dropping the other's mitigation is a security decision made
+            # by declaration order (adversarial review).
+            return PolicyDecision(
+                Verdict.DENY, "runtime_error:conflicting_transforms",
+                rule_id="engine", action_id=action_id,
+                detail={"rule_ids": [t.rule_id for t in transforms]},
+            )
 
         if best is None:
             # No rule had an opinion. Default-allow here would make every
@@ -357,6 +510,15 @@ class PolicyEngine:
             return PolicyDecision(
                 Verdict.DENY, "policy_gap:no_rule_matched",
                 rule_id="engine", action_id=action_id,
+            )
+        if suppressed:
+            # A WARN outranked by a DENY still happened; dropping it would
+            # lose evidence the operator needs (adversarial review).
+            return PolicyDecision(
+                best.verdict, best.reason, rule_id=best.rule_id,
+                action_id=best.action_id,
+                detail={**best.detail, "suppressed": suppressed},
+                transform=best.transform,
             )
         return best
 
@@ -444,7 +606,13 @@ class ApprovalStore:
         self._granted.pop(action_id, None)
 
     def approval_for(self, snapshot: ActionSnapshot) -> Approval | None:
-        return self._granted.get(snapshot.action_id())
+        try:
+            action_id = snapshot.action_id()
+        except (TypeError, ValueError):
+            # An unhashable snapshot has no identity, so it can hold no
+            # approval — never treat "cannot compute" as "approved".
+            return None
+        return self._granted.get(action_id)
 
     def is_approved(self, snapshot: ActionSnapshot) -> bool:
         return self.approval_for(snapshot) is not None
@@ -457,13 +625,21 @@ def resolve_escalation(decision: PolicyDecision, snapshot: ActionSnapshot,
     Non-escalations pass through untouched: an approval can never upgrade
     a DENY.
     """
-    if decision.action_id != snapshot.action_id():
+    try:
+        snapshot_id = snapshot.action_id()
+    except (TypeError, ValueError) as exc:
+        return PolicyDecision(
+            Verdict.DENY, "runtime_error:unhashable_snapshot",
+            rule_id=decision.rule_id, action_id="",
+            detail={"error": repr(exc)[:200]},
+        )
+    if decision.action_id != snapshot_id:
         # The decision and the snapshot describe DIFFERENT actions: the
         # approval would be looked up for one and granted to the other
         # (Codex review). Refuse rather than reconcile.
         return PolicyDecision(
             Verdict.DENY, "runtime_error:decision_snapshot_mismatch",
-            rule_id=decision.rule_id, action_id=snapshot.action_id(),
+            rule_id=decision.rule_id, action_id=snapshot_id,
             detail={"decision_action_id": decision.action_id},
         )
     if decision.verdict is not Verdict.ESCALATE:

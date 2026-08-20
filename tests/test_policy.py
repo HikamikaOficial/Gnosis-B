@@ -84,6 +84,67 @@ class TestCommandIntentParsing(unittest.TestCase):
         self.assertNotEqual(here.to_dict(), there.to_dict())
         self.assertEqual(here.cwd, "/work/repo")
 
+    def test_quoting_cannot_hide_an_absolute_path(self):
+        # One quote character used to flip DENY into ALLOW: posix=False
+        # kept the quotes, so `"/etc"` stopped looking absolute and got
+        # anchored inside the workspace (adversarial review, reproduced).
+        for command in ('rm -rf "/etc"', "rm -rf '/etc'", 'cat "/etc/shadow"'):
+            intent = parse_command(command, cwd=Path("/work/repo"))
+            self.assertTrue(
+                any(p.startswith("/etc") for p in intent.resolved_paths),
+                msg=f"{command} -> {intent.resolved_paths}",
+            )
+
+    def test_quoting_cannot_hide_traversal_or_a_flag(self):
+        traversal = parse_command('cat "../../etc/passwd"', cwd=Path("/work/repo"))
+        self.assertIn("/etc/passwd", traversal.resolved_paths)
+        flagged = parse_command('curl "--output=/etc/x" u', cwd=Path("/work/repo"))
+        self.assertIn("/etc/x", flagged.resolved_paths)
+        self.assertTrue(flagged.has_flag("--output"))
+
+    def test_windows_backslash_paths_survive_tokenization(self):
+        # The naive fix for the quote bug (posix=True) eats backslashes,
+        # which is the same bypass wearing a different hat.
+        intent = parse_command(r"cp x C:\Windows\System32\hosts")
+        self.assertIn("c:/windows/system32/hosts", intent.resolved_paths)
+
+    def test_unbalanced_quotes_are_a_typed_error_not_a_guess(self):
+        with self.assertRaises(PolicyError):
+            parse_command('rm -rf "/etc')
+
+    def test_separatorless_short_flag_values_are_resolved(self):
+        # curl/gcc/tar all accept -o<value>; treating it as an opaque flag
+        # hid the path from every rule.
+        intent = parse_command(["curl", "-o/etc/cron.d/x", "u"], cwd=Path("/work/repo"))
+        self.assertIn("/etc/cron.d/x", intent.resolved_paths)
+        self.assertEqual(intent.value_for("-o"), "/etc/cron.d/x")
+
+    def test_shell_expansions_are_surfaced_not_laundered(self):
+        # `~/.ssh/id_rsa` anchored under cwd became a FALSE in-workspace
+        # path — manufacturing the very safety it was meant to check.
+        for token in ("~/.ssh/id_rsa", "$HOME/.ssh/id_rsa", "%USERPROFILE%/x"):
+            intent = parse_command(["cat", token], cwd=Path("/work/repo"))
+            self.assertEqual(intent.unexpanded, (token,), msg=token)
+            self.assertEqual(intent.resolved_paths, (), msg=token)
+
+    def test_normalize_gives_one_identity_per_real_target(self):
+        # An allowlist keyed on a string is worthless if the same file has
+        # several spellings.
+        from gnosis.kernel.policy import _normalize
+
+        self.assertEqual(_normalize(Path("C:/Work/Repo./file ")),
+                         _normalize(Path("c:/work/repo/file")))
+        self.assertEqual(_normalize(Path(r"\\?\C:\Work\x")),
+                         _normalize(Path("C:/Work/x")))
+
+    def test_normalize_never_cancels_a_preserved_dotdot(self):
+        from gnosis.kernel.policy import _normalize
+
+        # `..` popping another `..` made two different targets share one
+        # identity; erasing a leading `..` hid traversal entirely.
+        self.assertEqual(_normalize(Path("../x")), "../x")
+        self.assertNotEqual(_normalize(Path("../../x")), _normalize(Path("../x")))
+
     def test_double_dash_operands_still_resolve(self):
         intent = parse_command(["rm", "--", "/etc/passwd"], cwd=Path("/work/repo"))
         self.assertIn("/etc/passwd", intent.resolved_paths)
@@ -107,6 +168,35 @@ class TestFailClosedDefaults(unittest.TestCase):
         decision = _engine(lambda s: None).decide(_snapshot())
         self.assertEqual(decision.verdict, Verdict.DENY)
         self.assertEqual(decision.reason, "policy_gap:no_rule_matched")
+
+    def test_unhashable_snapshot_denies_instead_of_raising(self):
+        # decide() must be TOTAL: NaN is reachable from agent JSON
+        # (json.loads accepts it), and the gate raising leaves the caller
+        # to guess what an exception means (adversarial review).
+        engine = _engine(_allow_all)
+        for payload in ({"n": float("nan")}, {"b": b"x"}, {"p": Path("/x")}):
+            decision = engine.decide(_snapshot(**payload))
+            self.assertEqual(decision.verdict, Verdict.DENY, msg=repr(payload))
+            self.assertEqual(decision.reason, "runtime_error:unhashable_snapshot")
+
+    def test_duplicate_intervention_points_are_refused(self):
+        # Last-wins would let a permissive registration silently replace a
+        # strict one — a configuration gap turned into consent.
+        with self.assertRaises(PolicyError):
+            PolicyEngine([
+                InterventionPoint("before_tool", frozenset({"bash"})),
+                InterventionPoint("before_tool", frozenset({"bash", "curl"})),
+            ])
+
+    def test_a_point_requiring_intent_denies_an_intent_less_snapshot(self):
+        engine = PolicyEngine([InterventionPoint(
+            name="before_tool", declared_tools=frozenset({"bash"}),
+            rules=(("allow", _allow_all),), requires_intent=True,
+        )])
+        snapshot = ActionSnapshot("before_tool", "bash", "agent://a", intent=None)
+        decision = engine.decide(snapshot)
+        self.assertEqual(decision.verdict, Verdict.DENY)
+        self.assertEqual(decision.reason, "policy_gap:incomplete_snapshot")
 
     def test_engine_with_no_rules_denies(self):
         decision = _engine().decide(_snapshot())
@@ -204,6 +294,26 @@ class TestVerdictPrecedence(unittest.TestCase):
             _allow_all, lambda s: RuleOutcome(Verdict.WARN, "style:suspicious"),
         ).decide(_snapshot())
         self.assertEqual(decision.verdict, Verdict.WARN)
+
+    def test_conflicting_transforms_deny_instead_of_picking_by_declaration_order(self):
+        # Two rules demanding different rewrites is not a tie precedence
+        # may break: dropping one mitigation silently is a security
+        # decision made by tuple order (adversarial review).
+        decision = _engine(
+            lambda s: RuleOutcome(Verdict.TRANSFORM, "rewrite:a", transform={"cmd": "a"}),
+            lambda s: RuleOutcome(Verdict.TRANSFORM, "rewrite:b", transform={"cmd": "b"}),
+        ).decide(_snapshot())
+        self.assertEqual(decision.verdict, Verdict.DENY)
+        self.assertEqual(decision.reason, "runtime_error:conflicting_transforms")
+
+    def test_an_outranked_warning_is_carried_not_erased(self):
+        decision = _engine(
+            lambda s: RuleOutcome(Verdict.WARN, "style:suspicious"),
+            lambda s: RuleOutcome(Verdict.DENY, "fs:forbidden"),
+        ).decide(_snapshot())
+        self.assertEqual(decision.verdict, Verdict.DENY)
+        suppressed = decision.detail["suppressed"]
+        self.assertTrue(any(s["reason"] == "style:suspicious" for s in suppressed))
 
     def test_rule_id_provenance_is_carried(self):
         engine = PolicyEngine([InterventionPoint(
@@ -462,6 +572,27 @@ class TestEnforcementMatrix(unittest.TestCase):
         # deliberately rather than the claim drifting silently.
         self.assertEqual(soft, {("worktree", "shared_repo_isolation"),
                                 ("worktree", "orphaned_child_termination")})
+
+    def test_gnosis_matrix_is_pinned_exactly(self):
+        # Four mutants survived the previous suite: deleting a claim,
+        # adding a fabricated one, or flipping a level all passed. The
+        # matrix is only "machine-checked" if a change to it must be
+        # deliberate (adversarial review).
+        expected = {
+            ("worktree", "shared_repo_isolation"): EnforcementLevel.SANDBOX_APPROX,
+            ("worktree", "orphaned_child_termination"): EnforcementLevel.IGNORED,
+            ("file_lock", "single_writer"): EnforcementLevel.HARD,
+            ("replay", "no_network_in_strict_replay"): EnforcementLevel.HARD,
+            ("claims", "no_stale_write_after_deposition"): EnforcementLevel.HARD,
+            ("policy", "deny_by_default"): EnforcementLevel.HARD,
+        }
+        actual = {(c.adapter, c.restriction): c.level
+                  for c in GNOSIS_ENFORCEMENT.claims()}
+        self.assertEqual(actual, expected)
+        # Every claim cites the ADR that establishes it: an unexplained
+        # security claim is not evidence.
+        for claim in GNOSIS_ENFORCEMENT.claims():
+            self.assertIn("ADR-", claim.note, msg=claim.restriction)
 
     def test_gnosis_matrix_records_the_honest_current_state(self):
         # The kernel's own claims, machine-checked: this is the table
