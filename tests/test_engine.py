@@ -133,6 +133,76 @@ class TestTaskEngine(unittest.TestCase):
         self.assertTrue((git_dir / "post.json").exists())
 
 
+class _RateLimitedRunner(_FakeCliRunner):
+    """A CLI that reports a structured rate limit — the shape a real
+    adapter surfaces from a provider response."""
+
+    def __init__(self):
+        super().__init__(["fail"])
+
+    def run(self, prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs):
+        result = super().run(prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs)
+        stderr_path.write_text("Error: usage limit reached", encoding="utf-8")
+        return result
+
+
+class TestFailureTaxonomyWiring(unittest.TestCase):
+    """Directive 9 end-to-end: the reason code flows from the adapter's
+    classification into the append-only event and into the retry
+    decision. A taxonomy nothing consults is a parallel fiction."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        subprocess.run(["git", "init"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "e@x.com"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=self.repo, check=True)
+        self.store = RunStore(self.root / "runs")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_every_attempt_is_classified_into_the_ledger(self):
+        engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
+        outcome = engine.execute_task(
+            task_id="TASK-CLS", objective="Demo", prompt="do it", repo_path=self.repo,
+        )
+        events = self.store.ledger_for(outcome.run_ids[-1]).read_all()
+        classified = next(e for e in events if e.event_type == "run.attempt_classified")
+        self.assertEqual(classified.data["failure"], "PASS")
+        self.assertEqual(classified.data["evidence_grade"], "STRUCTURED")
+        # The same reason code the scheduler saw, not a paraphrase.
+        self.assertEqual(classified.data["reason_code"], outcome.classification.reason_code)
+
+    def test_a_rate_limited_attempt_parks_instead_of_burning_retries(self):
+        # Rule 6: RATE_LIMITED != FAIL_CODE. Retrying against a shut
+        # window is exactly what the park state exists to prevent.
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=_RateLimitedRunner(),
+            retry_policy=RetryPolicy(max_attempts=3, backoff_base_s=0.01,
+                                     backoff_factor=1.0, max_backoff_s=0.01),
+        )
+        outcome = engine.execute_task(
+            task_id="TASK-RL", objective="Demo", prompt="do it", repo_path=self.repo,
+        )
+        self.assertEqual(outcome.classification.failure.value, "RATE_LIMITED")
+        self.assertEqual(len(outcome.run_ids), 1)  # parked, not retried 3x
+        self.assertFalse(outcome.classification.penalizes_agent)  # rule 7
+
+    def test_an_ordinary_code_failure_still_retries(self):
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=_FakeCliRunner(["fail", "fail", "succeed"]),
+            retry_policy=_FAST_RETRY,
+        )
+        outcome = engine.execute_task(
+            task_id="TASK-RETRY", objective="Demo", prompt="do it", repo_path=self.repo,
+        )
+        self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
+        self.assertEqual(len(outcome.run_ids), 3)
+
+
 class _FakeClock:
     def __init__(self, start: float = 1000.0):
         self.now = start

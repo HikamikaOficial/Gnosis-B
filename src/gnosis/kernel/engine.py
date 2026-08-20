@@ -22,6 +22,14 @@ from ..runner.claude_cli_runner import CancellationToken, ClaudeCodeCLIRunner, M
 from ..runner.retry import RetryPolicy, execute_with_retry
 from .claims import GrantHeartbeatPump, StaleClaimError, WorkAuthority, WorkGrant
 from .code_intelligence import CodeIntelligenceProvider, CodeIntelligenceUnavailable
+from .failures import (
+    DEFAULT_CHAIN,
+    FailureClassification,
+    FailureClassifierChain,
+    FailureSignal,
+    SchedulerAction,
+    scheduler_action,
+)
 from .git_evidence import capture_git_evidence
 from .ids import new_run_id
 from .lease import StaleLeaseError
@@ -31,6 +39,14 @@ from .run_store import RunMeta, RunPaths, RunStore
 from .state_machine import RunState, TaskState, TaskStateMachine
 from .verification import VerificationResult, Verifier
 from .worktree import WorktreeHandle, WorktreeManager
+
+
+def _tail(path: Path, limit: int = 4000) -> str:
+    """Last bytes of a captured stream, for prose-grade classification."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[-limit:]
+    except OSError:
+        return ""
 
 
 def _gather_code_intelligence_context(
@@ -161,6 +177,9 @@ class TaskExecutionOutcome:
     verification: VerificationResult | None
     execution_result: ExecutionResult | None
     report: EngineerReport
+    # Directive 9: the typed classification of the last attempt, so a
+    # caller schedules on the reason code rather than re-deriving it.
+    classification: FailureClassification | None = None
 
 
 class TaskEngine:
@@ -172,10 +191,12 @@ class TaskEngine:
         run_store: RunStore,
         cli_runner: Any = None,
         retry_policy: RetryPolicy | None = None,
+        failure_chain: FailureClassifierChain | None = None,
     ):
         self.run_store = run_store
         self.cli_runner = cli_runner or ClaudeCodeCLIRunner()
         self.retry_policy = retry_policy or RetryPolicy()
+        self.failure_chain = failure_chain or DEFAULT_CHAIN
 
     def execute_task(
         self,
@@ -318,6 +339,7 @@ class TaskEngine:
 
         pre_git = capture_git_evidence(exec_root)
         run_ids: list[str] = []
+        classifications: list[FailureClassification] = []
         last_result: ExecutionResult | None = None
 
         ci_evidence: dict[str, Any] | None = None
@@ -400,7 +422,20 @@ class TaskEngine:
             else:
                 final_state = RunState.FAILED
 
+            # Directive 9: every attempt is CLASSIFIED before it can be
+            # repeated, and the reason code flows unchanged from here into
+            # the ledger event and into the retry decision below — a
+            # taxonomy nothing consults is a parallel fiction.
+            classification = self.failure_chain.classify(FailureSignal(
+                exit_code=result.exit_code, timed_out=result.timed_out,
+                cancelled=result.cancelled,
+                structured=result.parsed_json if isinstance(result.parsed_json, dict) else {},
+                stderr_text=_tail(paths.stderr), stdout_text=_tail(paths.stdout),
+            ))
+            classifications.append(classification)
+
             store.update_state(run_id, final_state)
+            ledger.append(run_id, "run.attempt_classified", classification.to_dict())
             ledger.append(run_id, "run.attempt_finished", {
                 "attempt": attempt_number, "exit_code": result.exit_code,
                 "timed_out": result.timed_out, "cancelled": result.cancelled,
@@ -416,7 +451,15 @@ class TaskEngine:
             return result
 
         def should_retry(result: ExecutionResult) -> bool:
-            return (not result.cancelled) and (not result.succeeded)
+            if result.cancelled or result.succeeded:
+                return False
+            if not classifications:
+                return True
+            # The classification decides, not the exit code: RATE_LIMITED
+            # parks (burning retries against a shut window is exactly what
+            # rule 6 forbids), and an UNCLASSIFIED or escalating failure
+            # stops rather than repeating an action nobody understood.
+            return scheduler_action(classifications[-1]) is SchedulerAction.RETRY
 
         execute_with_retry(attempt, should_retry, self.retry_policy)
 
@@ -481,4 +524,5 @@ class TaskEngine:
         return TaskExecutionOutcome(
             task_id=task_id, run_ids=run_ids, final_task_state=task_sm.state,
             verification=verification_result, execution_result=last_result, report=report,
+            classification=classifications[-1] if classifications else None,
         )
