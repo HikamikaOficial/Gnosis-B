@@ -3,9 +3,10 @@
 - Status: ACCEPTED
 - Date: 2026-08-20
 - Deciders: Claude Fable 5 (autonomous, per standing mandate)
-- Evidence: `tests/test_failures.py` (38 tests),
-  `tests/test_engine.py::TestFailureTaxonomyWiring` (3 end-to-end tests);
-  suite 431/431; mypy strict clean; dual adversarial review pre-commit.
+- Evidence: `tests/test_failures.py` (50 tests),
+  `tests/test_engine.py::TestFailureTaxonomyWiring` (5 end-to-end tests);
+  suite 440/440; mypy strict clean; dual adversarial review (Codex
+  pre-commit, multi-agent workflow post-commit — see addendum).
 - Source: `docs/research/REFERENCE_REPOSITORY_FINDINGS.md` §9 (cezar's
   evidence-ordered limit parsing, smithers' `waiting-quota` park state,
   ralphex's three-tier taxonomy, AWF's reason codes flowing to scheduler
@@ -18,13 +19,17 @@
 
 `FailureClassifierChain` consults classifiers in descending
 `EvidenceGrade` and stamps its **registered** grade on the result — a
-classifier cannot promote its own evidence. Prose can enrich a gap; it
-can never overrule an exit code.
+classifier cannot promote its own evidence.
 
 Grades, highest first: `STRUCTURED` (runner flags, exit zero),
 `SEMI_STRUCTURED` (documented provider fields), `PROSE` (regex, last
-resort), `LAST_RESORT` (a bare non-zero exit: real evidence, but any
-richer description of the same failure wins), `NONE`.
+resort), `LAST_RESORT` (a bare non-zero exit: real evidence that says
+*something* failed but never *which*), `NONE`.
+
+Prose outranks exactly one thing — the bare-exit-code classifier — and
+never informative structured evidence; a higher-grade classifier
+returning None means "I looked, and it is not this", which prose may not
+overturn.
 
 A signal with no evidence at all is `UNCLASSIFIED`, which **escalates
 rather than retries**: repeating an action nobody understood is how a
@@ -90,5 +95,78 @@ caller bypasses. A non-zero exit is now `FAIL_CODE` at `LAST_RESORT`
 grade and retries within the existing attempt cap, while any richer
 evidence (a rate-limit field, even a prose rate-limit line) still wins.
 
-The multi-agent workflow review was still running when this landed; its
-verdict is adjudicated as an addendum.
+## Known limitation (stated, not implied)
+
+The hold/park registry and `boot_sweep` have **no production caller**:
+the engine consumes the classification (retry/park/escalate and the
+durable run state), but placing durable holds and sweeping stranded
+runs at boot needs the scheduler that does not exist yet. The
+mechanisms are tested, not live — said plainly here because Directive
+9's own lesson is that a mechanism nothing calls is a parallel
+fiction.
+
+## Workflow review addendum (2026-08-20, post-commit 9d963aa)
+
+The multi-agent review (21 findings; 10 confirmed with reproductions, 11
+refuted with assumptions recorded) landed after the commit above. All ten
+are repaired here.
+
+**The wiring was thinner than the commit message claimed.** I wired the
+classification and said Directive 9 was end-to-end; the review found the
+seam:
+
+1. *(major)* `ClaudeCodeCLIRunner` parsed `parsed_json` **only on
+   success**, so on every failed attempt `structured` was `{}` — making
+   the structured rate-limit classifier unreachable in production and
+   leaving prose, which can never supply a window, as the only rate-limit
+   signal that could ever fire. Fixed: the runner parses on failure too,
+   which is exactly where an error payload lives.
+2. *(minor)* A `RATE_LIMITED` attempt was written to disk as
+   `RunState.FAILED` — the park existed only in memory, so no scheduler
+   could resume it and it read as an agent failure. `RunState` gained a
+   non-terminal `RATE_LIMITED` state with `RATE_LIMITED → RUNNING`.
+3. *(major)* `SchedulerAction.ESCALATE` had no output channel: it was
+   collapsed into "stop retrying" and filed as a routine `PARTIAL`, even
+   though `ReportStatus.ESCALATION_REQUIRED` already existed. Now used.
+4. *(major)* The hold/park and boot-sweep half still has no production
+   caller. Stated plainly rather than implied: it is exercised only by
+   tests until the scheduler exists (see Known limitation).
+
+**Classification hardening:**
+
+5. *(major)* The prose regex matched ordinary text — a tool describing
+   its own limiter, and (verified, self-referentially) GNOSIS's own
+   failing test output, whose fixtures print the literal phrase. Now
+   restricted to strong phrases (`limit reached/exceeded/hit`,
+   `quota exceeded`, `too many requests`).
+6. *(major)* A higher-grade classifier returning `None` was read as "no
+   evidence" rather than "I looked, and it is not this", letting prose
+   overturn structured evidence that positively described a different
+   failure. Prose now stands down when structured evidence denies it.
+7. *(major)* An absolute reset already in the past was accepted, parking
+   until a moment that had passed. Rejected as no window.
+8. *(major, the sharpest one)* **Confidence and consequence were
+   inverted**: prose is the only classifier yielding no window, an
+   unknown window outranks every known one, such a hold never expired,
+   and `hold_from_classification` defaulted to ACCOUNT scope — so the
+   *weakest* evidence produced the *harshest, permanent, credential-wide*
+   hold. The verifier called it "a loaded gun". A hold built without a
+   provider-supplied window now gets a bounded fallback
+   (`UNKNOWN_WINDOW_FALLBACK_S`, 15 min) and is flagged
+   `window_estimated`, so a false positive costs minutes, not forever.
+9. *(minor)* Three docstrings and this ADR asserted "prose can never
+   overrule an exit code" while the code deliberately ranks prose above
+   the *bare* exit code. The code is right (otherwise real CLI rate
+   limits would be dead code); the text was wrong and now states the
+   real rule.
+10. *(minor)* `boot_sweep`'s terminal-state guard was mutation-invisible
+    — deleting it left the suite green. Pinned per state.
+
+**Residual, accepted and stated:** prose classification of text that
+legitimately contains a rate-limit phrase (GNOSIS's own test output being
+the honest example) can still misroute one attempt. Its cost is now
+bounded by the fallback window and by structured evidence taking
+precedence; eliminating it entirely needs provider-attributed error
+frames, which belongs with the adapter milestone.
+
+Tests 41 → 50; suite 440/440.

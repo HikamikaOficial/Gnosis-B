@@ -6,14 +6,25 @@ implementation of constitution rules 5–7 (`RATE_LIMITED != FAIL_CODE`;
 `FAIL_INFRA` does not penalize the agent; every retry is classified
 before it is repeated).
 
-**Classification is graded.** Structured evidence (exit codes, documented
-response fields) is consulted first; prose parsing is a last-resort
-*enricher*, never an authority. Every classification records the
+**Classification is graded.** Classifiers are consulted in descending
+evidence grade and the first match wins. Every classification records the
 `EvidenceGrade` that carried it, so a decision made by regex over a human
-sentence is never mistaken for one made by an exit code. When nothing
-classifies, the answer is `UNCLASSIFIED` — refusing to guess is a
-supported outcome, because a wrong retry decision costs more than an
-honest "I do not know".
+sentence is never mistaken for one made by a documented field.
+
+The exact ordering, stated honestly because three docstrings once claimed
+a stronger rule than the code holds (adversarial review): informative
+structured evidence (runner flags, documented provider fields) always
+wins; PROSE outranks exactly one thing — a BARE non-zero exit code
+(`LAST_RESORT`), which says only "something failed" and never which
+failure. That demotion is deliberate: a real CLI rate limit also exits
+non-zero, so ranking the bare exit above prose would make rate-limit
+detection dead code and violate rule 6. Prose cannot overturn structured
+evidence that positively describes a different failure — a higher-grade
+classifier returning None means "I looked, and it is not this".
+
+When nothing classifies, the answer is `UNCLASSIFIED` — refusing to
+guess is a supported outcome, because a wrong retry decision costs more
+than an honest "I do not know".
 
 **Reason codes flow unchanged.** The same `reason_code` travels from the
 adapter's classification into the append-only event and into the
@@ -184,12 +195,13 @@ class NamedClassifier:
 class FailureClassifierChain:
     """Evidence-ordered classification.
 
-    Classifiers are consulted in descending evidence grade, and the FIRST
-    match at the HIGHEST available grade wins: prose can enrich a picture
-    but can never overrule an exit code (cezar's rule, and the reason its
-    usage-limit detection is trustworthy). A classifier that claims a
-    grade it was not registered with is rejected — the grade is the
-    chain's property, not the classifier's self-description.
+    Classifiers are consulted in descending evidence grade and the FIRST
+    match wins. Prose outranks ONLY the bare-exit-code classifier
+    (`LAST_RESORT`); it can never overrule informative structured
+    evidence. See the module docstring for why that one demotion is
+    deliberate. A classifier cannot claim a grade it was not registered
+    with — the grade is the chain's property, not the classifier's
+    self-description.
     """
 
     def __init__(self, classifiers: Sequence[NamedClassifier]):
@@ -301,9 +313,15 @@ def make_structured_rate_limit_classifier(
         if not (payload.get("error_type") == "rate_limit"
                 or payload.get("rate_limited") is True):
             return None
+        now = now_fn()
         reset_at = _finite_number(payload.get("reset_at"))
         if reset_at is None:
             reset_at = _finite_number(payload.get("retry_after_epoch"))
+        if reset_at is not None and reset_at <= now:
+            # An absolute reset already in the past is not a window: it is
+            # either a stale value or a different clock base. Parking until
+            # a moment that has passed parks nothing (adversarial review).
+            reset_at = None
         source = "absolute"
         if reset_at is None:
             # Relative seconds (the HTTP standard spelling).
@@ -311,7 +329,7 @@ def make_structured_rate_limit_classifier(
             if delay is None:
                 delay = _finite_number(payload.get("retry_after_seconds"))
             if delay is not None and delay >= 0:
-                reset_at = now_fn() + delay
+                reset_at = now + delay
                 source = "relative"
         return FailureClassification(
             FailureClass.RATE_LIMITED, "rate_limit_structured",
@@ -329,8 +347,15 @@ def structured_rate_limit_classifier(signal: FailureSignal) -> FailureClassifica
     return make_structured_rate_limit_classifier(time.time)(signal)
 
 
+# Anchored to an ERROR context. The bare tokens matched ordinary output —
+# including a tool describing its own limiter, and (verified) GNOSIS's own
+# failing test suite, whose fixtures print the literal phrase. A log line
+# mentioning rate limiting is not a rate limit (adversarial review).
 _PROSE_RATE_LIMIT = re.compile(
-    r"\b(rate.?limit|quota exceeded|too many requests|usage limit)\b", re.IGNORECASE,
+    r"\b(?:(?:rate|usage)[ _-]?limit(?:ed|s)?\s+(?:reached|exceeded|hit)"
+    r"|quota\s+exceeded"
+    r"|too\s+many\s+requests)\b",
+    re.IGNORECASE,
 )
 
 
@@ -338,14 +363,24 @@ def prose_rate_limit_classifier(signal: FailureSignal) -> FailureClassification 
     """Last resort. Deliberately does NOT invent a reset timestamp: a
     parked run with a made-up reset time is worse than one that waits for
     an operator, so the absence of a reliable window is recorded as such.
+
+    Refuses to fire when structured evidence is present and does NOT say
+    rate limit: a higher-grade classifier returning None means "I looked
+    and this is not one", which prose may not overturn (adversarial
+    review — the chain previously read that silence as "no evidence").
     """
+    if signal.structured and not (
+        signal.structured.get("error_type") == "rate_limit"
+        or signal.structured.get("rate_limited") is True
+    ):
+        return None
     text = f"{signal.stderr_text}\n{signal.stdout_text}"
     match = _PROSE_RATE_LIMIT.search(text)
     if not match:
         return None
     return FailureClassification(
         FailureClass.RATE_LIMITED, "rate_limit_prose", EvidenceGrade.PROSE,
-        "prose_rate_limit", evidence=match.group(0),
+        "prose_rate_limit", evidence=match.group(0).strip(),
         detail={"reset_unknown": True},
     )
 
@@ -429,12 +464,17 @@ class RateLimitHold:
     # so every queued resume was admitted at once — precisely the
     # stampede a probe exists to prevent (Codex review).
     probe_holder: str | None = None
+    # True when reset_at is the kernel's bounded fallback rather than a
+    # window the provider actually supplied: an operator reading a hold
+    # must be able to tell a measured window from an estimated one.
+    window_estimated: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "credential": self.credential, "scope": self.scope.value,
             "reason_code": self.reason_code, "reset_at": self.reset_at,
             "placed_at": self.placed_at, "probe_holder": self.probe_holder,
+            "window_estimated": self.window_estimated,
         }
 
     @classmethod
@@ -444,6 +484,7 @@ class RateLimitHold:
             reason_code=data["reason_code"], reset_at=data.get("reset_at"),
             placed_at=data.get("placed_at", 0.0),
             probe_holder=data.get("probe_holder"),
+            window_estimated=data.get("window_estimated", False),
         )
 
     def restrictiveness(self) -> tuple[int, float]:
@@ -517,19 +558,42 @@ class HoldRegistry:
         return sorted(self._holds.values(), key=lambda h: h.credential)
 
 
+# How long a hold lasts when the provider gave no usable window. Chosen
+# to be long enough to actually relieve a real limit, short enough that a
+# false positive costs minutes rather than forever.
+UNKNOWN_WINDOW_FALLBACK_S = 900.0
+
+
 def hold_from_classification(classification: FailureClassification, credential: str,
                              now: float, scope: HoldScope = HoldScope.ACCOUNT,
-                             probe_holder: str | None = None) -> RateLimitHold | None:
-    """Build the durable park record for a RATE_LIMITED classification."""
+                             probe_holder: str | None = None,
+                             unknown_window_s: float = UNKNOWN_WINDOW_FALLBACK_S,
+                             ) -> RateLimitHold | None:
+    """Build the durable park record for a RATE_LIMITED classification.
+
+    **Confidence bounds consequence.** The weakest evidence used to
+    produce the harshest hold: prose is the only classifier that yields
+    no window, an unknown window outranks every known one, and such a
+    hold never expires — so one ambiguous log line could shut a
+    credential permanently ("a loaded gun", adversarial review). A hold
+    built without a provider-supplied window now gets a BOUNDED fallback
+    and is marked `window_estimated`, so it relieves a real limit without
+    being able to cause an unbounded outage on a guess.
+    """
     if not classification.is_park:
         return None
     if scope is HoldScope.PROBE and not probe_holder:
         raise ValueError("a PROBE hold must name the run allowed to probe")
+    reset_at = classification.reset_at
+    estimated = reset_at is None
+    if estimated:
+        reset_at = now + unknown_window_s
     return RateLimitHold(
         credential=credential, scope=scope,
         reason_code=classification.reason_code,
-        reset_at=classification.reset_at, placed_at=now,
+        reset_at=reset_at, placed_at=now,
         probe_holder=probe_holder,
+        window_estimated=estimated,
     )
 
 

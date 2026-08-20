@@ -1,7 +1,9 @@
+import time
 import unittest
 
 from gnosis.kernel.failures import (
     DEFAULT_CHAIN,
+    UNKNOWN_WINDOW_FALLBACK_S,
     Disposition,
     EvidenceGrade,
     FailureClass,
@@ -29,14 +31,25 @@ class TestGradedClassification(unittest.TestCase):
         self.assertFalse(result.penalizes_agent)
 
     def test_structured_rate_limit_carries_a_reset_timestamp(self):
+        future = time.time() + 3600
         result = DEFAULT_CHAIN.classify(FailureSignal(
             exit_code=1,
-            structured={"error_type": "rate_limit", "reset_at": 1770000000,
+            structured={"error_type": "rate_limit", "reset_at": future,
                         "credential": "claude:nicol"},
         ))
         self.assertEqual(result.failure, FailureClass.RATE_LIMITED)
         self.assertEqual(result.evidence_grade, EvidenceGrade.SEMI_STRUCTURED)
-        self.assertEqual(result.reset_at, 1770000000.0)
+        self.assertEqual(result.reset_at, future)
+
+    def test_a_reset_already_in_the_past_is_not_a_window(self):
+        # Parking until a moment that has passed parks nothing; the value
+        # is stale or on a different clock base (adversarial review).
+        result = DEFAULT_CHAIN.classify(FailureSignal(
+            exit_code=1,
+            structured={"rate_limited": True, "reset_at": time.time() - 3600},
+        ))
+        self.assertIsNone(result.reset_at)
+        self.assertEqual(result.detail["reset_source"], "unknown")
 
     def test_prose_rate_limit_refuses_to_invent_a_reset_time(self):
         # A parked run with a fabricated window is worse than one that
@@ -139,6 +152,39 @@ class TestGradedClassification(unittest.TestCase):
             ))
             self.assertIsNone(result.reset_at, msg=repr(bad))
             self.assertEqual(result.detail["reset_source"], "unknown", msg=repr(bad))
+
+    def test_ordinary_text_mentioning_rate_limits_is_not_a_rate_limit(self):
+        # The bare tokens matched a tool describing its own limiter — and,
+        # self-referentially, GNOSIS's own failing test output, whose
+        # fixtures print the literal phrase (adversarial review).
+        benign = [
+            "build failed: 3 errors\nnote: we rate-limit our own calls to 5/s",
+            "FAILED tests/test_failures.py::test_prose_rate_limit_refuses",
+            "info: rate limiting is enabled for this endpoint",
+            "docs: see the rate limits section",
+        ]
+        for text in benign:
+            result = DEFAULT_CHAIN.classify(FailureSignal(exit_code=1, stderr_text=text))
+            self.assertEqual(result.failure, FailureClass.FAIL_CODE, msg=text)
+
+    def test_a_real_prose_rate_limit_still_classifies(self):
+        for text in ("Error: usage limit reached, try again later",
+                     "fatal: rate limit exceeded",
+                     "HTTP 429: too many requests",
+                     "quota exceeded for this organization"):
+            result = DEFAULT_CHAIN.classify(FailureSignal(exit_code=1, stderr_text=text))
+            self.assertEqual(result.failure, FailureClass.RATE_LIMITED, msg=text)
+
+    def test_prose_cannot_overturn_structured_evidence_that_denies_it(self):
+        # A higher-grade classifier returning None means "I looked and
+        # this is NOT a rate limit", which the chain previously read as
+        # "no evidence" (adversarial review).
+        result = DEFAULT_CHAIN.classify(FailureSignal(
+            exit_code=1,
+            structured={"error_type": "compilation_error"},
+            stderr_text="Error: usage limit reached",
+        ))
+        self.assertEqual(result.failure, FailureClass.FAIL_CODE)
 
     def test_a_raising_classifier_does_not_decide(self):
         def boom(_: FailureSignal) -> FailureClassification:
@@ -301,13 +347,36 @@ class TestRateLimitHolds(unittest.TestCase):
         self.assertTrue(self.registry.admits("claude:nicol", now=100.0))
 
     def test_hold_is_built_only_from_a_park_classification(self):
+        future = time.time() + 900
         rate = DEFAULT_CHAIN.classify(FailureSignal(
-            exit_code=1, structured={"error_type": "rate_limit", "reset_at": 900},
+            exit_code=1, structured={"error_type": "rate_limit", "reset_at": future},
         ))
         hold = hold_from_classification(rate, "claude:nicol", now=100.0)
         self.assertIsNotNone(hold)
-        self.assertEqual(hold.reset_at, 900.0)
+        self.assertEqual(hold.reset_at, future)
+        self.assertFalse(hold.window_estimated)  # a measured window
         self.assertEqual(hold.reason_code, rate.reason_code)
+
+    def test_an_unknown_window_gets_a_bounded_fallback_not_forever(self):
+        # The weakest evidence used to produce the harshest hold: prose is
+        # the only classifier yielding no window, an unknown window
+        # outranks every known one, and such a hold never expired - one
+        # ambiguous log line could shut a credential permanently
+        # ("a loaded gun", adversarial review).
+        prose = DEFAULT_CHAIN.classify(FailureSignal(
+            exit_code=1, stderr_text="Error: usage limit reached",
+        ))
+        self.assertIsNone(prose.reset_at)
+        hold = hold_from_classification(prose, "claude:nicol", now=1000.0)
+        self.assertTrue(hold.window_estimated)
+        self.assertEqual(hold.reset_at, 1000.0 + UNKNOWN_WINDOW_FALLBACK_S)
+        # It relieves a real limit, and it ENDS.
+        registry = HoldRegistry()
+        registry.reconcile([hold], now=1000.0)
+        self.assertFalse(registry.admits("claude:nicol", now=1000.0))
+        registry.reconcile([hold], now=1000.0 + UNKNOWN_WINDOW_FALLBACK_S + 1)
+        self.assertTrue(registry.admits(
+            "claude:nicol", now=1000.0 + UNKNOWN_WINDOW_FALLBACK_S + 1))
 
         not_a_park = FailureClassification(FailureClass.FAIL_TEST, "t",
                                            EvidenceGrade.STRUCTURED, "c")
@@ -377,6 +446,24 @@ class TestBootSweep(unittest.TestCase):
         self.assertTrue(all(o.reason_code for o in outcomes))
         self.assertEqual({o.run.run_id for o in outcomes},
                          {"RUN-A", "RUN-B", "RUN-C"})
+
+    def test_terminal_runs_are_never_re_adopted(self):
+        # Mutation-verified gap: deleting the terminal guard, or shrinking
+        # TERMINAL_RUN_STATES, left the whole sweep suite green while
+        # completed work became eligible for re-execution.
+        for state in ("SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED", "CRASHED"):
+            run = StrandedRun("RUN-T", "TASK-T", state,
+                              process_alive=False, heartbeat_stale_s=999.0)
+            outcome = boot_sweep([run])[0]
+            self.assertEqual(outcome.disposition, Disposition.UNTOUCHED, msg=state)
+            self.assertEqual(outcome.reason_code, "already_terminal", msg=state)
+            self.assertEqual(outcome.action, SchedulerAction.CONTINUE, msg=state)
+
+    def test_a_non_terminal_state_is_still_swept(self):
+        # The guard must not swallow the runs the sweep exists for.
+        run = StrandedRun("RUN-P", "TASK-P", "PENDING",
+                          process_alive=False, heartbeat_stale_s=999.0)
+        self.assertEqual(boot_sweep([run])[0].disposition, Disposition.READOPTED)
 
     def test_sweep_is_idempotent_for_the_same_input(self):
         runs = [StrandedRun("RUN-B", "T", "RUNNING", False, 999.0)]

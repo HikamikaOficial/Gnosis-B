@@ -68,14 +68,21 @@ class RunState(str, Enum):
     TIMED_OUT = "TIMED_OUT"
     CANCELLED = "CANCELLED"
     CRASHED = "CRASHED"
+    # A durable PARK, not a failure (constitution rule 6): the run stopped
+    # because a credential's window is shut, and it must be distinguishable
+    # from FAILED on disk or the park exists only in memory (ADR-0012).
+    # Non-terminal: it resumes when the window reopens.
+    RATE_LIMITED = "RATE_LIMITED"
 
 
 RUN_TRANSITIONS: MappingProxyType[RunState, frozenset[RunState]] = MappingProxyType({
     RunState.PENDING: frozenset({RunState.RUNNING, RunState.CANCELLED}),
     RunState.RUNNING: frozenset({
         RunState.SUCCEEDED, RunState.FAILED, RunState.TIMED_OUT,
-        RunState.CANCELLED, RunState.CRASHED,
+        RunState.CANCELLED, RunState.CRASHED, RunState.RATE_LIMITED,
     }),
+    # A parked run resumes through the normal path, or is cancelled.
+    RunState.RATE_LIMITED: frozenset({RunState.RUNNING, RunState.CANCELLED}),
     RunState.SUCCEEDED: frozenset(),
     RunState.FAILED: frozenset(),
     RunState.TIMED_OUT: frozenset(),

@@ -180,14 +180,20 @@ class ClaudeCodeCLIRunner:
             argv, cwd=cwd, stdout_path=stdout_path, stderr_path=stderr_path,
             timeout_s=timeout_s, cancellation_token=cancellation_token, heartbeat_fn=heartbeat_fn,
         )
+        # Parse on FAILURE too. A structured error payload (rate-limit
+        # fields, error_type) only exists on the failing path, so gating
+        # this on success made the structured rate-limit classifier
+        # unreachable in production and left prose — which can never
+        # supply a reset window — as the only signal (adversarial review).
         parsed_json = None
-        if result.succeeded:
-            try:
-                text = stdout_path.read_text(encoding="utf-8", errors="replace").strip()
-                if text:
-                    parsed_json = json.loads(text)
-            except (json.JSONDecodeError, OSError):
-                parsed_json = None
+        try:
+            text = stdout_path.read_text(encoding="utf-8", errors="replace").strip()
+            if text:
+                candidate = json.loads(text)
+                if isinstance(candidate, dict):
+                    parsed_json = candidate
+        except (json.JSONDecodeError, OSError):
+            parsed_json = None
         return ExecutionResult(
             command=result.command, exit_code=result.exit_code, timed_out=result.timed_out,
             cancelled=result.cancelled, duration_s=result.duration_s, stdout_path=result.stdout_path,

@@ -41,6 +41,23 @@ from .verification import VerificationResult, Verifier
 from .worktree import WorktreeHandle, WorktreeManager
 
 
+def _report_status(task_state: TaskState,
+                   classifications: Sequence[FailureClassification]) -> ReportStatus:
+    """Give an escalation its own channel.
+
+    `should_retry` collapses ESCALATE, FAIL and PARK into "stop
+    retrying", so without this an escalation was filed as a routine
+    PARTIAL and nothing downstream could tell a security refusal or an
+    unclassifiable failure from an ordinary miss — even though
+    ESCALATION_REQUIRED already existed (adversarial review).
+    """
+    if task_state == TaskState.COMPLETED:
+        return ReportStatus.COMPLETED
+    if classifications and scheduler_action(classifications[-1]) is SchedulerAction.ESCALATE:
+        return ReportStatus.ESCALATION_REQUIRED
+    return ReportStatus.PARTIAL
+
+
 def _tail(path: Path, limit: int = 4000) -> str:
     """Last bytes of a captured stream, for prose-grade classification."""
     try:
@@ -413,19 +430,12 @@ class TaskEngine:
             # ownership before recording the outcome.
             guard()
 
-            if result.succeeded:
-                final_state = RunState.SUCCEEDED
-            elif result.timed_out:
-                final_state = RunState.TIMED_OUT
-            elif result.cancelled:
-                final_state = RunState.CANCELLED
-            else:
-                final_state = RunState.FAILED
-
             # Directive 9: every attempt is CLASSIFIED before it can be
             # repeated, and the reason code flows unchanged from here into
-            # the ledger event and into the retry decision below — a
-            # taxonomy nothing consults is a parallel fiction.
+            # the run's durable state, the ledger event and the retry
+            # decision below — a taxonomy nothing consults is a parallel
+            # fiction. The classification comes FIRST because the durable
+            # state depends on it.
             classification = self.failure_chain.classify(FailureSignal(
                 exit_code=result.exit_code, timed_out=result.timed_out,
                 cancelled=result.cancelled,
@@ -433,6 +443,20 @@ class TaskEngine:
                 stderr_text=_tail(paths.stderr), stdout_text=_tail(paths.stdout),
             ))
             classifications.append(classification)
+
+            if result.succeeded:
+                final_state = RunState.SUCCEEDED
+            elif result.timed_out:
+                final_state = RunState.TIMED_OUT
+            elif result.cancelled:
+                final_state = RunState.CANCELLED
+            elif classification.is_park:
+                # A park recorded as FAILED is not a park: the state has
+                # to survive on disk for a scheduler to resume it, and it
+                # must not read as an agent failure (adversarial review).
+                final_state = RunState.RATE_LIMITED
+            else:
+                final_state = RunState.FAILED
 
             store.update_state(run_id, final_state)
             ledger.append(run_id, "run.attempt_classified", classification.to_dict())
@@ -507,7 +531,7 @@ class TaskEngine:
         report = EngineerReport(
             task_id=task_id,
             run_id=latest_run_id or "NONE",
-            status=ReportStatus.COMPLETED if task_sm.state == TaskState.COMPLETED else ReportStatus.PARTIAL,
+            status=_report_status(task_sm.state, classifications),
             objective=objective,
             work_completed=(f"Executed {len(run_ids)} run attempt(s) via the Claude Code CLI runner.",),
             verification=(

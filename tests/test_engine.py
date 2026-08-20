@@ -6,6 +6,7 @@ import time
 import unittest
 from pathlib import Path
 
+from gnosis.contracts.engineer_report import ReportStatus
 from gnosis.kernel.claims import ClaimStatus, ClaimStore, StaleClaimError, WorkAuthority
 from gnosis.kernel.code_intelligence import (
     CodeIntelligenceProvider,
@@ -190,6 +191,49 @@ class TestFailureTaxonomyWiring(unittest.TestCase):
         self.assertEqual(outcome.classification.failure.value, "RATE_LIMITED")
         self.assertEqual(len(outcome.run_ids), 1)  # parked, not retried 3x
         self.assertFalse(outcome.classification.penalizes_agent)  # rule 7
+
+    def test_a_park_is_durable_on_disk_not_just_in_memory(self):
+        # A park recorded as FAILED is not a park: no scheduler can resume
+        # what looks like an agent failure (adversarial review).
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=_RateLimitedRunner(),
+            retry_policy=RetryPolicy(max_attempts=2, backoff_base_s=0.01,
+                                     backoff_factor=1.0, max_backoff_s=0.01),
+        )
+        outcome = engine.execute_task(
+            task_id="TASK-PARK", objective="Demo", prompt="do it", repo_path=self.repo,
+        )
+        meta = self.store.read_meta(outcome.run_ids[-1])
+        self.assertEqual(meta.state, RunState.RATE_LIMITED.value)
+        self.assertNotEqual(meta.state, RunState.FAILED.value)
+
+    def test_an_escalating_failure_gets_its_own_report_status(self):
+        # ESCALATE used to be filed as a routine PARTIAL, indistinguishable
+        # from an ordinary miss (adversarial review).
+        class _UnclassifiableRunner(_FakeCliRunner):
+            def __init__(self):
+                super().__init__(["fail"])
+
+            def run(self, prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs):
+                result = super().run(prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs)
+                stdout_path.write_text("", encoding="utf-8")
+                stderr_path.write_text("", encoding="utf-8")
+                return ExecutionResult(
+                    command=result.command, exit_code=None, timed_out=False,
+                    cancelled=False, duration_s=0.01,
+                    stdout_path=result.stdout_path, stderr_path=result.stderr_path,
+                    started_at="t0", ended_at="t1",
+                )
+
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=_UnclassifiableRunner(),
+            retry_policy=RetryPolicy(max_attempts=1),
+        )
+        outcome = engine.execute_task(
+            task_id="TASK-ESC", objective="Demo", prompt="do it", repo_path=self.repo,
+        )
+        self.assertEqual(outcome.classification.failure.value, "UNCLASSIFIED")
+        self.assertEqual(outcome.report.status, ReportStatus.ESCALATION_REQUIRED)
 
     def test_an_ordinary_code_failure_still_retries(self):
         engine = TaskEngine(
