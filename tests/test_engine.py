@@ -400,6 +400,51 @@ class TestPolicyGate(unittest.TestCase):
         self.assertEqual(seen[0].payload["task_id"], "TASK-POL")
         self.assertIn("prompt_sha256", seen[0].payload)
 
+    def test_a_refusal_undoes_the_workspace_it_minted(self):
+        # The gate stops the dangerous side effect but used to leave its
+        # OWN behind: a DENY still minted `gnosis/<task>` and a worktree
+        # (verified before the fix).
+        subprocess.run(["git", "add", "-A"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init", "--allow-empty"],
+                       cwd=self.repo, check=True, capture_output=True)
+        worktrees = WorktreeManager(self.repo, self.root / "worktrees")
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]),
+            retry_policy=RetryPolicy(max_attempts=1),
+        )
+        engine.execute_task(
+            task_id="TASK-POL", objective="Demo", prompt="do it", repo_path=self.repo,
+            policy=self._engine_with(lambda s: RuleOutcome(Verdict.DENY, "security:no")),
+            worktrees=worktrees, policy_actor="agent://worker-a",
+        )
+        self.assertFalse(worktrees.planned_path("TASK-POL").exists())
+        branches = subprocess.run(
+            ["git", "branch", "--list", "gnosis/TASK-POL"], cwd=self.repo,
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        self.assertEqual(branches, "")
+
+    def test_a_refusal_never_removes_a_pre_existing_workspace(self):
+        # A reattached worktree may hold a previous attempt's work; only a
+        # workspace THIS call minted may be undone.
+        subprocess.run(["git", "add", "-A"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init", "--allow-empty"],
+                       cwd=self.repo, check=True, capture_output=True)
+        worktrees = WorktreeManager(self.repo, self.root / "worktrees")
+        handle = worktrees.create("TASK-POL")          # pre-existing work
+        (Path(handle.path) / "prior_work.txt").write_text("keep me", encoding="utf-8")
+
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]),
+            retry_policy=RetryPolicy(max_attempts=1),
+        )
+        engine.execute_task(
+            task_id="TASK-POL", objective="Demo", prompt="do it", repo_path=self.repo,
+            policy=self._engine_with(lambda s: RuleOutcome(Verdict.DENY, "security:no")),
+            worktrees=worktrees, policy_actor="agent://worker-a",
+        )
+        self.assertTrue((Path(handle.path) / "prior_work.txt").exists())
+
     def test_a_run_without_a_policy_is_unchanged(self):
         # The gate is opt-in at this milestone; ungoverned runs behave
         # exactly as before.

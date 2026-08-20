@@ -51,7 +51,7 @@ from .redaction import redact
 from .run_store import RunMeta, RunPaths, RunStore
 from .state_machine import RunState, TaskState, TaskStateMachine
 from .verification import VerificationResult, Verifier
-from .worktree import WorktreeHandle, WorktreeManager
+from .worktree import WorktreeError, WorktreeHandle, WorktreeManager
 
 AGENT_RUN_INTERVENTION_POINT = "before_agent_run"
 
@@ -343,6 +343,7 @@ class TaskEngine:
             # task permanently unreclaimable (adversarial review, reported
             # independently by four reviewers with a live reproduction).
             worktree_handle: WorktreeHandle | None = None
+            worktree_was_fresh = False
             exec_root = repo_path
             if worktrees is not None:
                 if worktrees.source_repo.resolve() != Path(repo_path).resolve():
@@ -353,6 +354,10 @@ class TaskEngine:
                         f"worktree manager operates on {worktrees.source_repo}, "
                         f"but this task was given repo_path {repo_path}"
                     )
+                # Whether we minted it matters: a policy refusal may
+                # only undo the workspace THIS call created, never one
+                # that already held a previous attempt's work.
+                worktree_was_fresh = not worktrees.exists(task_id)
                 worktree_handle = worktrees.create(task_id)  # idempotent/reattach
                 exec_root = Path(worktree_handle.path)
 
@@ -365,6 +370,7 @@ class TaskEngine:
                 max_context_chars=max_context_chars, authority=authority,
                 grant=grant, guard=guard, policy=policy, approvals=approvals,
                 policy_actor=policy_actor or worker_id or "agent://unattributed",
+                worktrees=worktrees, worktree_was_fresh=worktree_was_fresh,
             )
         finally:
             if pump is not None:
@@ -379,14 +385,33 @@ class TaskEngine:
         task_sm: TaskStateMachine,
         run_ids: list[str],
         classifications: list[FailureClassification],
+        worktrees: WorktreeManager | None = None,
+        worktree: WorktreeHandle | None = None,
     ) -> TaskExecutionOutcome:
-        """Materialize a policy refusal as durable evidence.
+        """Materialize a policy refusal as durable evidence, and undo the
+        workspace this call minted.
 
         A refused action still opens a run: "policy said no" must leave a
         trace with the same shape as any other outcome, or a denial is
         indistinguishable from a task that was never attempted. No child
         process is created and the repository is never touched.
+
+        The kernel does mint the task's worktree before asking (rules are
+        told where the agent would run, which needs the real path), so a
+        refusal cleans up after itself: a branch minted for an action that
+        was then forbidden is a side effect the gate should not have left
+        behind (verified: a DENY used to leave `gnosis/<task>` behind).
+        Only a workspace THIS call created is removed — a reattached one
+        may hold a previous attempt's work, and ADR-0007's provenance gate
+        refuses anything dirty regardless.
         """
+        if worktrees is not None and worktree is not None:
+            try:
+                worktrees.remove(worktree, delete_branch=True)
+            except WorktreeError:
+                # Cleanup is best-effort: a refusal that cannot tidy up is
+                # still a refusal, and ADR-0007 forbids forcing it.
+                pass
         run_id = new_run_id()
         run_ids.append(run_id)
         store.create_run(run_id, task_id)
@@ -450,6 +475,8 @@ class TaskEngine:
         policy: PolicyEngine | None = None,
         approvals: ApprovalStore | None = None,
         policy_actor: str = "agent://unattributed",
+        worktrees: WorktreeManager | None = None,
+        worktree_was_fresh: bool = False,
     ) -> TaskExecutionOutcome:
         task_sm = TaskStateMachine(TaskState.CREATED)
         task_sm.transition(TaskState.PLANNED)
@@ -615,6 +642,8 @@ class TaskEngine:
                 return self._refused_outcome(
                     task_id, objective, decision, store, task_sm, run_ids,
                     classifications,
+                    worktrees=worktrees if worktree_was_fresh else None,
+                    worktree=worktree,
                 )
             policy_decision = decision
         else:

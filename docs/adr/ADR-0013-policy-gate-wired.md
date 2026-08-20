@@ -3,8 +3,8 @@
 - Status: ACCEPTED
 - Date: 2026-08-20
 - Deciders: Claude Fable 5 (autonomous, per standing mandate)
-- Evidence: `tests/test_engine.py::TestPolicyGate` (9 tests); suite
-  449/449; mypy strict clean; ruff clean.
+- Evidence: `tests/test_engine.py::TestPolicyGate` (11 tests); suite
+  451/451; mypy strict clean; ruff clean.
 - Builds on: ADR-0011 (the engine), ADR-0009 (worktree-scoped execution),
   ADR-0012 (typed failures).
 
@@ -56,6 +56,18 @@ marks the run FAILED and reports `ESCALATION_REQUIRED`. A denial that
 left no trace would be indistinguishable from a task nobody attempted —
 and the reason code flowing into the taxonomy is exactly the Directive 9
 contract, now composing across both units.
+
+### A refusal undoes the workspace it minted
+
+Self-review found the gate leaving its own side effect: a `DENY` still
+minted `gnosis/<task_id>` and a worktree, because the kernel creates the
+workspace before asking (rules are told where the agent *would* run,
+which needs the real path). Verified, then fixed — a refusal now removes
+the workspace through ADR-0007's provenance-gated `remove()`, and **only
+one this call created**: a reattached worktree may hold a previous
+attempt's work, so it is never touched. Cleanup is best-effort; a
+refusal that cannot tidy up is still a refusal, and forcing removal is
+what ADR-0007 forbids.
 
 ### Opt-in at this milestone
 

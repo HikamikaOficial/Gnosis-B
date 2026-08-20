@@ -112,7 +112,10 @@ class WorktreeHandle:
 
 
 def _run_git(cwd: Path, args: list[str], timeout_s: float = 60.0) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, timeout=timeout_s)
+    return subprocess.run(
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True,
+        timeout=timeout_s, check=False,  # rc is inspected by every caller
+    )
 
 
 def _validate_task_id(task_id: str) -> None:
@@ -133,6 +136,21 @@ class WorktreeManager:
         self.source_repo = Path(source_repo)
         self.worktrees_root = Path(worktrees_root)
         self.worktrees_root.mkdir(parents=True, exist_ok=True)
+
+    def planned_path(self, task_id: str) -> Path:
+        """Where this task's worktree WOULD live. Creates nothing.
+
+        Lets a caller reason about (or gate on) the workspace before
+        minting it — a decision that has to happen before any side effect
+        cannot be handed a path that only exists once the side effect
+        already happened."""
+        _validate_task_id(task_id)
+        return self.worktrees_root / task_id
+
+    def exists(self, task_id: str) -> bool:
+        """True when this task already has a kernel-minted worktree."""
+        _validate_task_id(task_id)
+        return self._handle_marker(task_id).exists()
 
     # -- creation (idempotent, with reattach paths) --------------------------
 
