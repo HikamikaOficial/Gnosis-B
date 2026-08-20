@@ -1,6 +1,6 @@
 # GNOSIS Project State
 
-**Status:** PHASE -1 COMPLETE; KERNEL HARDENING DIRECTIVES 1–6 IMPLEMENTED AND ADVERSARIALLY REVIEWED
+**Status:** PHASE -1 COMPLETE; KERNEL HARDENING DIRECTIVES 1–6 + GOVERNED-ISOLATION FOLLOW-UPS DONE
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
 **Last update:** 2026-08-20
@@ -26,10 +26,15 @@ findings repaired pre- or immediately post-commit:
   findings confirmed and repaired, incl. destruction reordering and the
   autosave conflict-gate holes).
 - ADR-0008: `kernel.convergence` review-convergence loop (ac76d89; dual review Codex+workflow, 9/9 findings confirmed and repaired — incl. verification flip-detection and strict consecutive-evidence stalemate counting; also fixed two latent git_evidence bugs).
+- ADR-0009: governed execution isolation (0efd12a) — worktree-scoped
+  execution for governed runs, ownership enforced at the run-store
+  boundary, governance-aware orchestrator. Closes the ADR-0006/0007
+  structural follow-ups. Dual review: 19 findings, all repaired (incl. a
+  heartbeat-pump leak that made a task permanently unreclaimable).
 - L-0004: a refuted review finding resurrected as a real bug (shared
   FileLock instances) — refutation assumptions are now recorded.
 
-Suite: **274 tests, all passing**; mypy strict clean (39 files); ruff
+Suite: **289 tests, all passing**; mypy strict clean (39 files); ruff
 clean on all touched files.
 
 ## Fixed locations
