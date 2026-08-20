@@ -76,29 +76,28 @@ def capture_git_evidence(repo_path: Path) -> GitEvidence:
 
 
 def content_fingerprint(path: Path) -> dict[str, Any]:
-    """Tamper-detection fingerprint: does this tree hold the same BYTES?
+    """Identity of a working tree by its CONTENT — portable on purpose.
 
-    Status alone cannot answer this, and a fingerprint built on it
-    silently could not either: a file already listed
-    as ` M code.py` keeps that exact status line however many more times
-    it is rewritten, and `diff --stat` keeps the same counts for any
-    same-length edit. Verified — in the common convergence case, where a
-    fix round has already dirtied the tree, both were byte-identical
-    across a reviewer rewriting a tracked file.
+    Answers "is this the same situation?", for keying a policy approval
+    or a replay cassette. Everything in it travels: an identical clone
+    somewhere else produces the same fingerprint. (The complementary
+    question — "did anything change?" — is `tamper_fingerprint`, which is
+    exhaustive rather than portable.)
+
+    Status alone cannot answer even this, and a fingerprint built on it
+    silently did not: a file already listed as ` M code.py` keeps that
+    exact status line however many more times it is rewritten, and `diff
+    --stat` keeps the same counts for any same-length edit. Verified — in
+    the common convergence case, where a fix round has already dirtied
+    the tree, both were byte-identical across a rewrite. An approval to
+    "run the migration" therefore survived the contents of an
+    already-dirty file changing underneath it (independent review;
+    L-0011 records the same blindness in the rule-9 check).
 
     So this hashes the actual patch (`git diff HEAD`, covering staged and
     unstaged changes to tracked files) plus the contents of every
     untracked file, listed individually rather than collapsed into a
     directory entry.
-
-    It answers BOTH questions the kernel needs about a tree, which is why
-    there is only one of these: "is this the same situation?" for keying
-    a policy approval or a replay cassette, and "did anything change?" for
-    tamper detection. An earlier, cheaper variant answered only the first
-    and answered it wrongly — an approval to "run the migration" survived
-    the contents of an already-dirty file being rewritten, because the
-    status line did not move (independent review; the same blindness
-    L-0011 records for the rule-9 check).
 
     Read-only. It runs `git` — which is why the policy gate's invariant is
     stated as "no process that could act on the repository or on the
@@ -114,7 +113,13 @@ def content_fingerprint(path: Path) -> dict[str, Any]:
     if not evidence.is_repo:
         return {"is_repo": False}
 
-    code, status = _run_git(path, ["status", "--porcelain", "--untracked-files=all"])
+    # `-z` because plain porcelain C-quotes any path with a non-ASCII or
+    # special character (`?? "caf\303\251.txt"`). Reading that literally
+    # failed, and the failure was recorded as a STABLE `unreadable:`
+    # string — so the file's real bytes were never hashed and a reviewer
+    # could edit it undetected. A rule-9 bypass that needed nothing more
+    # than an accent in a filename (Codex review, reproduced).
+    code, status = _run_git(path, ["status", "--porcelain", "-z", "--untracked-files=all"])
     if code != 0:
         # A probe that failed must not read as "nothing changed": that
         # would make a broken git the way to defeat the check.
@@ -132,10 +137,13 @@ def content_fingerprint(path: Path) -> dict[str, Any]:
         return {"is_repo": True, "probe_failed": patch}
 
     untracked: dict[str, str] = {}
-    for line in status.splitlines():
-        if not line.startswith("?? "):
+    for entry in status.split("\0"):
+        # `-z` records are `XY <path>` with no quoting and no escaping,
+        # NUL-separated. Rename records carry a second NUL-separated path,
+        # but an untracked entry never does.
+        if not entry.startswith("?? "):
             continue
-        relative = line[3:].strip().strip('"')
+        relative = entry[3:]
         candidate = path / relative
         try:
             untracked[relative] = hash_canonical(
@@ -152,3 +160,74 @@ def content_fingerprint(path: Path) -> dict[str, Any]:
         "patch_sha256": hash_canonical(patch),
         "untracked": untracked,
     }
+
+
+def tamper_fingerprint(path: Path) -> dict[str, Any]:
+    """`content_fingerprint` PLUS the repository's own machinery.
+
+    Two different questions need two different functions, and collapsing
+    them broke a real property:
+
+    - *Is this the same situation?* — for keying a policy approval or a
+      replay cassette. That answer must be PORTABLE: an identical clone
+      elsewhere is the same situation, even though its `remote.origin.url`
+      differs. `content_fingerprint`.
+    - *Did anything change?* — for catching a reviewer that edited what it
+      was judging (rule 9). That answer must be EXHAUSTIVE, and `git
+      status` says nothing about `.git` itself: a "read-only" agent could
+      install a pre-commit hook (arbitrary code that runs on the next
+      commit) or repoint a remote, and the check would see an unchanged
+      tree. Verified missed before this existed.
+
+    The machinery hash is what makes the second answer complete and the
+    first one machine-local, which is exactly why it belongs here and not
+    in `content_fingerprint`.
+    """
+    fingerprint = content_fingerprint(path)
+    if not fingerprint.get("is_repo"):
+        return fingerprint
+    return {**fingerprint, "machinery": _machinery_fingerprint(path)}
+
+
+# Hooks git ships as inert examples. Hashing them adds noise, and their
+# presence or absence is not a tamper signal.
+_SAMPLE_SUFFIX = ".sample"
+
+
+def _machinery_fingerprint(path: Path) -> dict[str, Any]:
+    """Hash the parts of `.git` that can execute or redirect.
+
+    Deliberately narrow: hooks (code that runs on git operations) and
+    config (where a push goes, what a filter runs). Hashing all of `.git`
+    would make the fingerprint change on every ordinary git read.
+    """
+    code, common_dir = _run_git(path, ["rev-parse", "--git-common-dir"])
+    if code != 0:
+        return {"probe_failed": common_dir}
+    git_dir = Path(common_dir)
+    if not git_dir.is_absolute():
+        git_dir = path / git_dir
+
+    fingerprint: dict[str, Any] = {}
+    config = git_dir / "config"
+    try:
+        fingerprint["config"] = hash_canonical(config.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        fingerprint["config"] = None
+
+    hooks: dict[str, str] = {}
+    hooks_dir = git_dir / "hooks"
+    try:
+        entries = sorted(hooks_dir.iterdir())
+    except OSError:
+        entries = []
+    for entry in entries:
+        if entry.name.endswith(_SAMPLE_SUFFIX) or not entry.is_file():
+            continue
+        try:
+            hooks[entry.name] = hash_canonical(
+                base64.b64encode(entry.read_bytes()).decode("ascii"))
+        except OSError as exc:
+            hooks[entry.name] = f"unreadable: {exc}"
+    fingerprint["hooks"] = hooks
+    return fingerprint

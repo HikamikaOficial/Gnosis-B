@@ -22,6 +22,11 @@ from .capture import ExecutionResult
 
 DEFAULT_TIMEOUT_S = 1800.0
 
+# A `--output-format json` turn is a small envelope. Beyond this the file
+# is a log dump, and reading it to look for JSON is how a hostile agent
+# exhausts the kernel's memory rather than its own.
+MAX_ENVELOPE_BYTES = 8_388_608
+
 
 class CancellationToken:
     def __init__(self) -> None:
@@ -187,11 +192,19 @@ class ClaudeCodeCLIRunner:
         # supply a reset window — as the only signal (adversarial review).
         parsed_json = None
         try:
-            text = stdout_path.read_text(encoding="utf-8", errors="replace").strip()
-            if text:
-                candidate = json.loads(text)
-                if isinstance(candidate, dict):
-                    parsed_json = candidate
+            # BOUNDED. The adapter that consumes this truncates what it
+            # returns, which bounded nothing: the read and the parse both
+            # happened here first, so a multi-gigabyte envelope was an
+            # out-of-memory before the advertised limit applied (Codex
+            # review). A CLI turn's envelope is small; anything past this
+            # is a log dump, and refusing to parse it costs only the
+            # structured classification, which then falls back to prose.
+            if stdout_path.stat().st_size <= MAX_ENVELOPE_BYTES:
+                text = stdout_path.read_text(encoding="utf-8", errors="replace").strip()
+                if text:
+                    candidate = json.loads(text)
+                    if isinstance(candidate, dict):
+                        parsed_json = candidate
         except (json.JSONDecodeError, OSError):
             parsed_json = None
         return ExecutionResult(

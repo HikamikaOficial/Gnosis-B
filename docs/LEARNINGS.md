@@ -131,3 +131,19 @@ Format:
 - Lesson: "drop-in replacement" is a claim about every attribute the collaborators read, not just the method being wrapped. Observability layers are exactly where this bites, because they are added late and assumed inert.
 - Operational consequence: the wrapper passes `binary` through, pinned by a test.
 - Revalidation condition: standing rule; no expiry.
+
+## L-0016 — Self-review finds real defects and still misses most of them
+- Status: VERIFIED
+- Evidence: ADR-0015. Self-review found 3 real defects (one critical). The independent Codex pass over the SAME repaired code then found 8 more, including a rule-9 bypass reachable with nothing but an accent in a filename, and falsified one of the self-review addendum's own claims ("bounded at MAX_AGENT_MESSAGE_CHARS" — the production runner read the whole file first).
+- Scope: any unit shipped without independent review.
+- Lesson: the ratio is the point. Self-review is not worthless — it caught a critical — and it is not a substitute: an author red-teams the design they already hold in their head, so the misses cluster exactly where their model is wrong. A unit reviewed only by its author should be labelled as such in its ADR, and the label should be treated as a debt, not a footnote.
+- Operational consequence: ADRs carry an explicit "Independent review" line; unreviewed units are listed in NEXT_ACTIONS as debt and reviewed as soon as a channel reopens.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0017 — A failure recorded as a constant is a blind spot, not a gap
+- Status: VERIFIED
+- Evidence: ADR-0015 Codex finding 3, reproduced. `content_fingerprint` could not read a C-quoted path (`?? "caf\303\251.txt"`) and stored `unreadable: <errno message>`. That string never changed, so the file it stood for could be rewritten freely while the tamper check compared equal.
+- Scope: any fingerprint, hash or comparison that substitutes a placeholder when it cannot read its input.
+- Lesson: a placeholder makes the failure *invisible to the comparison*, which is worse than the read failing loudly — the check keeps reporting "unchanged" for exactly the input it cannot see. Either read it properly or make the placeholder itself unstable/fatal.
+- Operational consequence: `-z` porcelain removes the quoting entirely; where a read can still fail, the recorded value must carry something that changes (or the probe must fail closed, as `probe_failed` does).
+- Revalidation condition: standing rule; no expiry.

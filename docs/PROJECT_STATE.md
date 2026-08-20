@@ -87,10 +87,13 @@ governs the order of work here: **prefer wiring over documenting**.
   because detection is not prevention). An unreadable review raises
   rather than becoming a verdict nobody gave; an unreadable FIX report is
   inconclusive rather than `cannot_fix`, because `cannot_fix` ends the
-  loop. **No independent review**: Codex is parked until 2026-09-19 and
-  the internal reviewer agents died on usage credits. Self-review found
-  three real defects, one critical — the rule-9 tamper check was blind
-  in the normal case (an already-dirty tree), see L-0011.
+  loop. **Codex review 2026-08-21: FAIL, 8 findings, all repaired** —
+  including a rule-9 bypass reachable with nothing but an accent in a
+  filename (`git status` C-quotes non-ASCII paths, and the failure to
+  read one was stored as a *stable* value), an object quoted in prose
+  parsing as a verdict, and duplicate JSON keys resolving in the
+  author's favour. The earlier self-review found 3 real defects and
+  missed these 8 — see L-0016.
 - [x] **Hold/park plane + `boot_sweep` under a scheduler** (ADR-0016).
   `TaskScheduler` consults holds before a launch (a refusal PARKS, never
   fails), places a durable hold when a run classifies RATE_LIMITED, and
@@ -100,10 +103,10 @@ governs the order of work here: **prefer wiring over documenting**.
   compete) from decisions (which supersede, with a reason). No
   independent review: both channels are unavailable.
 
-Suite: **552 tests, all passing**; mypy strict clean (47 files); ruff at
-the recorded backlog baseline (20 pre-existing findings in untouched
-files; `.gnosis/state/lint_baseline.json` fails the run if it rises).
-Captured transcript, not prose: `.gnosis/evidence/20260820T215628Z/`.
+Suite: **559 tests, all passing**; mypy strict clean (47 files); ruff at
+the recorded backlog baseline (19 pre-existing findings in untouched
+files, ratcheted down from 20; `.gnosis/state/lint_baseline.json` fails the run if it rises).
+Captured transcript, not prose: `.gnosis/evidence/20260820T235355Z/`.
 
 ## Fixed locations
 

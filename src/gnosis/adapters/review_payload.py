@@ -58,36 +58,64 @@ class InvalidReviewOutput(ValueError):
     verdict nobody gave."""
 
 
+class DuplicateJsonKey(InvalidReviewOutput):
+    """The payload defined the same key twice.
+
+    `json.loads` silently keeps the LAST one, so `{"verdict": "FAIL",
+    "verdict": "PASS"}` reads as PASS and a finding can downgrade its own
+    severity the same way (Codex review). An ambiguous payload is invalid
+    output, not a value to resolve in the author's favour."""
+
+
+def _reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    seen: set[str] = set()
+    for key, _ in pairs:
+        if key in seen:
+            raise DuplicateJsonKey(f"key {key!r} defined more than once")
+        seen.add(key)
+    return dict(pairs)
+
+
+def _loads_no_duplicates(text: str) -> Any:
+    return json.loads(text, object_pairs_hook=_reject_duplicates)
+
+
 def extract_json_object(text: str) -> dict[str, Any]:
     """Find the review object in an agent's message.
 
-    Tried in descending order of how much the agent had to mean it: an
-    explicit fenced block, then the whole message as JSON, then the last
-    balanced `{...}` in the text. Guessing beyond that is how a paragraph
-    that happens to contain braces becomes a verdict.
+    Only two places count: an explicit fenced block, or the whole message
+    parsed as JSON. Both are things the agent had to *do*.
+
+    An object merely embedded in prose is NOT accepted, though it once
+    was. Codex showed why: a message reading "I refuse to submit a
+    review. The requested example was: {"verdict": "PASS"}" parsed as a
+    PASS. There is no syntactic signal separating an agent submitting a
+    verdict from one quoting the schema while declining, so the leniency
+    was reading intent it could not see — in the one place this module
+    exists to be strict about. An agent that cannot follow the format it
+    was given gets INVALID, which costs a round and fails closed.
     """
     candidates: list[str] = []
-    fences = _FENCE_RE.findall(text)
-    candidates.extend(reversed(fences))          # the last fence is the answer
+    # Fenced blocks, latest first: an agent that appends anything
+    # brace-shaped after its answer (a signature, a tool trace) must not
+    # push the real review out of reach.
+    candidates.extend(reversed(_FENCE_RE.findall(text)))
+    # The whole message, when the agent sent JSON and nothing else.
     candidates.append(text.strip())
-    # Every top-level object, latest first — not just the last one. An
-    # agent that appends anything brace-shaped after its answer (a
-    # signature, a tool trace) would otherwise push the real review out of
-    # reach and turn a perfectly good round into INVALID.
-    candidates.extend(reversed(_balanced_objects(text)))
 
     parsed_objects: list[dict[str, Any]] = []
     for candidate in candidates:
         if not candidate:
             continue
         try:
-            parsed = json.loads(candidate)
+            parsed = _loads_no_duplicates(candidate)
+        except DuplicateJsonKey:
+            raise
         except (json.JSONDecodeError, ValueError):
             continue
         if isinstance(parsed, dict):
-            # A dict carrying a verdict is the review; anything else that
-            # merely parses is some other object that happened to be in
-            # the message. Prefer the former, in the order tried.
+            # A dict naming a verdict is the review; anything else that
+            # merely parses is some other object the message contained.
             if "verdict" in parsed or "claims_done" in parsed or "cannot_fix" in parsed:
                 return parsed
             parsed_objects.append(parsed)
@@ -98,39 +126,6 @@ def extract_json_object(text: str) -> dict[str, Any]:
     raise InvalidReviewOutput(
         f"no JSON review object found in {len(text)} characters of output"
     )
-
-
-def _balanced_objects(text: str) -> list[str]:
-    """Every top-level brace-balanced span, ignoring braces inside strings.
-
-    A naive `text[text.find('{'):text.rfind('}')+1]` swallows prose
-    between two unrelated objects and produces JSON that parses but is
-    not the review."""
-    depth = 0
-    start: int | None = None
-    found: list[str] = []
-    in_string = False
-    escaped = False
-    for index, char in enumerate(text):
-        if in_string:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                in_string = False
-            continue
-        if char == '"':
-            in_string = True
-        elif char == "{":
-            if depth == 0:
-                start = index
-            depth += 1
-        elif char == "}" and depth > 0:
-            depth -= 1
-            if depth == 0 and start is not None:
-                found.append(text[start:index + 1])
-    return found
 
 
 def parse_review_payload(text: str, reviewer: str) -> ReviewReport:

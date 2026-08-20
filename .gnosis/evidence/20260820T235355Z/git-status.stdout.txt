@@ -1,0 +1,13 @@
+ M .claude/agent-memory/evidence-reviewer/MEMORY.md
+ M docs/adr/ADR-0015-convergence-adapters.md
+ M src/gnosis/adapters/cli_review.py
+ M src/gnosis/adapters/review_payload.py
+ M src/gnosis/kernel/convergence.py
+ M src/gnosis/kernel/git_evidence.py
+ M src/gnosis/runner/claude_cli_runner.py
+ M tests/test_cli_review_adapters.py
+?? .claude/agent-memory/evidence-reviewer/learning_adr_evidence_lines_unverified.md
+?? .claude/agent-memory/evidence-reviewer/learning_replay_fingerprint_self_reference.md
+?? .gnosis/evidence/20260820T235355Z/
+?? .gnosis/lab/kernel-reviews/codex-review-2026-08-20-replay-runner.jsonl
+?? .gnosis/lab/kernel-reviews/codex-review-2026-08-21-convergence-adapters.jsonl

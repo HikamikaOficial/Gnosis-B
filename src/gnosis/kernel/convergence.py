@@ -143,12 +143,32 @@ class RoundRecord:
 
 
 @dataclass(frozen=True)
+class EvidenceFailure:
+    """A probe that raised, kept with its TYPE rather than only its text.
+
+    "review collection failed: ..." reads the same whether the agent
+    produced unreadable output, edited the code it was judging, or
+    crashed — and those demand very different responses. The loop's
+    handling is identical (no evidence was collected), but the record is
+    not (Codex review)."""
+
+    stage: str          # fingerprint | verification | review
+    error_type: str     # the exception class name, e.g. InvalidReviewOutput
+    message: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"stage": self.stage, "error_type": self.error_type,
+                "message": self.message}
+
+
+@dataclass(frozen=True)
 class ConvergenceResult:
     outcome: ConvergenceOutcome
     rounds: tuple[RoundRecord, ...]
     gate_ledger: tuple[GatedFinding, ...]
     dissent: tuple[Finding, ...]
     warnings: tuple[str, ...]
+    evidence_failures: tuple[EvidenceFailure, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -157,6 +177,7 @@ class ConvergenceResult:
             "gate_ledger": [g.to_dict() for g in self.gate_ledger],
             "dissent": [f.to_dict() for f in self.dissent],
             "warnings": list(self.warnings),
+            "evidence_failures": [f.to_dict() for f in self.evidence_failures],
         }
 
 
@@ -212,6 +233,7 @@ class ConvergenceLoop:
         rounds: list[RoundRecord] = []
         ledger: list[GatedFinding] = []
         loop_warnings: list[str] = []
+        evidence_failures: list[EvidenceFailure] = []
         prev_fingerprint: str | None = None
         have_prev = False
         unchanged = 0
@@ -223,9 +245,12 @@ class ConvergenceLoop:
         for index in range(1, self.policy.max_rounds + 1):
             warnings: list[str] = []
 
-            fingerprint = self._collect(self.fingerprint_fn, "fingerprint", warnings)
-            verification = self._collect(self.verify_fn, "verification", warnings)
-            review = self._collect(partial(self.review_fn, index), "review", warnings)
+            fingerprint = self._collect(
+                self.fingerprint_fn, "fingerprint", warnings, evidence_failures)
+            verification = self._collect(
+                self.verify_fn, "verification", warnings, evidence_failures)
+            review = self._collect(
+                partial(self.review_fn, index), "review", warnings, evidence_failures)
             if fingerprint is None and not any("fingerprint" in w for w in warnings):
                 # The probe's documented soft-failure mode is returning
                 # None (git_fingerprint); record it, same as a raise.
@@ -348,29 +373,43 @@ class ConvergenceLoop:
                     if f not in blocking
                 )
                 return self._result(
-                    ConvergenceOutcome.CONVERGED, rounds, ledger, dissent, loop_warnings,
+                    ConvergenceOutcome.CONVERGED, rounds, ledger, dissent, loop_warnings, evidence_failures,
                 )
             if fix is not None and fix.cannot_fix:
                 return self._result(
-                    ConvergenceOutcome.CANNOT_FIX, rounds, ledger, (), loop_warnings,
+                    ConvergenceOutcome.CANNOT_FIX, rounds, ledger, (), loop_warnings, evidence_failures,
                 )
             if unchanged >= self.policy.max_unchanged_rounds:
                 return self._result(
-                    ConvergenceOutcome.STALEMATE, rounds, ledger, (), loop_warnings,
+                    ConvergenceOutcome.STALEMATE, rounds, ledger, (), loop_warnings, evidence_failures,
                 )
 
         return self._result(
-            ConvergenceOutcome.ROUNDS_EXHAUSTED, rounds, ledger, (), loop_warnings,
+            ConvergenceOutcome.ROUNDS_EXHAUSTED, rounds, ledger, (), loop_warnings, evidence_failures,
         )
 
     @staticmethod
-    def _collect(fn: Callable[[], Any], label: str, warnings: list[str]) -> Any:
+    def _collect(fn: Callable[[], Any], label: str, warnings: list[str],
+                 failures: list[EvidenceFailure] | None = None) -> Any:
         """Evidence collection: a failing probe yields None + a warning,
-        never a fake value and never an aborted loop."""
+        never a fake value and never an aborted loop.
+
+        The *type* is kept alongside the message. A prose warning collapsed
+        an unreadable agent answer, a reviewer that edited the code, a
+        broken git probe and a crashed verifier into one indistinguishable
+        outcome — and the constitution requires INVALID_AGENT_OUTPUT to
+        stay distinct from disagreement (Codex review). The loop still
+        treats them identically, which is correct: no evidence was
+        collected either way. The caller can now tell them apart.
+        """
         try:
             return fn()
         except Exception as exc:  # noqa: BLE001 - probe failure is data, not control flow
             warnings.append(f"{label} collection failed: {exc}")
+            if failures is not None:
+                failures.append(EvidenceFailure(
+                    stage=label, error_type=type(exc).__name__, message=str(exc)[:500],
+                ))
             return None
 
     @staticmethod
@@ -380,9 +419,12 @@ class ConvergenceLoop:
         ledger: list[GatedFinding],
         dissent: tuple[Finding, ...],
         warnings: list[str],
+        evidence_failures: list[EvidenceFailure] | None = None,
     ) -> ConvergenceResult:
-        # Nothing-lost rule: the gate ledger rides on EVERY exit path.
+        # Nothing-lost rule: the gate ledger rides on EVERY exit path, and
+        # so does the typed record of what could not be collected.
         return ConvergenceResult(
             outcome=outcome, rounds=tuple(rounds), gate_ledger=tuple(ledger),
             dissent=dissent, warnings=tuple(warnings),
+            evidence_failures=tuple(evidence_failures or ()),
         )

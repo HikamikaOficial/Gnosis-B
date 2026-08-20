@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ..kernel.convergence import Finding, FixReport, FixRequest, ReviewReport
-from ..kernel.git_evidence import content_fingerprint
+from ..kernel.git_evidence import tamper_fingerprint
 from ..runner.capture import ExecutionResult
 from ..runner.claude_cli_runner import McpRunnerConfig
 from .review_payload import (
@@ -151,6 +151,16 @@ def build_fix_prompt(request: FixRequest, objective: str) -> str:
     return "\n\n".join(parts)
 
 
+def _slug(identity: str) -> str:
+    """A filename-safe form of an agent identity.
+
+    Identities carry `/` and `:` (`claude-cli`, `codex://reviewer-2`), and
+    a path built from one unsanitised would escape the evidence directory
+    or fail outright on Windows."""
+    safe = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in identity)
+    return safe.strip("-") or "agent"
+
+
 def _render_finding(index: int, finding: Finding) -> str:
     location = f" [{finding.file}]" if finding.file else ""
     return (
@@ -183,7 +193,7 @@ class CliReviewer:
         self.focus = tuple(focus or ())
         self.timeout_s = timeout_s
         self.mcp = mcp
-        self.fingerprint_fn = fingerprint_fn or content_fingerprint
+        self.fingerprint_fn = fingerprint_fn or tamper_fingerprint
 
     def __call__(self, round_index: int) -> ReviewReport:
         before = self.fingerprint_fn(self.repo_path)
@@ -211,11 +221,14 @@ class CliReviewer:
         return parse_review_payload(agent_message_text(result), reviewer=self.reviewer_id)
 
     def _evidence_paths(self, round_index: int) -> tuple[Path, Path]:
+        # The reviewer identity is in the filename, not just the round.
+        # Two loops sharing an evidence directory both wrote `review-1.*`
+        # and destroyed each other's evidence, which also made replay
+        # attribution unreliable (Codex review).
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
-        return (
-            self.evidence_dir / f"review-{round_index}.stdout",
-            self.evidence_dir / f"review-{round_index}.stderr",
-        )
+        stem = f"review-{_slug(self.reviewer_id)}-{round_index}"
+        return (self.evidence_dir / f"{stem}.stdout",
+                self.evidence_dir / f"{stem}.stderr")
 
 
 class CliFixer:
@@ -241,8 +254,9 @@ class CliFixer:
 
     def __call__(self, request: FixRequest) -> FixReport:
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
-        stdout = self.evidence_dir / f"fix-{request.round_index}.stdout"
-        stderr = self.evidence_dir / f"fix-{request.round_index}.stderr"
+        stem = f"fix-{_slug(self.fixer_id)}-{request.round_index}"
+        stdout = self.evidence_dir / f"{stem}.stdout"
+        stderr = self.evidence_dir / f"{stem}.stderr"
         result = self.runner.run(
             prompt=build_fix_prompt(request, self.objective),
             cwd=self.repo_path, stdout_path=stdout, stderr_path=stderr,

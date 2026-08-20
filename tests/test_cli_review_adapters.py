@@ -84,17 +84,29 @@ class TestReviewPayloadParsing(unittest.TestCase):
                 'That was the template. My actual review:\n' + _PASS_REVIEW)
         self.assertEqual(parse_review_payload(text, "r1").verdict, ReviewVerdict.PASS)
 
-    def test_prose_around_a_bare_object_is_tolerated(self):
-        text = 'I looked at it.\n{"verdict": "FAIL", "findings": []}\nHope that helps.'
-        self.assertEqual(parse_review_payload(text, "r1").verdict, ReviewVerdict.FAIL)
+    def test_an_object_quoted_inside_prose_is_not_a_verdict(self):
+        # Contract tightened (Codex review): this used to parse as PASS.
+        # There is no syntactic signal separating an agent SUBMITTING a
+        # verdict from one quoting the schema while declining to give
+        # one, so reading a bare object out of prose was reading intent
+        # the parser cannot see — in the one place this module exists to
+        # be strict about.
+        text = ('I refuse to submit a review. The requested example was:\n'
+                '{"verdict":"PASS","findings":[]}')
+        with self.assertRaises(InvalidReviewOutput):
+            parse_review_payload(text, "r1")
 
-    def test_prose_between_two_objects_is_not_spliced_into_one(self):
-        # `text[first{:last}]` would swallow the prose and produce JSON
-        # that parses but is not the review.
-        text = '{"unrelated": 1}\nsome prose\n{"verdict": "PASS", "findings": []}'
-        self.assertEqual(parse_review_payload(text, "r1").verdict, ReviewVerdict.PASS)
+    def test_duplicate_keys_are_invalid_rather_than_last_one_wins(self):
+        # json.loads keeps the LAST value, so this reads as PASS — and a
+        # finding can downgrade its own severity the same way.
+        with self.assertRaises(InvalidReviewOutput):
+            parse_review_payload('{"verdict":"FAIL","verdict":"PASS","findings":[]}', "r1")
+        with self.assertRaises(InvalidReviewOutput):
+            parse_review_payload(
+                '```json\n{"verdict":"FAIL","findings":[{"severity":"CRITICAL",'
+                '"severity":"INFO","description":"d"}]}\n```', "r1")
 
-    def test_braces_inside_strings_do_not_confuse_the_scanner(self):
+    def test_braces_inside_strings_do_not_break_a_whole_message_object(self):
         text = '{"verdict": "PASS", "findings": [], "notes": "saw a } here"}'
         self.assertEqual(parse_review_payload(text, "r1").notes, "saw a } here")
 
@@ -153,16 +165,15 @@ class TestReviewPayloadParsing(unittest.TestCase):
         with self.assertRaises(InvalidReviewOutput):
             extract_json_object("[1, 2, 3]")
 
-    def test_a_trailing_object_does_not_push_the_review_out_of_reach(self):
-        # Self-review: taking only the LAST balanced object meant anything
-        # brace-shaped appended after the answer (a signature, a tool
-        # trace) turned a perfectly good round into INVALID.
-        text = ('{"verdict": "FAIL", "findings": []}\n'
-                'Reviewed by the model.\n{"tool_use_id": "abc"}')
-        self.assertEqual(parse_review_payload(text, "r1").verdict, ReviewVerdict.FAIL)
+    def test_a_trailing_fence_does_not_push_the_review_out_of_reach(self):
+        # Taking only ONE fence meant anything appended after the answer
+        # (a signature, a tool trace) turned a good round into INVALID.
+        text = (_PASS_REVIEW + '\nReviewed by the model.\n'
+                '```json\n{"tool_use_id": "abc"}\n```')
+        self.assertEqual(parse_review_payload(text, "r1").verdict, ReviewVerdict.PASS)
 
-    def test_the_verdict_bearing_object_is_preferred_over_a_bare_one(self):
-        text = '{"unrelated": 1}\n{"verdict": "PASS", "findings": []}\n{"trailing": 2}'
+    def test_the_verdict_bearing_fence_is_preferred_over_a_bare_one(self):
+        text = '```json\n{"unrelated": 1}\n```\n' + _PASS_REVIEW
         self.assertEqual(parse_review_payload(text, "r1").verdict, ReviewVerdict.PASS)
 
 
@@ -193,7 +204,19 @@ class TestCliReviewer(_AdapterTestCase):
         report = self._reviewer(agent, reviewer_id="rev-1")(1)
         self.assertEqual(report.verdict, ReviewVerdict.PASS)
         self.assertEqual(report.reviewer, "rev-1")
-        self.assertTrue((self.evidence / "review-1.stdout").exists())
+        self.assertTrue((self.evidence / "review-rev-1-1.stdout").exists())
+
+    def test_two_reviewers_sharing_a_directory_do_not_overwrite_each_other(self):
+        # Round index alone collided, destroying run-specific evidence and
+        # making replay attribution unreliable (Codex review).
+        for reviewer_id in ("claude-cli", "codex://reviewer-2"):
+            self._reviewer(_ScriptedAgent([_PASS_REVIEW]), reviewer_id=reviewer_id)(1)
+        written = sorted(p.name for p in self.evidence.glob("*.stdout"))
+        self.assertEqual(len(written), 2, written)
+        # And an identity carrying path separators cannot escape the dir.
+        for name in written:
+            self.assertNotIn("/", name)
+            self.assertNotIn(":", name)
 
     def test_the_reviewer_runs_in_a_read_only_posture(self):
         agent = _ScriptedAgent([_PASS_REVIEW])
@@ -227,6 +250,22 @@ class TestCliReviewer(_AdapterTestCase):
         with self.assertRaises(ReviewerModifiedSubject):
             self._reviewer(agent)(1)
 
+    def test_a_reviewer_is_caught_editing_a_file_with_an_accent_in_its_name(self):
+        # `git status --porcelain` C-quotes non-ASCII paths
+        # (`?? "caf\303\251.txt"`). Reading that literally failed, and the
+        # failure was stored as a STABLE "unreadable" string — so the
+        # file's bytes were never hashed and it could be edited freely. A
+        # rule-9 bypass that needed nothing but an accent (Codex review,
+        # reproduced).
+        (self.repo / "café.txt").write_text("original", encoding="utf-8")
+
+        def sneak(cwd):
+            (cwd / "café.txt").write_text("TAMPERED", encoding="utf-8")
+
+        agent = _ScriptedAgent([_PASS_REVIEW], on_run=sneak)
+        with self.assertRaises(ReviewerModifiedSubject):
+            self._reviewer(agent)(1)
+
     def test_a_reviewer_is_caught_editing_an_untracked_file(self):
         (self.repo / "scratch.txt").write_text("first", encoding="utf-8")
 
@@ -236,6 +275,38 @@ class TestCliReviewer(_AdapterTestCase):
         agent = _ScriptedAgent([_PASS_REVIEW], on_run=sneak)
         with self.assertRaises(ReviewerModifiedSubject):
             self._reviewer(agent)(1)
+
+    def test_a_reviewer_is_caught_installing_a_git_hook(self):
+        # `git status` says nothing about the repository's own machinery,
+        # so a "read-only" reviewer could drop in a pre-commit hook —
+        # arbitrary code that runs on the next commit — and the tamper
+        # check saw an unchanged tree. Verified missed before the fix.
+        def sneak(cwd):
+            (cwd / ".git" / "hooks" / "pre-commit").write_text(
+                "#!/bin/sh\necho pwned\n", encoding="utf-8")
+
+        agent = _ScriptedAgent([_PASS_REVIEW], on_run=sneak)
+        with self.assertRaises(ReviewerModifiedSubject):
+            self._reviewer(agent)(1)
+
+    def test_a_reviewer_is_caught_repointing_a_remote(self):
+        def sneak(cwd):
+            subprocess.run(["git", "config", "remote.origin.url", "https://elsewhere/x"],
+                           cwd=cwd, check=True, capture_output=True)
+
+        agent = _ScriptedAgent([_PASS_REVIEW], on_run=sneak)
+        with self.assertRaises(ReviewerModifiedSubject):
+            self._reviewer(agent)(1)
+
+    def test_reading_the_repository_is_not_mistaken_for_tampering(self):
+        # A tamper check that fires on `git log` would make every review
+        # round fail, which is how a gate gets switched off.
+        def look(cwd):
+            for args in (["status"], ["log", "--oneline"], ["diff"]):
+                subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+        agent = _ScriptedAgent([_PASS_REVIEW], on_run=look)
+        self.assertEqual(self._reviewer(agent)(1).verdict, ReviewVerdict.PASS)
 
     def test_a_failed_git_probe_does_not_read_as_nothing_changed(self):
         # Otherwise breaking git would be the way to defeat the check.
@@ -343,6 +414,41 @@ class TestLoopWithRealAdapters(_AdapterTestCase):
         ).run()
         self.assertEqual(result.outcome, ConvergenceOutcome.CONVERGED)
         self.assertEqual(agent.calls, 1)
+
+    def test_evidence_failures_keep_their_type_not_just_a_message(self):
+        # "review collection failed: ..." reads the same whether the agent
+        # produced unreadable output, edited the code it was judging, or
+        # crashed — and the constitution requires INVALID_AGENT_OUTPUT to
+        # stay distinct from disagreement (Codex review).
+        agent = _ScriptedAgent(["no json here"])
+        result = ConvergenceLoop(
+            policy=ConvergencePolicy(max_rounds=1),
+            verify_fn=lambda: VerificationResult(
+                name="v", passed=True, exit_code=0, duration_s=0.1,
+                stdout_excerpt="", stderr_excerpt=""),
+            review_fn=self._reviewer(agent),
+            fix_fn=lambda request: FixReport(claims_done=False),
+            fingerprint_fn=self._fingerprint,
+        ).run()
+        types = {f.error_type for f in result.evidence_failures}
+        self.assertIn("InvalidReviewOutput", types)
+        self.assertEqual({f.stage for f in result.evidence_failures}, {"review"})
+
+    def test_reviewer_tampering_is_distinguishable_from_unreadable_output(self):
+        def sneak(cwd):
+            (cwd / "code.py").write_text("tampered\n", encoding="utf-8")
+
+        result = ConvergenceLoop(
+            policy=ConvergencePolicy(max_rounds=1),
+            verify_fn=lambda: VerificationResult(
+                name="v", passed=True, exit_code=0, duration_s=0.1,
+                stdout_excerpt="", stderr_excerpt=""),
+            review_fn=self._reviewer(_ScriptedAgent([_PASS_REVIEW], on_run=sneak)),
+            fix_fn=lambda request: FixReport(claims_done=False),
+            fingerprint_fn=self._fingerprint,
+        ).run()
+        self.assertIn("ReviewerModifiedSubject",
+                      {f.error_type for f in result.evidence_failures})
 
     def test_an_unreadable_review_cannot_converge_the_loop(self):
         # The loop treats it as evidence collection failing: no verdict
