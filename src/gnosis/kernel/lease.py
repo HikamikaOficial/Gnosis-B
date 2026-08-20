@@ -104,11 +104,19 @@ class LeaseStore:
     def __init__(self, path: Path, lock_timeout_s: float = 30.0,
                  clock: Callable[[], float] = time.time):
         self.path = path
-        self._lock = FileLock(lock_path_for(path), timeout_s=lock_timeout_s)
+        self._lock_timeout_s = lock_timeout_s
         # Injectable clock (a callable returning float seconds) so expiry
         # behavior is deterministically testable without sleeping.
         self._clock = clock
         self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _locked(self) -> FileLock:
+        # One FileLock instance PER critical section, per the FileLock
+        # contract: a shared instance raises on concurrent acquire from a
+        # second thread instead of waiting its turn. Multi-threaded use is
+        # real (heartbeat pump + guards + sweeps), and the OS-level lock
+        # still serializes across both threads and processes.
+        return FileLock(lock_path_for(self.path), timeout_s=self._lock_timeout_s)
 
     # -- operations ---------------------------------------------------------
 
@@ -122,7 +130,7 @@ class LeaseStore:
         """
         if ttl_s <= 0:
             raise ValueError("ttl_s must be positive")
-        with self._lock:
+        with self._locked():
             state = self._load_locked()
             now = float(self._clock())
             current = state["leases"].get(resource)
@@ -152,7 +160,7 @@ class LeaseStore:
         """Extend a live, current lease; stale or unknown leases fail loudly."""
         if extend_s <= 0:
             raise ValueError("extend_s must be positive")
-        with self._lock:
+        with self._locked():
             state = self._load_locked()
             lease = self._current_locked(state, resource, lease_id)
             now = float(self._clock())
@@ -173,7 +181,7 @@ class LeaseStore:
         """Release a current lease. Releasing a stale lease raises: the
         caller believed it held something it did not, which is exactly
         the condition that must surface, not be absorbed."""
-        with self._lock:
+        with self._locked():
             state = self._load_locked()
             self._current_locked(state, resource, lease_id)
             del state["leases"][resource]
@@ -182,13 +190,13 @@ class LeaseStore:
     def assert_current(self, resource: str, lease_id: str) -> Lease:
         """Guard for writes: raise StaleLeaseError unless lease_id is the
         live, unexpired grant for the resource."""
-        with self._lock:
+        with self._locked():
             state = self._load_locked()
             return self._current_locked(state, resource, lease_id)
 
     def current(self, resource: str) -> Lease | None:
         """The live lease for a resource, or None (expired counts as None)."""
-        with self._lock:
+        with self._locked():
             state = self._load_locked()
             raw = state["leases"].get(resource)
             if raw is None:

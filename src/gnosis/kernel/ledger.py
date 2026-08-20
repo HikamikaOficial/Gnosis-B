@@ -97,13 +97,19 @@ class RunLedger:
 
     def __init__(self, path: Path, lock_timeout_s: float = 30.0):
         self.path = path
-        self._lock = FileLock(lock_path_for(path), timeout_s=lock_timeout_s)
+        self._lock_timeout_s = lock_timeout_s
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
             self.path.touch()
 
+    def _locked(self) -> FileLock:
+        # One FileLock instance PER critical section, per the FileLock
+        # contract: a shared instance raises on concurrent acquire from a
+        # second thread of the same object instead of waiting its turn.
+        return FileLock(lock_path_for(self.path), timeout_s=self._lock_timeout_s)
+
     def append(self, run_id: str, event_type: str, data: dict[str, Any] | None = None) -> LedgerEvent:
-        with self._lock:
+        with self._locked():
             # Directive 2: verify the whole chain before extending it.
             next_seq, prev_hash = self._verified_anchor_locked()
             event = LedgerEvent(

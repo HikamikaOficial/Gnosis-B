@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -20,6 +20,7 @@ from ..contracts.engineer_report import EngineerReport, ReportStatus
 from ..runner.capture import ExecutionResult
 from ..runner.claude_cli_runner import CancellationToken, ClaudeCodeCLIRunner, McpRunnerConfig
 from ..runner.retry import RetryPolicy, execute_with_retry
+from .claims import GrantHeartbeatPump, WorkAuthority, WorkGrant
 from .code_intelligence import CodeIntelligenceProvider, CodeIntelligenceUnavailable
 from .git_evidence import capture_git_evidence
 from .ids import new_run_id
@@ -134,6 +135,81 @@ class TaskEngine:
         code_intelligence: CodeIntelligenceProvider | None = None,
         focus_symbols: Sequence[str] | None = None,
         max_context_chars: int = 12000,
+        authority: WorkAuthority | None = None,
+        worker_id: str | None = None,
+        lease_ttl_s: float | None = None,
+        lease_heartbeat_interval_s: float | None = None,
+    ) -> TaskExecutionOutcome:
+        # Two-plane ownership (Directive 4 / ADR-0006): when a WorkAuthority
+        # is supplied, this engine invocation must hold the durable claim
+        # and the live lease for the task, and re-proves both before every
+        # durable mutation. A deposed worker raises StaleLeaseError /
+        # StaleClaimError instead of writing — the NO STALE WRITE invariant
+        # enforced at the engine's write paths, not by convention.
+        grant: WorkGrant | None = None
+        pump: GrantHeartbeatPump | None = None
+        if authority is not None:
+            if not worker_id:
+                raise ValueError("worker_id is required when a WorkAuthority is supplied")
+            grant = authority.acquire(task_id, worker_id, ttl_s=lease_ttl_s)
+            if cancellation_token is None:
+                # Deposition detected mid-run cancels the child process
+                # instead of leaking it.
+                cancellation_token = CancellationToken()
+            token = cancellation_token
+            # The pump keeps the lease alive for the grant's WHOLE lifetime
+            # — CLI runs, retry backoffs, verification, resolve — so a slow
+            # verifier can no longer self-depose a healthy worker
+            # (adversarial-review finding on the first version of this
+            # unit). Deposition cancels the child cooperatively.
+            interval = (
+                lease_heartbeat_interval_s
+                if lease_heartbeat_interval_s is not None
+                else min(max(grant.ttl_s / 4.0, 0.05), 15.0)
+            )
+            pump = GrantHeartbeatPump(
+                authority, grant, interval_s=interval,
+                on_deposed=lambda exc: token.cancel(),
+            )
+            pump.start()
+
+        def guard() -> None:
+            # Surface a pump-detected deposition deterministically, then
+            # re-prove both planes.
+            if pump is not None and pump.deposed is not None:
+                raise pump.deposed
+            if authority is not None and grant is not None:
+                authority.assert_current(grant)
+
+        try:
+            return self._execute_guarded(
+                task_id=task_id, objective=objective, prompt=prompt,
+                repo_path=repo_path, verifier=verifier, timeout_s=timeout_s,
+                cancellation_token=cancellation_token, mcp=mcp,
+                code_intelligence=code_intelligence, focus_symbols=focus_symbols,
+                max_context_chars=max_context_chars, authority=authority,
+                grant=grant, guard=guard,
+            )
+        finally:
+            if pump is not None:
+                pump.stop()
+
+    def _execute_guarded(
+        self,
+        task_id: str,
+        objective: str,
+        prompt: str,
+        repo_path: Path,
+        verifier: Verifier | None,
+        timeout_s: float,
+        cancellation_token: CancellationToken | None,
+        mcp: McpRunnerConfig | None,
+        code_intelligence: CodeIntelligenceProvider | None,
+        focus_symbols: Sequence[str] | None,
+        max_context_chars: int,
+        authority: WorkAuthority | None,
+        grant: WorkGrant | None,
+        guard: Callable[[], None],
     ) -> TaskExecutionOutcome:
         task_sm = TaskStateMachine(TaskState.CREATED)
         task_sm.transition(TaskState.PLANNED)
@@ -154,6 +230,7 @@ class TaskEngine:
 
         def attempt(attempt_number: int) -> ExecutionResult:
             nonlocal last_result
+            guard()
             run_id = new_run_id()
             run_ids.append(run_id)
             paths = self.run_store.create_run(run_id, task_id)
@@ -176,6 +253,11 @@ class TaskEngine:
                 timeout_s=timeout_s, cancellation_token=cancellation_token, mcp=mcp,
                 heartbeat_fn=lambda pid: self.run_store.heartbeat(run_id),
             )
+
+            # The CLI run is a long window in which a deposition can happen
+            # (the pump detects it and cancels the child); re-prove
+            # ownership before recording the outcome.
+            guard()
 
             if result.succeeded:
                 final_state = RunState.SUCCEEDED
@@ -201,6 +283,7 @@ class TaskEngine:
 
         execute_with_retry(attempt, should_retry, self.retry_policy)
 
+        guard()
         post_git = capture_git_evidence(repo_path)
         latest_run_id = run_ids[-1] if run_ids else None
         if latest_run_id:
@@ -223,6 +306,14 @@ class TaskEngine:
             task_sm.transition(TaskState.COMPLETED if verification_passed else TaskState.FAILED)
         else:
             task_sm.transition(TaskState.FAILED)
+
+        # Verified success resolves the claim and releases the lease in the
+        # same authority call. On failure/cancellation the claim deliberately
+        # stays ACTIVE, bound to the unresolved work (grit's merge-failure
+        # lesson); the lease is left to expire so the TTL sweep reclaims it
+        # as an audited RECLAIMED transition instead of a silent release.
+        if authority is not None and grant is not None and task_sm.state == TaskState.COMPLETED:
+            authority.resolve(grant, outcome="COMPLETED")
 
         problems: tuple[str, ...] = ()
         if not cli_succeeded and latest_run_id:

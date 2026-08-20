@@ -28,6 +28,14 @@ Format:
 - Operational consequence: bounded-retry cleanup in our tests; treat third-party diagnostic crashes of this shape as diagnostic-only before downgrading the tool itself (`zmem audit health` is the working Windows probe).
 - Revalidation condition: zmem fixes eval.py handle lifetime upstream.
 
+## L-0004 — A refuted review finding is not a dead finding
+- Status: VERIFIED
+- Evidence: ADR-0006 "Review outcome" §6 — the shared-FileLock finding was refuted by an adversarial verifier ("single-threaded usage"), then proven true days—hours later when the heartbeat pump introduced the second thread and tests crashed exactly as the original reviewer predicted.
+- Scope: any adversarial find→refute pipeline.
+- Lesson: refutation verdicts encode the *current* usage assumptions; a design change can resurrect a refuted finding. Runtime evidence (a failing test) outranks a verifier's reasoning.
+- Operational consequence: refuted findings are recorded with the assumption that killed them (here: "no same-process concurrency"); when that assumption changes, re-check the graveyard before shipping.
+- Revalidation condition: standing rule; no expiry.
+
 ## L-0003 — m3 `--database` flag does not provision fresh databases
 - Status: VERIFIED
 - Evidence: `.gnosis/lab/memory/results/m3-memory-2026.8.19.16/SCORECARD.md` (zero tables + "no pending migrations" on a fresh file).

@@ -1,9 +1,12 @@
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
+from gnosis.kernel.claims import ClaimStatus, ClaimStore, StaleClaimError, WorkAuthority
 from gnosis.kernel.code_intelligence import (
     CodeIntelligenceProvider,
     CodeIntelligenceUnavailable,
@@ -11,9 +14,10 @@ from gnosis.kernel.code_intelligence import (
     IndexStatus,
 )
 from gnosis.kernel.engine import TaskEngine
+from gnosis.kernel.lease import LeaseStore, StaleLeaseError
 from gnosis.kernel.run_store import RunStore
 from gnosis.kernel.state_machine import RunState, TaskState
-from gnosis.kernel.verification import CommandVerifier
+from gnosis.kernel.verification import CommandVerifier, VerificationResult, Verifier
 from gnosis.runner.capture import ExecutionResult
 from gnosis.runner.claude_cli_runner import McpRunnerConfig
 from gnosis.runner.retry import RetryPolicy
@@ -126,6 +130,273 @@ class TestTaskEngine(unittest.TestCase):
         git_dir = self.store.paths_for(outcome.run_ids[-1]).git_dir
         self.assertTrue((git_dir / "pre.json").exists())
         self.assertTrue((git_dir / "post.json").exists())
+
+
+class _FakeClock:
+    def __init__(self, start: float = 1000.0):
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class _CancellationAwareRunner(_FakeCliRunner):
+    """Simulates a long CLI run that honors cooperative cancellation, so
+    the pump->token->child chain is actually exercised. Signals `started`
+    so tests can schedule a deposition strictly inside the CLI window."""
+
+    def __init__(self, started):
+        super().__init__(["succeed"])
+        self.observed_cancel = False
+        self._started = started
+
+    def run(self, prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs):
+        self._started.set()
+        token = kwargs.get("cancellation_token")
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if token is not None and token.is_cancelled():
+                self.observed_cancel = True
+                break
+            time.sleep(0.02)
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("cancelled" if self.observed_cancel else "timeout", encoding="utf-8")
+        return ExecutionResult(
+            command=("fake-claude",), exit_code=1, timed_out=False,
+            cancelled=self.observed_cancel, duration_s=0.1,
+            stdout_path=str(stdout_path), stderr_path=str(stderr_path),
+            started_at="t0", ended_at="t1",
+        )
+
+
+class _SlowClockVerifier(Verifier):
+    """A verifier whose (fake-clock) duration exceeds the lease TTL,
+    advanced in steps with real sleeps in between so the heartbeat pump
+    gets the chance a real deployment's wall clock would give it."""
+
+    name = "slow-clock"
+
+    def __init__(self, clock, steps, step_s, sleep_s):
+        self._clock = clock
+        self._steps = steps
+        self._step_s = step_s
+        self._sleep_s = sleep_s
+
+    def run(self, cwd):
+        for _ in range(self._steps):
+            self._clock.advance(self._step_s)
+            time.sleep(self._sleep_s)
+        return VerificationResult(
+            name=self.name, passed=True, exit_code=0, duration_s=0.5,
+            stdout_excerpt="", stderr_excerpt="",
+        )
+
+
+class _SignalOnFirstAttemptRunner(_FakeCliRunner):
+    """Sets an event when attempt 1 finishes, so a test can schedule a
+    deposition deterministically inside the retry backoff window."""
+
+    def __init__(self, outcomes, attempt1_done):
+        super().__init__(outcomes)
+        self._attempt1_done = attempt1_done
+
+    def run(self, prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs):
+        result = super().run(prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs)
+        if self.calls == 1:
+            self._attempt1_done.set()
+        return result
+
+
+class _DeposingCliRunner(_FakeCliRunner):
+    """Succeeds, but simulates a deposition during the CLI window: the
+    lease TTL elapses, the sweep reclaims the claim, and another worker
+    takes the task over — all while this 'CLI run' is still executing."""
+
+    def __init__(self, authority, clock, ttl_s):
+        super().__init__(["succeed"])
+        self.authority = authority
+        self.clock = clock
+        self.ttl_s = ttl_s
+
+    def run(self, prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs):
+        self.clock.advance(self.ttl_s + 1)
+        self.authority.sweep()
+        self.authority.acquire("TASK-AUTH", "worker-b")
+        return super().run(prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs)
+
+
+class TestTaskEngineWorkAuthority(unittest.TestCase):
+    """Directive 4 part two: the engine's durable write paths are fenced
+    by the two-plane WorkAuthority (ADR-0006)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        subprocess.run(["git", "init"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "e@x.com"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=self.repo, check=True)
+        self.store = RunStore(self.root / "runs")
+        self.clock = _FakeClock()
+        self.claims = ClaimStore(self.root / "claims.json", clock=self.clock)
+        self.leases = LeaseStore(self.root / "leases.json", clock=self.clock)
+        self.authority = WorkAuthority(
+            self.claims, self.leases, default_ttl_s=60,
+            reclaim_grace_s=30, clock=self.clock,
+        )
+
+    def _depose_via_rival(self):
+        """Expire worker-a's lease, sweep, and hand the task to worker-b."""
+        self.clock.advance(61)
+        self.authority.sweep()
+        self.authority.acquire("TASK-AUTH", "worker-b")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_completed_task_resolves_claim_and_releases_lease(self):
+        engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
+        outcome = engine.execute_task(
+            task_id="TASK-AUTH", objective="Demo", prompt="do it", repo_path=self.repo,
+            authority=self.authority, worker_id="worker-a",
+        )
+        self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
+        claim = self.claims.get("TASK-AUTH")
+        self.assertEqual(claim.status, ClaimStatus.RESOLVED)
+        self.assertEqual(claim.outcome, "COMPLETED")
+        self.assertIsNone(self.leases.current("task/TASK-AUTH"))
+
+    def test_worker_id_required_with_authority(self):
+        engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
+        with self.assertRaises(ValueError):
+            engine.execute_task(
+                task_id="TASK-AUTH", objective="Demo", prompt="do it",
+                repo_path=self.repo, authority=self.authority,
+            )
+
+    def test_deposed_worker_aborts_without_writing_final_state(self):
+        runner = _DeposingCliRunner(self.authority, self.clock, ttl_s=60)
+        engine = TaskEngine(run_store=self.store, cli_runner=runner)
+        with self.assertRaises((StaleLeaseError, StaleClaimError)):
+            engine.execute_task(
+                task_id="TASK-AUTH", objective="Demo", prompt="do it",
+                repo_path=self.repo, authority=self.authority, worker_id="worker-a",
+            )
+        # NO STALE WRITE: the deposed attempt never recorded its outcome —
+        # the run's durable state still says RUNNING and the ledger stops
+        # at attempt_started.
+        run_ids = self.store.list_run_ids()
+        self.assertEqual(len(run_ids), 1)
+        self.assertEqual(self.store.read_meta(run_ids[0]).state, "RUNNING")
+        events = self.store.ledger_for(run_ids[0]).read_all()
+        self.assertEqual(events[-1].event_type, "run.attempt_started")
+        # The task now belongs to worker-b at a strictly greater epoch.
+        claim = self.claims.get("TASK-AUTH")
+        self.assertEqual(claim.holder, "worker-b")
+        self.assertEqual(claim.status, ClaimStatus.ACTIVE)
+
+    def test_pump_detects_mid_run_deposition_and_cancels_child(self):
+        # Pins the whole heartbeat-pump chain (adversarial-review finding:
+        # previously untested): rival takeover mid-run -> pump renewal
+        # fails -> child cancelled cooperatively -> typed abort with no
+        # final state written.
+        started = threading.Event()
+        runner = _CancellationAwareRunner(started)
+        engine = TaskEngine(run_store=self.store, cli_runner=runner)
+
+        def depose_inside_cli_window():
+            started.wait(timeout=10)
+            self._depose_via_rival()
+
+        deposer = threading.Thread(target=depose_inside_cli_window)
+        deposer.start()
+        try:
+            with self.assertRaises((StaleLeaseError, StaleClaimError)):
+                engine.execute_task(
+                    task_id="TASK-AUTH", objective="Demo", prompt="do it",
+                    repo_path=self.repo, authority=self.authority,
+                    worker_id="worker-a", lease_heartbeat_interval_s=0.05,
+                )
+        finally:
+            deposer.join()
+        self.assertTrue(runner.observed_cancel)  # child was not leaked
+        run_ids = self.store.list_run_ids()
+        self.assertEqual(len(run_ids), 1)
+        self.assertEqual(self.store.read_meta(run_ids[0]).state, "RUNNING")
+
+    def test_attempt_entry_guard_blocks_deposed_retry(self):
+        # Pins the attempt-entry guard specifically (adversarial-review
+        # finding: only the post-run guard was load-bearing): deposition
+        # lands during the retry backoff, so attempt 2 must be refused
+        # BEFORE it creates a second run.
+        attempt1_done = threading.Event()
+        engine = TaskEngine(
+            run_store=self.store,
+            cli_runner=_SignalOnFirstAttemptRunner(["fail", "succeed"], attempt1_done),
+            retry_policy=RetryPolicy(max_attempts=2, backoff_base_s=0.8,
+                                     backoff_factor=1.0, max_backoff_s=0.8),
+        )
+
+        def depose_during_backoff():
+            attempt1_done.wait(timeout=10)
+            time.sleep(0.2)  # attempt 1's post-run guard has passed by now
+            self._depose_via_rival()
+
+        deposer = threading.Thread(target=depose_during_backoff)
+        deposer.start()
+        try:
+            with self.assertRaises((StaleLeaseError, StaleClaimError)):
+                engine.execute_task(
+                    task_id="TASK-AUTH", objective="Demo", prompt="do it",
+                    repo_path=self.repo, authority=self.authority,
+                    worker_id="worker-a", lease_heartbeat_interval_s=0.05,
+                )
+        finally:
+            deposer.join()
+        # Attempt 1 ran; the deposed worker never opened a second run.
+        self.assertEqual(len(self.store.list_run_ids()), 1)
+
+    def test_slow_verifier_survives_via_pump(self):
+        # Adversarial-review major finding on the first version: a verifier
+        # outliving the lease TTL self-deposed a healthy worker after
+        # verified success. The pump must keep the lease alive through
+        # verification so resolve() lands.
+        verifier = _SlowClockVerifier(self.clock, steps=12, step_s=15, sleep_s=0.1)
+        engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
+        outcome = engine.execute_task(
+            task_id="TASK-AUTH", objective="Demo", prompt="do it",
+            repo_path=self.repo, verifier=verifier,
+            authority=self.authority, worker_id="worker-a",
+            lease_ttl_s=120, lease_heartbeat_interval_s=0.05,
+        )
+        # 180 fake-seconds elapsed against a 120s TTL (which renewals must
+        # honor — the grant's own TTL, not the 60s facade default), and the
+        # task still completed and resolved: no self-deposition.
+        self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
+        self.assertEqual(self.claims.get("TASK-AUTH").status, ClaimStatus.RESOLVED)
+
+    def test_failed_task_keeps_claim_active_until_swept(self):
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=_FakeCliRunner(["fail"]),
+            retry_policy=RetryPolicy(max_attempts=1),
+        )
+        outcome = engine.execute_task(
+            task_id="TASK-AUTH", objective="Demo", prompt="do it", repo_path=self.repo,
+            authority=self.authority, worker_id="worker-a",
+        )
+        self.assertEqual(outcome.final_task_state, TaskState.FAILED)
+        # Failure does not silently release ownership (grit's lesson):
+        claim = self.claims.get("TASK-AUTH")
+        self.assertEqual(claim.status, ClaimStatus.ACTIVE)
+        # ...the lease expires instead, and the sweep reclaims audibly.
+        self.clock.advance(61)
+        reclaimed = self.authority.sweep()
+        self.assertEqual([c.task_id for c in reclaimed], ["TASK-AUTH"])
+        self.assertEqual(self.claims.get("TASK-AUTH").status, ClaimStatus.RECLAIMED)
 
 
 class _FakeCodeIntelligenceProvider(CodeIntelligenceProvider):
