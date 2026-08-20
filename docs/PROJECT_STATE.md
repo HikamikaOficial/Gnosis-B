@@ -1,6 +1,6 @@
 # GNOSIS Project State
 
-**Status:** PHASE -1 COMPLETE; KERNEL HARDENING DIRECTIVES 1–5 IMPLEMENTED AND ADVERSARIALLY REVIEWED
+**Status:** PHASE -1 COMPLETE; KERNEL HARDENING DIRECTIVES 1–6 IMPLEMENTED AND ADVERSARIALLY REVIEWED
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
 **Last update:** 2026-08-20
@@ -25,10 +25,11 @@ findings repaired pre- or immediately post-commit:
 - ADR-0007: provenance-gated worktree lifecycle (8ec4bfd; 13/14 review
   findings confirmed and repaired, incl. destruction reordering and the
   autosave conflict-gate holes).
+- ADR-0008: `kernel.convergence` review-convergence loop (ac76d89; dual review Codex+workflow, 9/9 findings confirmed and repaired — incl. verification flip-detection and strict consecutive-evidence stalemate counting; also fixed two latent git_evidence bugs).
 - L-0004: a refuted review finding resurrected as a real bug (shared
   FileLock instances) — refutation assumptions are now recorded.
 
-Suite: **250 tests, all passing**; mypy strict clean (38 files); ruff
+Suite: **274 tests, all passing**; mypy strict clean (39 files); ruff
 clean on all touched files.
 
 ## Fixed locations
