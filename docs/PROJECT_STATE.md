@@ -1,6 +1,6 @@
 # GNOSIS Project State
 
-**Status:** PHASE -1 COMPLETE; KERNEL HARDENING DIRECTIVES 1–7 DONE (8–9 remain)
+**Status:** PHASE -1 COMPLETE; ALL NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
 **Last update:** 2026-08-20
@@ -36,10 +36,18 @@ findings repaired pre- or immediately post-commit:
   query. Dual review: 19 findings, all true, all repaired (two criticals
   reproduced: a string mode silently downgraded strict replay to a live
   call; unserializable metadata destroyed the row for a call that happened).
+- ADR-0011: fail-closed policy engine + falsifiable enforcement matrix
+  (c64b8da, repairs c26f84b). Dual review: 24 findings, all true — a one-
+  character quote bypassed every path rule, and an unserializable payload
+  made the gate raise instead of deny.
+- ADR-0012: typed failure taxonomy wired end-to-end (9d963aa) — graded
+  classification, RATE_LIMITED as a credential-scoped park state,
+  recovery-as-reconcile. Codex found it was UNWIRED; fixed by wiring the
+  engine's retry decision onto the classification, not by documenting it.
 - L-0004: a refuted review finding resurrected as a real bug (shared
   FileLock instances) — refutation assumptions are now recorded.
 
-Suite: **328 tests, all passing**; mypy strict clean (40 files); ruff
+Suite: **431 tests, all passing**; mypy strict clean (42 files); ruff
 clean on all touched files.
 
 ## Fixed locations
