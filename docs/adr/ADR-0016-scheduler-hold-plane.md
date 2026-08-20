@@ -76,6 +76,14 @@ clock rather than the injected one.
 - **`probe()` is available but nothing calls it automatically.** Deciding
   *when* to spend a probe against a shut window is a scheduling policy
   this milestone does not set.
+- **The hold log grows without bound and is re-read on every pump.**
+  Measured: 20 000 rows is ~3.7 MiB and ~140 ms per `records()` call,
+  and expired rows are still parsed every time. Linear and bounded per
+  pump, but it never shrinks. Compaction (snapshot + truncate) is the
+  fix and it is deliberately not built yet: it trades durable evidence
+  for speed, which is a decision for whoever runs this continuously —
+  and today nothing does. Recorded with the measurement rather than as a
+  vague "may grow".
 - **`boot()` liveness is best-effort.** An unknown fingerprint reads as
   "not demonstrably alive", which re-adopts work rather than stranding
   it — the safer direction, but it can re-adopt a run whose process is
