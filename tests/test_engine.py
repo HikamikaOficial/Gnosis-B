@@ -14,8 +14,17 @@ from gnosis.kernel.code_intelligence import (
     CompactContext,
     IndexStatus,
 )
-from gnosis.kernel.engine import TaskEngine
+from gnosis.kernel.engine import AGENT_RUN_INTERVENTION_POINT, TaskEngine
+from gnosis.kernel.failures import FailureClass
 from gnosis.kernel.lease import LeaseStore, StaleLeaseError
+from gnosis.kernel.policy import (
+    ActionSnapshot,
+    ApprovalStore,
+    InterventionPoint,
+    PolicyEngine,
+    RuleOutcome,
+    Verdict,
+)
 from gnosis.kernel.run_store import RunStore
 from gnosis.kernel.state_machine import RunState, TaskState
 from gnosis.kernel.verification import CommandVerifier, VerificationResult, Verifier
@@ -245,6 +254,162 @@ class TestFailureTaxonomyWiring(unittest.TestCase):
         )
         self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
         self.assertEqual(len(outcome.run_ids), 3)
+
+
+class TestPolicyGate(unittest.TestCase):
+    """ADR-0011 wired: the fail-closed engine now gates a real
+    intervention point, before any repository-writing child exists."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        subprocess.run(["git", "init"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "e@x.com"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=self.repo, check=True)
+        self.store = RunStore(self.root / "runs")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @staticmethod
+    def _engine_with(rule):
+        return PolicyEngine([InterventionPoint(
+            name=AGENT_RUN_INTERVENTION_POINT,
+            declared_tools=frozenset({"claude_cli"}),
+            rules=(("test-rule", rule),),
+            requires_intent=True,
+        )])
+
+    def _run(self, policy, approvals=None, runner=None):
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=runner or _FakeCliRunner(["succeed"]),
+            retry_policy=RetryPolicy(max_attempts=1),
+        )
+        return engine.execute_task(
+            task_id="TASK-POL", objective="Demo", prompt="do it",
+            repo_path=self.repo, policy=policy, approvals=approvals,
+            policy_actor="agent://worker-a",
+        )
+
+    def test_allow_lets_the_run_proceed_and_records_the_verdict(self):
+        outcome = self._run(self._engine_with(
+            lambda s: RuleOutcome(Verdict.ALLOW, "baseline:permitted")))
+        self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
+        events = self.store.ledger_for(outcome.run_ids[-1]).read_all()
+        decision = next(e for e in events if e.event_type == "policy.decision")
+        self.assertEqual(decision.data["verdict"], "ALLOW")
+        # An allowed action is evidence too, not just a refused one.
+        self.assertEqual(decision.data["reason"], "baseline:permitted")
+
+    def test_deny_never_launches_the_child(self):
+        runner = _FakeCliRunner(["succeed"])
+        outcome = self._run(
+            self._engine_with(lambda s: RuleOutcome(Verdict.DENY, "security:forbidden")),
+            runner=runner,
+        )
+        self.assertEqual(runner.calls, 0)  # the process never existed
+        self.assertEqual(outcome.final_task_state, TaskState.FAILED)
+        self.assertEqual(outcome.classification.failure, FailureClass.FAIL_POLICY)
+        # The policy's own reason code travels into the taxonomy.
+        self.assertEqual(outcome.classification.reason_code, "security:forbidden")
+        self.assertEqual(outcome.report.status, ReportStatus.ESCALATION_REQUIRED)
+
+    def test_a_refusal_is_durable_evidence_not_silence(self):
+        outcome = self._run(self._engine_with(
+            lambda s: RuleOutcome(Verdict.DENY, "security:forbidden")))
+        run_id = outcome.run_ids[-1]
+        events = [e.event_type for e in self.store.ledger_for(run_id).read_all()]
+        self.assertIn("policy.decision", events)
+        self.assertIn("run.attempt_classified", events)
+        self.assertEqual(self.store.read_meta(run_id).state, RunState.FAILED.value)
+
+    def test_an_unconfigured_intervention_point_denies_the_run(self):
+        # Configuration gaps are never consent — including the gap of
+        # never declaring this engine's own intervention point.
+        outcome = self._run(PolicyEngine([]))
+        self.assertEqual(outcome.final_task_state, TaskState.FAILED)
+        self.assertEqual(outcome.classification.reason_code,
+                         "policy_gap:unconfigured_intervention_point")
+
+    def test_escalation_blocks_until_the_exact_action_is_approved(self):
+        policy = self._engine_with(
+            lambda s: RuleOutcome(Verdict.ESCALATE, "human:review_required"))
+        approvals = ApprovalStore()
+        blocked = self._run(policy, approvals)
+        self.assertEqual(blocked.final_task_state, TaskState.FAILED)
+        self.assertEqual(blocked.report.status, ReportStatus.ESCALATION_REQUIRED)
+
+        # Approve exactly what was evaluated, then it proceeds.
+        action_id = blocked.classification.detail["action_id"]
+        approvals.grant(action_id, approver="nicol")
+        allowed = self._run(policy, approvals)
+        self.assertEqual(allowed.final_task_state, TaskState.COMPLETED)
+
+    def test_an_approval_does_not_transfer_to_a_different_prompt(self):
+        # Anti-TOCTOU at the engine boundary: the prompt is part of the
+        # action identity via its hash.
+        policy = self._engine_with(
+            lambda s: RuleOutcome(Verdict.ESCALATE, "human:review_required"))
+        approvals = ApprovalStore()
+        first = self._run(policy, approvals)
+        approvals.grant(first.classification.detail["action_id"], approver="nicol")
+
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]),
+            retry_policy=RetryPolicy(max_attempts=1),
+        )
+        other = engine.execute_task(
+            task_id="TASK-POL", objective="Demo", prompt="do something ELSE",
+            repo_path=self.repo, policy=policy, approvals=approvals,
+            policy_actor="agent://worker-a",
+        )
+        self.assertEqual(other.final_task_state, TaskState.FAILED)
+        self.assertEqual(other.report.status, ReportStatus.ESCALATION_REQUIRED)
+
+    def test_a_warning_proceeds_but_is_recorded(self):
+        outcome = self._run(self._engine_with(
+            lambda s: RuleOutcome(Verdict.WARN, "style:unusual_prompt")))
+        self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
+        events = self.store.ledger_for(outcome.run_ids[-1]).read_all()
+        decision = next(e for e in events if e.event_type == "policy.decision")
+        self.assertEqual(decision.data["verdict"], "WARN")
+
+    def test_rules_see_the_real_workspace_and_mcp_configs(self):
+        seen: list[ActionSnapshot] = []
+
+        def capture(snapshot):
+            seen.append(snapshot)
+            return RuleOutcome(Verdict.ALLOW, "ok:seen")
+
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]),
+            retry_policy=RetryPolicy(max_attempts=1),
+        )
+        engine.execute_task(
+            task_id="TASK-POL", objective="Demo", prompt="do it",
+            repo_path=self.repo, policy=self._engine_with(capture),
+            mcp=McpRunnerConfig(config_paths=("tools/dangerous.json",)),
+            policy_actor="agent://worker-a",
+        )
+        intent = seen[0].intent
+        self.assertTrue(intent.has_flag("--mcp-config"))
+        self.assertTrue(any(p.endswith("tools/dangerous.json")
+                            for p in intent.resolved_paths))
+        self.assertEqual(seen[0].payload["task_id"], "TASK-POL")
+        self.assertIn("prompt_sha256", seen[0].payload)
+
+    def test_a_run_without_a_policy_is_unchanged(self):
+        # The gate is opt-in at this milestone; ungoverned runs behave
+        # exactly as before.
+        engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
+        outcome = engine.execute_task(
+            task_id="TASK-FREE", objective="Demo", prompt="do it", repo_path=self.repo,
+        )
+        self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
+        events = [e.event_type for e in self.store.ledger_for(outcome.run_ids[-1]).read_all()]
+        self.assertNotIn("policy.decision", events)
 
 
 class _FakeClock:

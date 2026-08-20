@@ -20,10 +20,13 @@ from ..contracts.engineer_report import EngineerReport, ReportStatus
 from ..runner.capture import ExecutionResult
 from ..runner.claude_cli_runner import CancellationToken, ClaudeCodeCLIRunner, McpRunnerConfig
 from ..runner.retry import RetryPolicy, execute_with_retry
+from .canonical import hash_canonical
 from .claims import GrantHeartbeatPump, StaleClaimError, WorkAuthority, WorkGrant
 from .code_intelligence import CodeIntelligenceProvider, CodeIntelligenceUnavailable
 from .failures import (
     DEFAULT_CHAIN,
+    EvidenceGrade,
+    FailureClass,
     FailureClassification,
     FailureClassifierChain,
     FailureSignal,
@@ -34,11 +37,46 @@ from .git_evidence import capture_git_evidence
 from .ids import new_run_id
 from .lease import StaleLeaseError
 from .ledger import LedgerEvent, RunLedger
+from .policy import (
+    ActionSnapshot,
+    ApprovalStore,
+    CommandIntent,
+    PolicyDecision,
+    PolicyEngine,
+    Verdict,
+    parse_command,
+    resolve_escalation,
+)
 from .redaction import redact
 from .run_store import RunMeta, RunPaths, RunStore
 from .state_machine import RunState, TaskState, TaskStateMachine
 from .verification import VerificationResult, Verifier
 from .worktree import WorktreeHandle, WorktreeManager
+
+AGENT_RUN_INTERVENTION_POINT = "before_agent_run"
+
+
+def agent_run_intent(binary: str, exec_root: Path, permission_mode: str,
+                     model: str | None, mcp: McpRunnerConfig | None) -> CommandIntent:
+    """The structured intent of launching an agent, for policy rules.
+
+    Built explicitly rather than by parsing the CLI argv: the prompt is
+    an argv operand, and feeding a whole prompt through the path resolver
+    would produce nonsense paths and an unbounded snapshot. The prompt is
+    identified by hash in the snapshot payload instead — which still binds
+    an approval to the exact prompt without inlining it.
+    """
+    flags = ["--permission-mode", "--output-format"]
+    if model:
+        flags.append("--model")
+    if mcp is not None:
+        flags.append("--mcp-config")
+        if mcp.strict:
+            flags.append("--strict-mcp-config")
+    # The MCP config paths ARE operands worth gating: they decide which
+    # tools the agent can reach.
+    operands = list(mcp.config_paths) if mcp is not None else []
+    return parse_command([binary, *flags, *operands], cwd=exec_root)
 
 
 def _report_status(task_state: TaskState,
@@ -233,6 +271,9 @@ class TaskEngine:
         lease_ttl_s: float | None = None,
         lease_heartbeat_interval_s: float | None = None,
         worktrees: WorktreeManager | None = None,
+        policy: PolicyEngine | None = None,
+        approvals: ApprovalStore | None = None,
+        policy_actor: str | None = None,
     ) -> TaskExecutionOutcome:
         # Two-plane ownership (Directive 4 / ADR-0006): when a WorkAuthority
         # is supplied, this engine invocation must hold the durable claim
@@ -322,11 +363,72 @@ class TaskEngine:
                 cancellation_token=cancellation_token, mcp=mcp,
                 code_intelligence=code_intelligence, focus_symbols=focus_symbols,
                 max_context_chars=max_context_chars, authority=authority,
-                grant=grant, guard=guard,
+                grant=grant, guard=guard, policy=policy, approvals=approvals,
+                policy_actor=policy_actor or worker_id or "agent://unattributed",
             )
         finally:
             if pump is not None:
                 pump.stop()
+
+    def _refused_outcome(
+        self,
+        task_id: str,
+        objective: str,
+        decision: PolicyDecision,
+        store: _GuardedRunStore,
+        task_sm: TaskStateMachine,
+        run_ids: list[str],
+        classifications: list[FailureClassification],
+    ) -> TaskExecutionOutcome:
+        """Materialize a policy refusal as durable evidence.
+
+        A refused action still opens a run: "policy said no" must leave a
+        trace with the same shape as any other outcome, or a denial is
+        indistinguishable from a task that was never attempted. No child
+        process is created and the repository is never touched.
+        """
+        run_id = new_run_id()
+        run_ids.append(run_id)
+        store.create_run(run_id, task_id)
+        ledger = store.ledger_for(run_id)
+        ledger.append(run_id, "policy.decision", decision.to_dict())
+
+        classification = FailureClassification(
+            failure=FailureClass.FAIL_POLICY,
+            # The policy's own reason code travels unchanged into the
+            # taxonomy and out to the scheduler (Directive 9).
+            reason_code=decision.reason,
+            evidence_grade=EvidenceGrade.STRUCTURED,
+            classifier_id="policy_engine",
+            evidence=f"{decision.verdict.value} by {decision.rule_id}",
+            detail={"action_id": decision.action_id, **decision.detail},
+        )
+        classifications.append(classification)
+        ledger.append(run_id, "run.attempt_classified", classification.to_dict())
+        store.update_state(run_id, RunState.FAILED)
+        task_sm.transition(TaskState.FAILED)
+
+        report = EngineerReport(
+            task_id=task_id, run_id=run_id,
+            status=_report_status(task_sm.state, classifications),
+            objective=objective,
+            work_completed=("No work performed: the policy engine refused the action.",),
+            verification=("Not reached: execution was refused before it started.",),
+            problems_encountered=(
+                f"{decision.verdict.value} ({decision.reason}) from rule {decision.rule_id}",
+            ),
+            recommended_next_step=(
+                "Obtain an approval bound to this action id, or change the action, "
+                "then resubmit."
+                if decision.verdict is Verdict.ESCALATE
+                else "Review the policy rule and the requested action before retrying."
+            ),
+        )
+        return TaskExecutionOutcome(
+            task_id=task_id, run_ids=run_ids, final_task_state=task_sm.state,
+            verification=None, execution_result=None, report=report,
+            classification=classification,
+        )
 
     def _execute_guarded(
         self,
@@ -345,6 +447,9 @@ class TaskEngine:
         authority: WorkAuthority | None,
         grant: WorkGrant | None,
         guard: Callable[[], None],
+        policy: PolicyEngine | None = None,
+        approvals: ApprovalStore | None = None,
+        policy_actor: str = "agent://unattributed",
     ) -> TaskExecutionOutcome:
         task_sm = TaskStateMachine(TaskState.CREATED)
         task_sm.transition(TaskState.PLANNED)
@@ -403,6 +508,11 @@ class TaskEngine:
                     paths.root / "code_intelligence.json",
                     json.dumps(ci_evidence, indent=2, sort_keys=True),
                 )
+            if policy_decision is not None:
+                # The verdict the child actually ran under, on the run's
+                # own ledger: an allowed action is evidence too, not just
+                # a refused one.
+                ledger.append(run_id, "policy.decision", policy_decision.to_dict())
             ledger.append(run_id, "run.attempt_started", {
                 "attempt": attempt_number, "objective": objective,
                 "mcp": mcp.to_dict() if mcp is not None else None,
@@ -473,6 +583,42 @@ class TaskEngine:
             )
             last_result = result
             return result
+
+        # Fail-closed gate BEFORE any repository-writing child exists
+        # (ADR-0011 wired). The decision is the same for every attempt —
+        # same prompt, same argv, same workspace — so it is taken once,
+        # and a refusal means no child is ever launched.
+        if policy is not None:
+            binary = getattr(self.cli_runner, "binary", "agent")
+            snapshot = ActionSnapshot(
+                intervention_point=AGENT_RUN_INTERVENTION_POINT,
+                tool="claude_cli", actor=policy_actor,
+                intent=agent_run_intent(
+                    binary, exec_root, permission_mode="plan",
+                    model=None, mcp=mcp,
+                ),
+                payload={
+                    "task_id": task_id,
+                    # The prompt binds an approval without being inlined.
+                    "prompt_sha256": hash_canonical(effective_prompt),
+                    "prompt_chars": len(effective_prompt),
+                    "timeout_s": timeout_s,
+                    "mcp": mcp.to_dict() if mcp is not None else None,
+                    "worktree": worktree.to_dict() if worktree is not None else None,
+                },
+                context={"exec_root": str(exec_root)},
+            )
+            decision = policy.decide(snapshot)
+            if approvals is not None:
+                decision = resolve_escalation(decision, snapshot, approvals)
+            if decision.verdict not in (Verdict.ALLOW, Verdict.WARN):
+                return self._refused_outcome(
+                    task_id, objective, decision, store, task_sm, run_ids,
+                    classifications,
+                )
+            policy_decision = decision
+        else:
+            policy_decision = None
 
         def should_retry(result: ExecutionResult) -> bool:
             if result.cancelled or result.succeeded:
