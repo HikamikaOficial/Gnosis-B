@@ -68,10 +68,16 @@ governs the order of work here: **prefer wiring over documenting**.
   recorded in the enforcement matrix rather than implied away. See
   L-0005..L-0010, D-018..D-020.
 - [x] **`InteractionStore` → the real CLI runner** (ADR-0014).
-  `ReplayingCLIRunner` records and replays actual runs through the
-  cassette, byte-exact, reproducing the stdout/stderr files the engine
-  reads — proven by a Director brief recorded once and replayed with the
-  live runner replaced by one that raises if called.
+  `ReplayingCLIRunner` records and replays actual runs byte-exact,
+  reproducing the stdout/stderr files the engine reads, and is reachable
+  from `recording_orchestrator()`. **Independent review returned FAIL
+  with 8 reproducible defects**, all repaired — the critical one being
+  that the cassette key was computed from the tree the recorded agent
+  itself mutates, so no recording of a repo-mutating agent replayed past
+  its first call (L-0012). The review also caught the test that "proved"
+  the wiring using a stand-in incapable of exhibiting the failure
+  (L-0013), and the evidence line being self-reported prose — hence
+  `scripts/capture_evidence.py` and D-023.
 - [x] **`ConvergenceLoop` → real reviewer/fixer adapters** (ADR-0015).
   New `gnosis/adapters/` package (nothing in `kernel/` imports it, which
   is what makes provider-neutrality checkable). Rule 9 is enforced twice
@@ -88,9 +94,10 @@ governs the order of work here: **prefer wiring over documenting**.
 - [ ] Hold/park plane + `boot_sweep` under a scheduler (no production
   caller today, stated in ADR-0012).
 
-Suite: **527 tests, all passing**; mypy strict clean (46 files); ruff
-clean on all touched files (20 pre-existing findings elsewhere in the
-repo, listed in NEXT_ACTIONS 3).
+Suite: **535 tests, all passing**; mypy strict clean (47 files); ruff at
+the recorded backlog baseline (20 pre-existing findings in untouched
+files; `.gnosis/state/lint_baseline.json` fails the run if it rises).
+Captured transcript, not prose: `.gnosis/evidence/20260820T214621Z/`.
 
 ## Fixed locations
 

@@ -1,0 +1,68 @@
+{
+  "all_passed": false,
+  "captured_at": "2026-08-20T21:45:19.169223+00:00",
+  "python": "3.12.14",
+  "results": [
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "tests/",
+        "-q"
+      ],
+      "duration_s": 137.3,
+      "exit_code": 0,
+      "name": "pytest",
+      "tail": "535 passed in 136.73s (0:02:16)"
+    },
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "mypy",
+        "src/gnosis"
+      ],
+      "duration_s": 0.41,
+      "exit_code": 0,
+      "name": "mypy",
+      "tail": "Success: no issues found in 47 source files"
+    },
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "ruff",
+        "check",
+        "src/gnosis",
+        "--no-cache"
+      ],
+      "duration_s": 0.16,
+      "exit_code": 1,
+      "name": "ruff",
+      "tail": "[*] 1 fixable with the `--fix` option (4 hidden fixes can be enabled with the `--unsafe-fixes` option)."
+    },
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "duration_s": 0.03,
+      "exit_code": 0,
+      "name": "git-head",
+      "tail": "c15b19b9e004a593529c0e44ad8660d9841df231"
+    },
+    {
+      "argv": [
+        "git",
+        "status",
+        "--porcelain"
+      ],
+      "duration_s": 0.05,
+      "exit_code": 0,
+      "name": "git-status",
+      "tail": "?? src/gnosis/kernel/scheduler.py"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+ M .claude/agent-memory/evidence-reviewer/MEMORY.md
+ M src/gnosis/director/orchestrator.py
+ M src/gnosis/kernel/engine.py
+ M src/gnosis/kernel/git_evidence.py
+ M src/gnosis/kernel/replay.py
+ M src/gnosis/runner/replay_runner.py
+ M tests/test_replay.py
+ M tests/test_replay_runner.py
+?? .claude/agent-memory/evidence-reviewer/learning_adr_evidence_lines_unverified.md
+?? .claude/agent-memory/evidence-reviewer/learning_replay_fingerprint_self_reference.md
+?? .gnosis/evidence/
+?? .gnosis/lab/kernel-reviews/codex-review-2026-08-20-replay-runner.jsonl
+?? scripts/capture_evidence.py
+?? src/gnosis/kernel/scheduler.py

@@ -31,7 +31,7 @@ import json
 import os
 import uuid
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from types import TracebackType
@@ -158,6 +158,9 @@ class InteractionStore:
         self._counted: dict[str, int] = {}
         self._scanned_bytes = 0
         self._order: list[InteractionRecord] = []
+        # (line number, reason) for every row that could not be read. A
+        # damaged cassette stays usable and stays honest about it.
+        self.damaged: list[tuple[int, str]] = []
         self._load()
 
     # -- recording / replaying ------------------------------------------
@@ -256,6 +259,14 @@ class InteractionStore:
             # store returns and the value a later replay will produce.
             record = InteractionRecord.from_dict(json.loads(line))
             with self.path.open("a", encoding="utf-8") as fh:
+                if self._tail_is_torn():
+                    # A killed process can leave a row with no newline.
+                    # Appending straight onto it GLUES the new row to the
+                    # torn one, which silently swallows this call and then
+                    # bricks the whole cassette on the append after that
+                    # (independent review, reproduced). Terminating the
+                    # tear keeps it a single skippable bad line.
+                    fh.write("\n")
                 fh.write(line + "\n")
                 fh.flush()
                 # fsync like RunLedger: a flushed-but-unsynced tail is
@@ -267,6 +278,18 @@ class InteractionStore:
         # this row from disk and counts it there. Doing both double-counted
         # and produced occurrences 0, 2, 4.
         return record
+
+    def _tail_is_torn(self) -> bool:
+        """True when the file ends mid-line (no trailing newline)."""
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            return False
+        if size == 0:
+            return False
+        with self.path.open("rb") as fh:
+            fh.seek(-1, os.SEEK_END)
+            return fh.read(1) != b"\n"
 
     def _occurrences_on_disk(self, key: str) -> int:
         """Count of recorded occurrences for ``key``. Called under the lock.
@@ -292,11 +315,14 @@ class InteractionStore:
                 if not line:
                     continue
                 try:
-                    other = json.loads(line).get("key")
-                except json.JSONDecodeError:
+                    row = json.loads(line)
+                    # Recomputed, matching _load: counting by the stored
+                    # key while loading by the real one would put appends
+                    # and replays on different indexes.
+                    other = CallSpec(row["tool"], row["params"]).key()
+                except (json.JSONDecodeError, KeyError, TypeError):
                     continue  # interior corruption is _load's business
-                if isinstance(other, str):
-                    self._counted[other] = self._counted.get(other, 0) + 1
+                self._counted[other] = self._counted.get(other, 0) + 1
             self._scanned_bytes = consumed
         return self._counted.get(key, 0)
 
@@ -305,20 +331,28 @@ class InteractionStore:
             return
         raw_lines = [line for line in self.path.read_text(encoding="utf-8").splitlines()
                      if line.strip()]
-        last_index = len(raw_lines) - 1
         for index, line in enumerate(raw_lines):
             try:
                 record = InteractionRecord.from_dict(json.loads(line))
             except (json.JSONDecodeError, KeyError) as exc:
-                if index == last_index:
-                    # Torn final line: a process killed mid-append. Earlier
-                    # fsync'd rows are intact evidence, exactly as RunLedger
-                    # treats its own tail — bricking the cassette over a
-                    # crash would lose a whole recorded run.
-                    break
-                raise ReplayError(
-                    f"corrupt cassette line {index + 1} in {self.path}: {exc}"
-                ) from exc
+                # An unreadable row is SKIPPED and remembered, never fatal.
+                # Raising on an interior one bricked the whole cassette —
+                # every intact, fsync'd row lost — and a torn tail does not
+                # stay the last line for long: one more append puts it in
+                # the middle (independent review, reproduced).
+                #
+                # This opens no permissive path. A row that was really lost
+                # leaves a gap the occurrence-contiguity check below turns
+                # into a hard error, and a key with no readable rows simply
+                # misses, which strict replay already treats as an abort.
+                self.damaged.append((index + 1, f"{type(exc).__name__}: {exc}"))
+                continue
+            # Index by the RECOMPUTED key, never the stored one. The stored
+            # `key` field is data, and a row whose declared key contradicts
+            # the params it carries would otherwise misdirect a replay to
+            # some other call's response — the cassette describing itself
+            # falsely (independent review).
+            record = replace(record, key=CallSpec(record.tool, record.params).key())
             self._by_key.setdefault(record.key, []).append(record)
             self._order.append(record)
         for key, records in self._by_key.items():

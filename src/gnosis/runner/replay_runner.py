@@ -35,12 +35,13 @@ silently handing back a truncated prefix — the same fail-closed rule
 from __future__ import annotations
 
 import base64
+import binascii
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
 from ..kernel.canonical import hash_canonical
-from ..kernel.git_evidence import workspace_fingerprint
+from ..kernel.git_evidence import content_fingerprint
 from ..kernel.replay import CallSpec, InteractionStore, ReplayError
 from .capture import ExecutionResult
 from .claude_cli_runner import (
@@ -57,6 +58,13 @@ CLI_TOOL = "claude_code_cli"
 MAX_RECORDED_STREAM_BYTES = 1_048_576
 
 
+class ReplayedFailure(ReplayError):
+    """The recorded call raised when it ran live, so the replay raises too.
+
+    A replay that quietly produced a result for a call which never
+    produced one would make a failed run replay as a pass."""
+
+
 class UnreplayableStream(ReplayError):
     """A recorded stream was too large to store faithfully.
 
@@ -67,12 +75,18 @@ class UnreplayableStream(ReplayError):
 
 def _encode_stream(path: Path) -> dict[str, Any]:
     try:
+        # Size FIRST. Reading the whole file and then checking the cap
+        # bounded what the cassette stores but not what the recorder
+        # pulls into memory, so a multi-gigabyte log dump was an OOM
+        # after the paid call (independent review). The safer pattern
+        # already existed in adapters/cli_review.py and was not applied
+        # here.
+        size = path.stat().st_size
+        if size > MAX_RECORDED_STREAM_BYTES:
+            return {"truncated": True, "size": size}
         raw = path.read_bytes()
     except OSError as exc:
         return {"missing": f"{type(exc).__name__}: {exc}"}
-    if len(raw) > MAX_RECORDED_STREAM_BYTES:
-        return {"truncated": True, "size": len(raw),
-                "sha256": hash_canonical(base64.b64encode(raw).decode("ascii"))}
     try:
         return {"text": raw.decode("utf-8")}
     except UnicodeDecodeError:
@@ -89,10 +103,25 @@ def _decode_stream(blob: dict[str, Any], stream: str) -> bytes:
             "cannot be replayed faithfully"
         )
     if "b64" in blob:
-        return base64.b64decode(blob["b64"])
+        # validate=True: without it, characters outside the base64
+        # alphabet are SILENTLY DISCARDED and a tampered row decodes to
+        # different bytes than it claims (independent review).
+        try:
+            return base64.b64decode(blob["b64"], validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise UnreplayableStream(
+                f"{stream} was recorded as base64 that does not decode: {exc}"
+            ) from exc
     if "text" in blob:
         return str(blob["text"]).encode("utf-8")
-    # The live run could not read the stream either; reproduce that.
+    if "missing" in blob:
+        # The live run could not read this stream. Writing b"" would
+        # OVERWRITE whatever is actually on disk with nothing — the
+        # audit doing worse than refusing (independent review).
+        raise UnreplayableStream(
+            f"{stream} could not be read when the call was recorded "
+            f"({blob['missing']}); there is nothing faithful to restore"
+        )
     return b""
 
 
@@ -107,7 +136,10 @@ def mcp_fingerprint(mcp: McpRunnerConfig | None, cwd: Path) -> dict[str, Any] | 
         try:
             configs.append({"sha256": hash_canonical(candidate.read_text(encoding="utf-8"))})
         except OSError as exc:
-            configs.append({"unreadable": str(exc)})
+            # The ERROR CLASS, not str(exc): an OSError message embeds the
+            # full absolute path, which put a machine-local string into
+            # the supposedly portable key (independent review).
+            configs.append({"unreadable": type(exc).__name__})
     return {"configs": configs, "strict": mcp.strict}
 
 
@@ -129,7 +161,19 @@ class ReplayingCLIRunner:
         self.inner = inner if inner is not None else ClaudeCodeCLIRunner()
         # Injectable so a caller can supply a cheaper or stricter identity
         # (and so a non-git workspace is a decision, not a crash).
-        self.fingerprint_fn = fingerprint_fn or workspace_fingerprint
+        self.fingerprint_fn = fingerprint_fn or content_fingerprint
+        # The SESSION BASELINE, captured once per workspace, not per call.
+        # Fingerprinting each call separately was the mechanism's central
+        # defect: the agent being recorded EDITS the tree, so call 2 saw a
+        # different workspace than call 1 and got a different key — while
+        # a replay, which reproduces stdout/stderr but not the agent's
+        # edits, computed call 1's key again. Every recording of a
+        # repository-mutating agent was therefore unreplayable past the
+        # first call (independent review, with a reproduction). Anchoring
+        # on the state the session STARTED from keeps the honest property
+        # — a cassette only replays against the tree it was recorded
+        # against — without keying on state replay cannot restore.
+        self._baselines: dict[str, dict[str, Any]] = {}
 
     def run(
         self,
@@ -158,7 +202,7 @@ class ReplayingCLIRunner:
                 # A shorter deadline can turn a success into a timeout, so
                 # it determines the response and belongs in the key.
                 "timeout_s": timeout_s,
-                "workspace": self.fingerprint_fn(cwd),
+                "workspace": self._baseline_for(cwd),
             },
             # Recorded, never keyed: machine-specific and time-specific.
             metadata={"cwd": str(cwd), "stdout_path": str(stdout_path),
@@ -166,17 +210,30 @@ class ReplayingCLIRunner:
         )
 
         executed = False
+        live_response: dict[str, Any] | None = None
+        raised: BaseException | None = None
 
         def live() -> dict[str, Any]:
-            nonlocal executed
+            nonlocal executed, live_response, raised
             executed = True
-            result = self.inner.run(
-                prompt=prompt, cwd=cwd, stdout_path=stdout_path, stderr_path=stderr_path,
-                timeout_s=timeout_s, session_id=session_id, permission_mode=permission_mode,
-                model=model, mcp=mcp, extra_args=extra_args,
-                cancellation_token=cancellation_token, heartbeat_fn=heartbeat_fn,
-            )
-            return {
+            try:
+                result = self.inner.run(
+                    prompt=prompt, cwd=cwd, stdout_path=stdout_path,
+                    stderr_path=stderr_path, timeout_s=timeout_s,
+                    session_id=session_id, permission_mode=permission_mode,
+                    model=model, mcp=mcp, extra_args=extra_args,
+                    cancellation_token=cancellation_token, heartbeat_fn=heartbeat_fn,
+                )
+            except Exception as exc:  # noqa: BLE001 - re-raised below, after recording
+                # The call HAPPENED — it may have cost money and it may
+                # have changed the world. Letting the exception escape
+                # before `_append` left no row, so the next recording of
+                # the same key took occurrence 0 and a failed call
+                # replayed as the later success (independent review).
+                # Recorded as a failure, then re-raised unchanged.
+                raised = exc
+                return {"raised": f"{type(exc).__name__}: {exc}"}
+            live_response = {
                 "command": list(result.command),
                 "exit_code": result.exit_code,
                 "timed_out": result.timed_out,
@@ -188,9 +245,48 @@ class ReplayingCLIRunner:
                 "stdout": _encode_stream(stdout_path),
                 "stderr": _encode_stream(stderr_path),
             }
+            return live_response
 
-        response = self.store.call(spec, live)
+        try:
+            response = self.store.call(spec, live)
+        except ReplayError:
+            if executed and live_response is not None:
+                # The live run happened and produced a real result; the
+                # cassette merely could not encode it. Handing the caller
+                # an exception instead of its own result would be the
+                # audit breaking the thing it audits — the rule this
+                # module already applies to oversized streams, now applied
+                # here too (independent review).
+                response = live_response
+            else:
+                raise
+        if raised is not None:
+            raise raised
+        if isinstance(response, dict) and "raised" in response:
+            # Replaying a call that failed live reproduces the failure
+            # rather than inventing a result for it.
+            raise ReplayedFailure(str(response["raised"]))
         return self._materialize(response, stdout_path, stderr_path, live_ran=executed)
+
+    @property
+    def binary(self) -> str:
+        """The program that actually runs, borrowed from the wrapped runner.
+
+        `TaskEngine` shows policy rules `runner.binary` and folds it into
+        the action identity. Without this passthrough, wrapping a runner
+        for audit reported `<unknown-runner>` to the gate — changing the
+        action_id, invalidating human approvals and silencing any rule
+        that matched the real program. An audit wrapper that alters the
+        security decision is worse than no wrapper (independent review).
+        """
+        inner_binary = getattr(self.inner, "binary", None)
+        return inner_binary if isinstance(inner_binary, str) and inner_binary else "<unknown-runner>"
+
+    def _baseline_for(self, cwd: Path) -> dict[str, Any]:
+        key = str(Path(cwd).resolve())
+        if key not in self._baselines:
+            self._baselines[key] = self.fingerprint_fn(cwd)
+        return self._baselines[key]
 
     def _materialize(
         self, response: dict[str, Any], stdout_path: Path, stderr_path: Path,

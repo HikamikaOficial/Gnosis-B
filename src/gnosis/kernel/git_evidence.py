@@ -78,9 +78,8 @@ def capture_git_evidence(repo_path: Path) -> GitEvidence:
 def content_fingerprint(path: Path) -> dict[str, Any]:
     """Tamper-detection fingerprint: does this tree hold the same BYTES?
 
-    Distinct from `workspace_fingerprint`, which answers "is this the same
-    situation?" for keying and is deliberately cheap. This one answers
-    "did anything change?", and status alone cannot: a file already listed
+    Status alone cannot answer this, and a fingerprint built on it
+    silently could not either: a file already listed
     as ` M code.py` keeps that exact status line however many more times
     it is rewritten, and `diff --stat` keeps the same counts for any
     same-length edit. Verified — in the common convergence case, where a
@@ -91,6 +90,20 @@ def content_fingerprint(path: Path) -> dict[str, Any]:
     unstaged changes to tracked files) plus the contents of every
     untracked file, listed individually rather than collapsed into a
     directory entry.
+
+    It answers BOTH questions the kernel needs about a tree, which is why
+    there is only one of these: "is this the same situation?" for keying
+    a policy approval or a replay cassette, and "did anything change?" for
+    tamper detection. An earlier, cheaper variant answered only the first
+    and answered it wrongly — an approval to "run the migration" survived
+    the contents of an already-dirty file being rewritten, because the
+    status line did not move (independent review; the same blindness
+    L-0011 records for the rule-9 check).
+
+    Read-only. It runs `git` — which is why the policy gate's invariant is
+    stated as "no process that could act on the repository or on the
+    agent's behalf", not "no process at all": computing the identity of
+    the thing being judged is part of judging it.
 
     Known blind spot, stated rather than implied: **ignored files are not
     covered.** `git status` does not list them and enumerating them means
@@ -138,35 +151,4 @@ def content_fingerprint(path: Path) -> dict[str, Any]:
         "status_sha256": hash_canonical(status),
         "patch_sha256": hash_canonical(patch),
         "untracked": untracked,
-    }
-
-
-def workspace_fingerprint(path: Path) -> dict[str, Any]:
-    """Identify a workspace by what an agent can SEE in it, not by where it is.
-
-    A path string is the wrong identity twice over: it is machine-local,
-    so anything keyed on it cannot travel; and it is stable across
-    completely different tree contents, so anything keyed on it treats two
-    materially different situations as one. Both matter — a replay
-    cassette needs the first (ADR-0010) and a policy approval needs the
-    second (ADR-0013: an approval to "run the migration" must not survive
-    the tree changing underneath it).
-
-    The dirty state is hashed rather than inlined: a porcelain listing of
-    a large tree would dominate whatever record this goes into, and only
-    its identity is load-bearing.
-
-    Read-only. It runs `git` — which is why the gate's invariant is
-    stated as "no process that could act on the repository or on the
-    agent's behalf", not "no process at all": computing the identity of
-    the thing being judged is part of judging it.
-    """
-    evidence = capture_git_evidence(path)
-    if not evidence.is_repo:
-        return {"is_repo": False}
-    return {
-        "is_repo": True,
-        "head_sha": evidence.head_sha,
-        "branch": evidence.branch,
-        "dirty_sha256": hash_canonical(evidence.status_porcelain),
     }

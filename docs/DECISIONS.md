@@ -65,3 +65,6 @@ A new top-level package holds everything provider-specific (prompt shapes, outpu
 
 ## D-022 — A reviewer's read-only posture is claimed by the provider and verified by the kernel
 Review agents run with edit tools withheld, and `CliReviewer` fingerprints the workspace either side of the run, refusing a reviewer that moved it — checked BEFORE its output is parsed. The matrix records `convergence/reviewer_read_only = SANDBOX_APPROX`: detection after the fact is not prevention, and the table says so. Details/evidence: ADR-0015.
+
+## D-023 — Verification claims cite a captured transcript, not prose
+`scripts/capture_evidence.py` writes `.gnosis/evidence/<utc-stamp>/` with each command's argv, exit code, duration and output, plus the HEAD it ran at, and exits non-zero if anything fails. ADRs cite that path instead of asserting "suite N/N; mypy clean", which an independent review correctly called self-reported and unbacked. Ruff's whole-repo run is scored against `.gnosis/state/lint_baseline.json`: the count may only go down, so a documented backlog cannot be confused with new debt and new debt cannot be added quietly. Details/evidence: ADR-0014.

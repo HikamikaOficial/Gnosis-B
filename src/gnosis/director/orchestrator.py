@@ -21,7 +21,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from ..contracts.director_brief import DirectorBrief
 from ..contracts.engineer_report import EngineerReport, ReportStatus
@@ -29,11 +29,13 @@ from ..kernel.claims import WorkAuthority
 from ..kernel.engine import TaskEngine, TaskExecutionOutcome
 from ..kernel.ids import new_task_id
 from ..kernel.policy import ApprovalStore, PolicyEngine
+from ..kernel.replay import InteractionStore, ReplayMode
 from ..kernel.run_store import RunStore
 from ..kernel.state_machine import RunState
 from ..kernel.verification import Verifier
 from ..kernel.worktree import WorktreeManager
 from ..runner.recovery import RecoveryManager
+from ..runner.replay_runner import ReplayingCLIRunner
 from .brief_record import BriefRecord, BriefRecordState, BriefRecordStore
 from .inbox import DirectorInbox
 
@@ -229,6 +231,41 @@ class DirectorOrchestrator:
             if meta.state in (RunState.PENDING.value, RunState.RUNNING.value, RunState.SUCCEEDED.value):
                 return True
         return False
+
+
+def recording_orchestrator(
+    director_root: Path,
+    run_store: RunStore,
+    repo_path: Path,
+    cassette: Path,
+    mode: ReplayMode | str = ReplayMode.RECORD,
+    inner_runner: Any | None = None,
+    **kwargs: Any,
+) -> DirectorOrchestrator:
+    """A Director whose agent calls go through a replay cassette.
+
+    This exists because ADR-0014 shipped `ReplayingCLIRunner` with **no
+    production construction anywhere** — reachable from tests only, which
+    is the precise condition Directive 9 named a parallel fiction and
+    which the independent review caught the ADR condemning in its own
+    opening paragraph.
+
+    `RECORD` runs the real agent and keeps a cassette beside the run;
+    `REPLAY` re-runs the same briefs against it with no model, no network
+    and no bill. The task engine is built here rather than accepted,
+    because the whole point is that the runner it holds is the wrapped
+    one.
+    """
+    engine = TaskEngine(
+        run_store=run_store,
+        cli_runner=ReplayingCLIRunner(
+            InteractionStore(cassette, mode), inner=inner_runner,
+        ),
+    )
+    return DirectorOrchestrator(
+        director_root=director_root, run_store=run_store, repo_path=repo_path,
+        task_engine=engine, **kwargs,
+    )
 
 
 def _atomic_write(path: Path, text: str) -> None:

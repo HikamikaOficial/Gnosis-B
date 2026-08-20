@@ -14,16 +14,17 @@ from gnosis.contracts.director_brief import BriefSource, DirectorBrief
 from gnosis.director.brief_record import BriefRecordState
 from gnosis.director.orchestrator import DirectorOrchestrator
 from gnosis.kernel.engine import TaskEngine
+from gnosis.kernel.git_evidence import content_fingerprint
 from gnosis.kernel.replay import InteractionStore, ReplayMiss, ReplayMode
 from gnosis.kernel.run_store import RunStore
 from gnosis.runner.capture import ExecutionResult
-from gnosis.runner.claude_cli_runner import McpRunnerConfig
+from gnosis.runner.claude_cli_runner import ClaudeCodeCLIRunner, McpRunnerConfig
 from gnosis.runner.replay_runner import (
     MAX_RECORDED_STREAM_BYTES,
+    ReplayedFailure,
     ReplayingCLIRunner,
     UnreplayableStream,
     mcp_fingerprint,
-    workspace_fingerprint,
 )
 from gnosis.runner.retry import RetryPolicy
 
@@ -49,6 +50,25 @@ class _ScriptedRunner:
             started_at="t0", ended_at="t1",
             parsed_json={"ok": True} if self.exit_code == 0 else None,
         )
+
+
+class _MutatingRunner(_ScriptedRunner):
+    """Writes into the REPOSITORY, like the only agent GNOSIS runs.
+
+    The scripted runner above touches nothing but its own stdout files,
+    which the tests place outside the repo — a stand-in structurally
+    incapable of exhibiting the failure that mattered (independent
+    review). This one edits the tree between calls."""
+
+    def __init__(self, edits, **kwargs):
+        super().__init__(**kwargs)
+        self.edits = list(edits)
+
+    def run(self, prompt, cwd, stdout_path, stderr_path, timeout_s=1800.0, **kwargs):
+        result = super().run(prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs)
+        name, content = self.edits[min(self.calls, len(self.edits)) - 1]
+        (Path(cwd) / name).write_text(content, encoding="utf-8")
+        return result
 
 
 class _ForbiddenRunner:
@@ -234,7 +254,7 @@ class TestCassetteIdentity(_ReplayRunnerTestCase):
 
     def test_absolute_paths_never_enter_the_key(self):
         self.assertNotIn("is_repo", {})  # guard against an empty assertion
-        fingerprint = workspace_fingerprint(self.repo)
+        fingerprint = content_fingerprint(self.repo)
         self.assertNotIn(str(self.repo), json.dumps(fingerprint))
         config = self.repo / "tools.json"
         config.write_text("{}", encoding="utf-8")
@@ -244,7 +264,7 @@ class TestCassetteIdentity(_ReplayRunnerTestCase):
     def test_a_non_git_workspace_is_a_decision_not_a_crash(self):
         plain = self.root / "plain"
         plain.mkdir()
-        self.assertEqual(workspace_fingerprint(plain), {"is_repo": False})
+        self.assertEqual(content_fingerprint(plain), {"is_repo": False})
 
 
 class TestBriefReplayEndToEnd(_ReplayRunnerTestCase):
@@ -299,6 +319,141 @@ class TestBriefReplayEndToEnd(_ReplayRunnerTestCase):
         run_id = replayed[0].execution.run_ids[-1]
         stdout = RunStore(self.root_second / "runs").paths_for(run_id).stdout
         self.assertEqual(Path(stdout).read_bytes(), b'{"result": "shipped"}')
+
+
+class TestRecordingAnAgentThatEditsTheRepo(_ReplayRunnerTestCase):
+    """The case the mechanism exists for, and the one it used to fail.
+
+    Keying each call on the tree it saw meant call 2 got a key derived
+    from call 1's edits — which a replay, reproducing stdout but not those
+    edits, could never compute again."""
+
+    def test_two_calls_replay_even_though_the_agent_changed_the_tree(self):
+        edits = [("a.py", "written by call 1\n"), ("b.py", "written by call 2\n")]
+        live = _MutatingRunner(edits, stdout=b'{"ok": 1}')
+        recorder = ReplayingCLIRunner(
+            InteractionStore(self.cassette, ReplayMode.RECORD), inner=live)
+        out, err = self._paths("a")
+        recorder.run("step", self.repo, out, err, timeout_s=60.0)
+        recorder.run("step", self.repo, out, err, timeout_s=60.0)
+        self.assertEqual(live.calls, 2)
+
+        # Reset the tree to what the recording started from, which is the
+        # only state a replay can honestly claim to reproduce.
+        for name, _ in edits:
+            (self.repo / name).unlink()
+
+        player = ReplayingCLIRunner(
+            InteractionStore(self.cassette, ReplayMode.REPLAY), inner=_ForbiddenRunner())
+        player.run("step", self.repo, out, err, timeout_s=60.0)
+        player.run("step", self.repo, out, err, timeout_s=60.0)   # used to ReplayMiss
+
+    def test_a_replay_against_a_different_starting_tree_still_misses(self):
+        # The fix must not have bought multi-call replay by making the
+        # cassette indifferent to which tree it replays against.
+        live = _MutatingRunner([("a.py", "x\n")], stdout=b'{"ok": 1}')
+        out, err = self._paths("a")
+        ReplayingCLIRunner(
+            InteractionStore(self.cassette, ReplayMode.RECORD), inner=live,
+        ).run("step", self.repo, out, err, timeout_s=60.0)
+        (self.repo / "a.py").unlink()
+        (self.repo / "unrelated.py").write_text("different starting point\n", encoding="utf-8")
+        with self.assertRaises(ReplayMiss):
+            ReplayingCLIRunner(
+                InteractionStore(self.cassette, ReplayMode.REPLAY),
+                inner=_ForbiddenRunner(),
+            ).run("step", self.repo, out, err, timeout_s=60.0)
+
+
+class TestFailuresAndCorruption(_ReplayRunnerTestCase):
+    def test_a_call_that_raised_live_is_recorded_and_re_raises_on_replay(self):
+        # The call happened and may have cost money. Dropping its row let
+        # the NEXT recording take occurrence 0, so a failed call replayed
+        # as a later success (independent review).
+        class _Exploding:
+            calls = 0
+
+            def run(self, **kwargs):
+                _Exploding.calls += 1
+                raise FileNotFoundError("claude binary missing")
+
+        out, err = self._paths("a")
+        recorder = ReplayingCLIRunner(
+            InteractionStore(self.cassette, ReplayMode.RECORD), inner=_Exploding())
+        with self.assertRaises(FileNotFoundError):
+            recorder.run("boom", self.repo, out, err, timeout_s=60.0)
+
+        player = ReplayingCLIRunner(
+            InteractionStore(self.cassette, ReplayMode.REPLAY), inner=_ForbiddenRunner())
+        with self.assertRaises(ReplayedFailure):
+            player.run("boom", self.repo, out, err, timeout_s=60.0)
+
+    def test_a_torn_cassette_tail_does_not_swallow_the_next_call(self):
+        # Appending onto an unterminated row glued them together, silently
+        # discarding the just-recorded live call.
+        out, err = self._paths("a")
+        ReplayingCLIRunner(
+            InteractionStore(self.cassette, ReplayMode.RECORD),
+            inner=_ScriptedRunner(stdout=b"first"),
+        ).run("one", self.repo, out, err, timeout_s=60.0)
+        with self.cassette.open("a", encoding="utf-8") as fh:
+            fh.write('{"key": "torn", "tool": "claude_code_cli"')   # no newline
+
+        ReplayingCLIRunner(
+            InteractionStore(self.cassette, ReplayMode.RECORD),
+            inner=_ScriptedRunner(stdout=b"second"),
+        ).run("two", self.repo, out, err, timeout_s=60.0)
+
+        store = InteractionStore(self.cassette, ReplayMode.REPLAY)
+        prompts = {record.params["prompt"] for record in store.records()}
+        self.assertEqual(prompts, {"one", "two"})
+
+    def test_a_forged_key_cannot_misdirect_a_replay(self):
+        # The stored key is data. Trusting it let a row claim to be some
+        # other call's response.
+        out, err = self._paths("a")
+        ReplayingCLIRunner(
+            InteractionStore(self.cassette, ReplayMode.RECORD),
+            inner=_ScriptedRunner(stdout=b"real"),
+        ).run("honest", self.repo, out, err, timeout_s=60.0)
+        rows = [json.loads(line) for line in
+                self.cassette.read_text(encoding="utf-8").splitlines() if line.strip()]
+        rows[0]["key"] = "0" * 64
+        self.cassette.write_text(
+            "\n".join(json.dumps(r, sort_keys=True) for r in rows) + "\n", encoding="utf-8")
+
+        replayed = ReplayingCLIRunner(
+            InteractionStore(self.cassette, ReplayMode.REPLAY), inner=_ForbiddenRunner(),
+        ).run("honest", self.repo, out, err, timeout_s=60.0)
+        self.assertEqual(out.read_bytes(), b"real")
+        self.assertEqual(replayed.exit_code, 0)
+
+    def test_the_director_can_be_built_in_replay_mode_from_production_code(self):
+        # ADR-0014 shipped with ZERO production constructions of
+        # ReplayingCLIRunner — reachable from tests only, the exact
+        # condition its own opening paragraph condemns.
+        from gnosis.director.orchestrator import recording_orchestrator
+        orchestrator = recording_orchestrator(
+            director_root=self.root / "director",
+            run_store=RunStore(self.root / "runs"), repo_path=self.repo,
+            cassette=self.cassette, mode=ReplayMode.RECORD,
+            inner_runner=_ScriptedRunner(stdout=b'{"ok": 1}'),
+        )
+        brief = DirectorBrief(brief_id="B1", title="T", mission="Ship it.",
+                              source=BriefSource.MANUAL)
+        (orchestrator.inbox.layout.inbox / "B1.json").write_text(
+            json.dumps(brief.to_dict()), encoding="utf-8")
+        outcomes = orchestrator.run_pending()
+        self.assertTrue(outcomes[0].accepted)
+        self.assertTrue(self.cassette.exists())
+
+    def test_the_wrapper_shows_policy_rules_the_real_binary(self):
+        # Wrapping a runner for audit must not change the action identity
+        # the policy gate approves.
+        inner = ClaudeCodeCLIRunner(binary="claude")
+        wrapped = ReplayingCLIRunner(
+            InteractionStore(self.cassette, ReplayMode.RECORD), inner=inner)
+        self.assertEqual(wrapped.binary, inner.binary)
 
 
 if __name__ == "__main__":

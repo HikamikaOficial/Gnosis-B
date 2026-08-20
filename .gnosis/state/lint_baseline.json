@@ -1,0 +1,6 @@
+{
+  "max_findings": 20,
+  "recorded_at": "2026-08-20",
+  "scope": "ruff check src/gnosis tests",
+  "note": "Pre-existing residuals in files untouched since earlier milestones (BLE001, PLW1510, TRY004, UP046/47, SIM1xx, RUF013). This number may only go DOWN. capture_evidence.py fails the run if it rises, so new lint debt cannot be added quietly while the backlog is paid off."
+}

@@ -99,3 +99,35 @@ Format:
 - Lesson: status reports a file's *state class*, not its content, and stat reports counts, not bytes. Both are stable across arbitrary edits to an already-dirty file — which during a fix→review cycle is every file that matters.
 - Operational consequence: tamper detection uses `content_fingerprint` (hash of the full `git diff HEAD` patch plus each untracked file's bytes). Identity/keying keeps the cheap `workspace_fingerprint`; the two are deliberately different functions with different jobs.
 - Revalidation condition: standing rule; no expiry.
+
+## L-0012 — Key a recording on the state the session started from, never on state the recorded actor changes
+- Status: VERIFIED
+- Evidence: ADR-0014 independent review, finding 1, with a reproduction. The cassette fingerprinted the workspace per call; the recorded agent edits the repository; so call 2's key was derived from call 1's edits, and a replay — which restores stdout but not those edits — computed call 1's key again and missed.
+- Scope: any content-addressed record/replay whose key includes ambient state the recorded actor can mutate.
+- Lesson: a replay restores what it recorded, and nothing else. Any input to the key that the actor itself moves is unreproducible by construction, so the key must anchor on the session's starting state. This preserves the honest property (a cassette only replays against the tree it was recorded against) while removing the impossible one.
+- Operational consequence: `ReplayingCLIRunner` caches one baseline fingerprint per workspace; two tests pin both directions — multi-call replay works, and a different starting tree still misses.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0013 — A stand-in that cannot exhibit the failure makes the test a decoration
+- Status: VERIFIED
+- Evidence: ADR-0014 review. The end-to-end test claimed to prove production wiring, but its fake runner wrote only to stdout paths deliberately placed OUTSIDE the repository — so the one behaviour that broke (an agent mutating the tree between calls) could not occur in the test at all. It passed while the mechanism was broken for its only real user.
+- Scope: any test whose double stands in for a component with side effects.
+- Lesson: ask what the real component DOES that the double does not, then ask whether the failure being guarded against lives in that gap. A double simpler than the thing it replaces is fine; a double missing the exact behaviour under test is a decoration.
+- Operational consequence: doubles for the agent runner mutate the repository (`_MutatingRunner`), because that is what the agent does.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0014 — Refusing to read damaged evidence destroys more evidence than it protects
+- Status: VERIFIED
+- Evidence: ADR-0014 review finding 4, reproduced. The cassette raised on any interior unreadable row. A crash leaves a torn tail; one more append moves that tear off the last line; the next load then refused the entire file, losing every intact fsync'd row — a survivable crash turned into total loss.
+- Scope: append-only evidence stores with strict parsing.
+- Lesson: strictness has to be aimed at the thing that can produce a WRONG answer, not at the thing that produces a missing one. Skipping an unreadable row can only cause a miss, and a miss already fails closed; refusing the whole file causes certain, total loss. The integrity check that matters is the one on sequence (occurrence contiguity), which still catches a row genuinely lost from the middle.
+- Operational consequence: `InteractionStore` skips and reports damaged rows (`store.damaged`) and keeps the contiguity check as the hard error.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0015 — An audit wrapper that changes the security decision is worse than no wrapper
+- Status: VERIFIED
+- Evidence: ADR-0014 review finding 2. Wrapping the CLI runner for record/replay dropped `.binary`, so the policy gate saw `<unknown-runner>` instead of `claude` — a different `action_id`, human approvals silently invalidated, and every rule matching the real program silenced.
+- Scope: any decorator placed around a component whose attributes feed a security or identity decision.
+- Lesson: "drop-in replacement" is a claim about every attribute the collaborators read, not just the method being wrapped. Observability layers are exactly where this bites, because they are added late and assumed inert.
+- Operational consequence: the wrapper passes `binary` through, pinned by a test.
+- Revalidation condition: standing rule; no expiry.

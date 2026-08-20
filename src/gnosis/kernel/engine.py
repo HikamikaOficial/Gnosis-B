@@ -33,7 +33,7 @@ from .failures import (
     SchedulerAction,
     scheduler_action,
 )
-from .git_evidence import capture_git_evidence, workspace_fingerprint
+from .git_evidence import capture_git_evidence, content_fingerprint
 from .ids import new_run_id
 from .lease import StaleLeaseError
 from .ledger import LedgerEvent, RunLedger
@@ -516,7 +516,7 @@ class TaskEngine:
                 # action (Codex review). Read-only git probes are the one
                 # thing the kernel runs before a verdict, because computing
                 # the identity being judged is part of judging it.
-                "workspace": workspace_fingerprint(exec_root),
+                "workspace": content_fingerprint(exec_root),
                 # Stable worktree identity only: `created_at` is a
                 # per-submission value that made every approval
                 # un-reusable, defeating the documented "approve, then

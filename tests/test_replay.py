@@ -223,12 +223,39 @@ class TestInteractionStore(unittest.TestCase):
         occurrences = sorted(r.occurrence for r in self._store(ReplayMode.REPLAY).records())
         self.assertEqual(occurrences, list(range(8)))  # no duplicates, no gaps
 
-    def test_interior_corruption_raises_instead_of_replaying_garbage(self):
+    def test_interior_corruption_costs_only_the_damaged_row(self):
+        # Contract corrected (independent review): raising here bricked
+        # the WHOLE cassette — every intact, fsync'd row lost — and a torn
+        # tail does not stay the last line for long, so one more append
+        # turned a survivable crash into a total loss. Skipping the row
+        # opens no permissive path: the call it recorded now MISSES, which
+        # strict replay already treats as an abort, so garbage is still
+        # never replayed.
         store = self._store()
         store.call(_spec(prompt="a"), _LiveCounter())
-        store.call(_spec(prompt="b"), _LiveCounter())
+        second = store.call(_spec(prompt="b"), _LiveCounter())
         lines = self.path.read_text(encoding="utf-8").splitlines()
         lines[0] = "{not json"
+        self.path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        recovered = self._store(ReplayMode.REPLAY)
+        self.assertEqual([line for line, _ in recovered.damaged], [1])
+        # The intact row still replays...
+        self.assertEqual(recovered.call(_spec(prompt="b"), _LiveCounter()), second)
+        # ...and the damaged one aborts rather than returning anything.
+        with self.assertRaises(ReplayMiss):
+            recovered.call(_spec(prompt="a"), _LiveCounter())
+
+    def test_a_row_lost_from_the_middle_of_a_key_is_still_fatal(self):
+        # Contiguity is what keeps the lenient load honest: losing one
+        # occurrence of a repeated call would otherwise silently shift
+        # every later one.
+        store = self._store()
+        store.call(_spec(prompt="a"), _LiveCounter())
+        store.call(_spec(prompt="a"), _LiveCounter())
+        store.call(_spec(prompt="a"), _LiveCounter())
+        lines = self.path.read_text(encoding="utf-8").splitlines()
+        lines[1] = "{not json"
         self.path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         with self.assertRaises(ReplayError):
             self._store(ReplayMode.REPLAY)

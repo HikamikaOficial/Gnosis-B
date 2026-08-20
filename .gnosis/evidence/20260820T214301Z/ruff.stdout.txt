@@ -1,0 +1,210 @@
+TRY004 Prefer `TypeError` exception for invalid type
+  --> src\gnosis\contracts\director_brief.py:42:13
+   |
+40 |             raise ValueError("DirectorBrief.mission must be non-empty")
+41 |         if not isinstance(self.source, BriefSource):
+42 |             raise ValueError(f"DirectorBrief.source must be a BriefSource, got {self.source!r}")
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+43 |         try:
+44 |             datetime.fromisoformat(self.created_at)
+   |
+
+TRY004 Prefer `TypeError` exception for invalid type
+  --> src\gnosis\contracts\engineer_report.py:45:13
+   |
+43 |             raise ValueError("EngineerReport.run_id must be non-empty")
+44 |         if not isinstance(self.status, ReportStatus):
+45 |             raise ValueError(f"EngineerReport.status must be a ReportStatus, got {self.status!r}")
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+46 |         if not self.objective.strip():
+47 |             raise ValueError("EngineerReport.objective must be non-empty")
+   |
+
+PLW1510 `subprocess.run` without explicit `check` argument
+   --> src\gnosis\kernel\code_intelligence_adapters.py:153:20
+    |
+151 |     def _default_runner(self, args: Sequence[str]) -> str:
+152 |         try:
+153 |             proc = subprocess.run(
+    |                    ^^^^^^^^^^^^^^
+154 |                 [self.node_binary, self.codegraph_js, *args],
+155 |                 cwd=str(self.repo_path), capture_output=True, text=True,
+    |
+help: Add explicit `check=False`
+
+SIM115 Use a context manager for opening files
+  --> src\gnosis\kernel\file_lock.py:58:14
+   |
+56 |         self.path.parent.mkdir(parents=True, exist_ok=True)
+57 |         deadline = time.monotonic() + self.timeout_s
+58 |         fh = open(self.path, "a+b")
+   |              ^^^^
+59 |         while True:
+60 |             try:
+   |
+
+PYI034 `__enter__` methods in classes like `FileLock` usually return `self` at runtime
+  --> src\gnosis\kernel\file_lock.py:81:9
+   |
+79 |             self._fh = None
+80 |
+81 |     def __enter__(self) -> FileLock:
+   |         ^^^^^^^^^
+82 |         self.acquire()
+83 |         return self
+   |
+help: Use `Self` as return type
+
+SIM103 Return the negated condition directly
+   --> src\gnosis\kernel\memory_reference.py:185:9
+    |
+183 |           if record.valid_from is not None and as_of < record.valid_from:
+184 |               return False
+185 | /         if record.valid_to is not None and as_of >= record.valid_to:
+186 | |             return False
+187 | |         return True
+    | |___________________^
+188 |
+189 |       def inject(self, action_id: str, task: str, agent: str) -> MemoryInfluence:
+    |
+help: Inline condition
+
+I001 [*] Import block is un-sorted or un-formatted
+  --> src\gnosis\kernel\scheduler.py:26:1
+   |
+24 |   pump, a concurrent scheduler and a restart all land in the same state.
+25 |   """
+26 | / from __future__ import annotations
+27 | |
+28 | | import json
+29 | | import time
+30 | | from collections.abc import Callable, Iterable, Sequence
+31 | | from datetime import UTC, datetime
+32 | | from dataclasses import dataclass
+33 | | from pathlib import Path
+34 | | from typing import Any
+35 | |
+36 | | from ..runner.liveness import ProcessFingerprint, is_alive
+37 | | from .engine import TaskEngine, TaskExecutionOutcome
+38 | | from .failures import (
+39 | |     Disposition,
+40 | |     FailureClass,
+41 | |     FailureClassification,
+42 | |     HoldRegistry,
+43 | |     HoldScope,
+44 | |     RateLimitHold,
+45 | |     StrandedRun,
+46 | |     SweepOutcome,
+47 | |     boot_sweep,
+48 | |     hold_from_classification,
+49 | | )
+50 | | from .file_lock import FileLock, lock_path_for
+51 | | from .run_store import RunStore
+52 | | from .state_machine import RunState
+   | |___________________________________^
+53 |
+54 |   PARK_REASON = "rate_limited:credential_on_hold"
+   |
+help: Organize imports
+   |
+30 | from collections.abc import Callable, Iterable, Sequence
+31 + from dataclasses import dataclass
+32 | from datetime import UTC, datetime
+   - from dataclasses import dataclass
+33 | from pathlib import Path
+   |
+
+SIM117 Use a single `with` statement with multiple contexts instead of nested `with` statements
+  --> src\gnosis\kernel\scheduler.py:72:9
+   |
+71 |       def place(self, hold: RateLimitHold) -> RateLimitHold:
+72 | /         with FileLock(lock_path_for(self.path), timeout_s=self._lock_timeout_s):
+73 | |             with self.path.open("a", encoding="utf-8") as fh:
+   | |_____________________________________________________________^
+74 |                   fh.write(json.dumps(hold.to_dict(), sort_keys=True) + "\n")
+75 |           return hold
+   |
+help: Combine `with` statements
+
+PLW1510 `subprocess.run` without explicit `check` argument
+  --> src\gnosis\kernel\verification.py:63:20
+   |
+61 |         started = time.monotonic()
+62 |         try:
+63 |             proc = subprocess.run(
+   |                    ^^^^^^^^^^^^^^
+64 |                 argv, cwd=str(cwd), capture_output=True, text=True, timeout=self.timeout_s,
+65 |             )
+   |
+help: Add explicit `check=False`
+
+BLE001 Do not catch blind exception: `Exception`
+  --> src\gnosis\runner\liveness.py:87:12
+   |
+85 |         kernel32.CloseHandle(handle)
+86 |         return True
+87 |     except Exception:
+   |            ^^^^^^^^^
+88 |         return False
+   |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src\gnosis\runner\liveness.py:119:12
+    |
+117 |         finally:
+118 |             kernel32.CloseHandle(handle)
+119 |     except Exception:
+    |            ^^^^^^^^^
+120 |         return None
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src\gnosis\runner\liveness.py:135:12
+    |
+133 |         starttime_ticks = float(fields[21])
+134 |         return boot_time + starttime_ticks / clk_tck
+135 |     except Exception:
+    |            ^^^^^^^^^
+136 |         return None
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src\gnosis\runner\liveness.py:145:12
+    |
+143 |                 if line.startswith("btime"):
+144 |                     return float(line.split()[1])
+145 |     except Exception:
+    |            ^^^^^^^^^
+146 |         return None
+147 |     return None
+    |
+
+UP046 Generic class `AttemptRecord` uses `Generic` subclass instead of type parameters
+  --> src\gnosis\runner\retry.py:30:21
+   |
+29 | @dataclass(frozen=True)
+30 | class AttemptRecord(Generic[T]):
+   |                     ^^^^^^^^^^
+31 |     attempt: int
+32 |     result: T
+   |
+help: Use type parameters
+
+UP047 Generic function `execute_with_retry` should use type parameters
+  --> src\gnosis\runner\retry.py:36:5
+   |
+36 |   def execute_with_retry(
+   |  _____^
+37 | |     attempt_fn: Callable[[int], T],
+38 | |     should_retry: Callable[[T], bool],
+39 | |     policy: RetryPolicy,
+40 | |     on_attempt: Callable[[AttemptRecord[T]], None] | None = None,
+41 | |     sleep_fn: Callable[[float], None] = time.sleep,
+42 | | ) -> list[AttemptRecord[T]]:
+   | |_^
+43 |       """Call attempt_fn(attempt_number) up to policy.max_attempts times.
+   |
+help: Use type parameters
+
+Found 15 errors.
+[*] 1 fixable with the `--fix` option (4 hidden fixes can be enabled with the `--unsafe-fixes` option).
