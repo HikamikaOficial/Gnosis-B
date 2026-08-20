@@ -1,6 +1,6 @@
 # GNOSIS Project State
 
-**Status:** PHASE -1 COMPLETE; ALL NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED
+**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE 1/4
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
 **Last update:** 2026-08-20
@@ -47,8 +47,28 @@ findings repaired pre- or immediately post-commit:
 - L-0004: a refuted review finding resurrected as a real bug (shared
   FileLock instances) — refutation assumptions are now recorded.
 
-Suite: **431 tests, all passing**; mypy strict clean (42 files); ruff
-clean on all touched files.
+## Adapter milestone (1 of 4)
+
+The four mechanisms that existed but nothing called. Directive 9's rule
+governs the order of work here: **prefer wiring over documenting**.
+
+- [x] **PolicyEngine → a real intervention point** (ADR-0013). The gate
+  runs at `before_agent_run`, before ANY child process exists, and again
+  after kernel context is prepended; refusals are durable evidence
+  (`policy.decision` + classification + `escalations/` file) and undo the
+  workspace they minted. Enableable from `DirectorOrchestrator`, the path
+  real briefs travel. Workflow review: 21 findings adjudicated by hand
+  (the verify phase died on quota), including two criticals — the ADR's
+  headline invariant was false, and no production path could enable the
+  gate at all. Both repaired; see L-0005..L-0007.
+- [ ] `InteractionStore` → `ClaudeCodeCLIRunner` (record/replay real runs).
+- [ ] `ConvergenceLoop` → real reviewer/fixer adapters.
+- [ ] Hold/park plane + `boot_sweep` under a scheduler (no production
+  caller today, stated in ADR-0012).
+
+Suite: **462 tests, all passing**; mypy strict clean (42 files); ruff
+clean on all touched files (20 pre-existing findings elsewhere in the
+repo, listed in NEXT_ACTIONS 3).
 
 ## Fixed locations
 

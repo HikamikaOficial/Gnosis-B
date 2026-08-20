@@ -9,8 +9,15 @@ from gnosis.contracts.director_brief import BriefSource, DirectorBrief
 from gnosis.director.brief_record import BriefRecordState
 from gnosis.director.orchestrator import DirectorOrchestrator
 from gnosis.kernel.claims import ClaimStatus, ClaimStore, WorkAuthority
-from gnosis.kernel.engine import TaskEngine
+from gnosis.kernel.engine import AGENT_RUN_INTERVENTION_POINT, TaskEngine
 from gnosis.kernel.lease import LeaseStore
+from gnosis.kernel.policy import (
+    ApprovalStore,
+    InterventionPoint,
+    PolicyEngine,
+    RuleOutcome,
+    Verdict,
+)
 from gnosis.kernel.run_store import RunStore
 from gnosis.kernel.state_machine import RunState
 from gnosis.kernel.verification import CommandVerifier
@@ -261,6 +268,96 @@ class TestGovernedOrchestrator(unittest.TestCase):
         for brief_id in ("BRIEF-GOV-BAD", "BRIEF-GOV-OK"):
             self.assertEqual(
                 orch.records.get(brief_id).state, BriefRecordState.FAILED.value,
+            )
+
+
+def _point(rule) -> PolicyEngine:
+    return PolicyEngine([InterventionPoint(
+        name=AGENT_RUN_INTERVENTION_POINT,
+        declared_tools=frozenset({"claude_cli"}),
+        rules=(("brief-rule", rule),),
+        requires_intent=True,
+    )])
+
+
+class TestPolicyGatedOrchestrator(unittest.TestCase):
+    """ADR-0013: the gate has to be reachable from the entry point that
+    real briefs travel through. Gating only the kernel primitive would
+    repeat Directive 9's lesson — a mechanism nothing calls."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        subprocess.run(["git", "init"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "e@x.com"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=self.repo, check=True)
+        (self.repo / "README.md").write_text("root" + chr(10), encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=self.repo, check=True, capture_output=True)
+        self.run_store = RunStore(self.root / "runs")
+        self.director_root = self.root / ".gnosis" / "director"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _drop_brief(self, brief_id: str) -> None:
+        orch = DirectorOrchestrator(self.director_root, self.run_store, self.repo)
+        brief = DirectorBrief(brief_id=brief_id, title="Gated thing",
+                              mission="Ship it.", source=BriefSource.MANUAL)
+        (orch.inbox.layout.inbox / f"{brief_id}.json").write_text(
+            json.dumps(brief.to_dict()), encoding="utf-8")
+
+    def _orchestrator(self, runner, **kwargs) -> DirectorOrchestrator:
+        return DirectorOrchestrator(
+            director_root=self.director_root, run_store=self.run_store,
+            repo_path=self.repo,
+            task_engine=TaskEngine(run_store=self.run_store, cli_runner=runner,
+                                   retry_policy=_FAST_RETRY),
+            **kwargs,
+        )
+
+    def test_a_denied_brief_never_launches_and_lands_in_escalations(self):
+        self._drop_brief("BRIEF-POL-1")
+        runner = _FakeCliRunner(["succeed"])
+        orch = self._orchestrator(
+            runner,
+            policy=_point(lambda s: RuleOutcome(Verdict.DENY, "security:frozen")),
+            policy_actor="agent://worker-a",
+        )
+        outcomes = orch.run_pending()
+
+        self.assertEqual(runner.calls, 0)
+        self.assertTrue(outcomes[0].accepted)   # the brief was handled...
+        record = orch.records.get("BRIEF-POL-1")
+        self.assertEqual(record.state, BriefRecordState.ESCALATED.value)
+        task_id = outcomes[0].task_id
+        # ...and a refusal is visible where an operator looks, not just in
+        # a return value nobody persisted.
+        escalation = orch.inbox.layout.escalations / f"{task_id}.json"
+        self.assertTrue(escalation.exists())
+        self.assertIn("security:frozen", escalation.read_text(encoding="utf-8"))
+
+    def test_an_allowed_brief_still_runs_normally(self):
+        self._drop_brief("BRIEF-POL-2")
+        runner = _FakeCliRunner(["succeed"])
+        orch = self._orchestrator(
+            runner,
+            policy=_point(lambda s: RuleOutcome(Verdict.ALLOW, "ok:permitted")),
+        )
+        orch.run_pending()
+        self.assertEqual(runner.calls, 1)
+        self.assertEqual(
+            orch.records.get("BRIEF-POL-2").state, BriefRecordState.COMPLETED.value)
+
+    def test_approvals_without_a_policy_are_refused_at_construction(self):
+        # It reads as governed, authorises nothing, and would let
+        # everything through.
+        with self.assertRaises(ValueError):
+            DirectorOrchestrator(
+                director_root=self.director_root, run_store=self.run_store,
+                repo_path=self.repo, approvals=ApprovalStore(),
             )
 
 

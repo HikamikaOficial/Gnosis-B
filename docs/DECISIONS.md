@@ -50,3 +50,6 @@ All canonical links are kept in `resources/repositories.json`; agents should not
 
 ## D-017 — Memory engine isolation is environment-pinned, and engines install from copies
 External memory engines are installed as isolated `uv tool` environments built from copies (originals stay read-only). m3 state isolation uses `M3_MEMORY_ROOT`/`M3_ENGINE_ROOT`/`M3_CONFIG_ROOT`, never `--database` (broken upstream). zmem hermetic use goes through standalone `--db`. Details/evidence: ADR-0001.
+
+## D-018 — The policy gate is reachable from the Director entry point, and evaluated twice
+Briefs pass through `DirectorOrchestrator`, so that is where a gate has to be enableable; a refusal lands as an `ESCALATED` brief record plus an `escalations/` file. The intervention point is evaluated before anything reads the repository (`pre_context`) and again after kernel context is prepended (`final_prompt`), because the prompt that runs is not the prompt the first verdict judged. An `ApprovalStore` without a `PolicyEngine` is refused at construction. Details/evidence: ADR-0013.

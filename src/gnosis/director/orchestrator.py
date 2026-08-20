@@ -28,6 +28,7 @@ from ..kernel.claims import ClaimConflictError, StaleClaimError, WorkAuthority
 from ..kernel.engine import TaskEngine, TaskExecutionOutcome
 from ..kernel.ids import new_task_id
 from ..kernel.lease import StaleLeaseError
+from ..kernel.policy import ApprovalStore, PolicyEngine
 from ..kernel.run_store import RunStore
 from ..kernel.state_machine import RunState
 from ..kernel.verification import Verifier
@@ -58,6 +59,9 @@ class DirectorOrchestrator:
         worker_id: str | None = None,
         worktrees: WorktreeManager | None = None,
         lease_ttl_s: float | None = None,
+        policy: PolicyEngine | None = None,
+        approvals: ApprovalStore | None = None,
+        policy_actor: str | None = None,
     ) -> None:
         self.inbox = DirectorInbox(director_root)
         self.records = BriefRecordStore(director_root / "state" / "briefs")
@@ -90,6 +94,19 @@ class DirectorOrchestrator:
         self.worker_id = worker_id
         self.worktrees = worktrees
         self.lease_ttl_s = lease_ttl_s
+        # ADR-0013: the policy gate has to be reachable from the production
+        # entry point or it is exactly the parallel fiction Directive 9
+        # warned about. An approval store without an engine is a
+        # configuration mistake worth refusing at construction: it reads as
+        # "governed", authorises nothing, and would silently let everything
+        # through.
+        if approvals is not None and policy is None:
+            raise ValueError("an ApprovalStore without a PolicyEngine gates nothing")
+        self.policy = policy
+        self.approvals = approvals
+        # Whoever an approval is granted to is the identity the escalation
+        # names, so it defaults to the fenced worker rather than the process.
+        self.policy_actor = policy_actor or worker_id
 
     def run_pending(self, verifier: Verifier | None = None) -> list[IngestOutcome]:
         outcomes: list[IngestOutcome] = []
@@ -119,6 +136,9 @@ class DirectorOrchestrator:
                 worker_id=self.worker_id,
                 lease_ttl_s=self.lease_ttl_s,
                 worktrees=self.worktrees,
+                policy=self.policy,
+                approvals=self.approvals,
+                policy_actor=self.policy_actor,
             )
         except (StaleClaimError, StaleLeaseError, ClaimConflictError, WorktreeError, ValueError) as exc:
             # Governed mode makes deposition, claim conflicts, workspace

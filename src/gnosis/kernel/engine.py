@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -54,10 +54,80 @@ from .verification import VerificationResult, Verifier
 from .worktree import WorktreeError, WorktreeHandle, WorktreeManager
 
 AGENT_RUN_INTERVENTION_POINT = "before_agent_run"
+# The mode the CLI runner actually defaults to. Stated as a constant so
+# the value the rules are shown cannot drift from the value used.
+DEFAULT_PERMISSION_MODE = "plan"
+
+
+@dataclass(frozen=True)
+class _GateResult:
+    decision: PolicyDecision | None
+    outcome: TaskExecutionOutcome | None
+
+
+def _safe_detail(detail: Mapping[str, Any]) -> dict[str, Any]:
+    """Rule-supplied detail, guaranteed to survive canonical JSON.
+
+    `PolicyEngine.decide` goes to explicit lengths to be total, but the
+    detail it carries is arbitrary rule data validated only as a dict —
+    and an unserializable value turned a refusal into an unhandled
+    TypeError with no durable record (adversarial review). A refusal must
+    always be recordable.
+    """
+    try:
+        hash_canonical(dict(detail))
+    except (TypeError, ValueError):
+        return {"_unencodable_detail": repr(dict(detail))[:2000]}
+    return dict(detail)
+
+
+def _safe_decision(decision: PolicyDecision) -> dict[str, Any]:
+    payload = decision.to_dict()
+    payload["detail"] = _safe_detail(decision.detail)
+    if payload.get("transform") is not None:
+        payload["transform"] = _safe_detail(payload["transform"])
+    return payload
+
+
+def _runner_binary(runner: Any) -> str:
+    """The program the rules are told about.
+
+    Inventing a name for a runner that does not expose one would show
+    rules a program that is not the one that runs (adversarial review);
+    an unknown binary is reported as unknown."""
+    binary = getattr(runner, "binary", None)
+    return binary if isinstance(binary, str) and binary else "<unknown-runner>"
+
+
+def _mcp_fingerprint(mcp: McpRunnerConfig | None, exec_root: Path) -> dict[str, Any] | None:
+    """Path AND content hash for every MCP config.
+
+    An MCP config decides which tools the agent can reach, and the file's
+    CONTENTS decide that, not its name — binding only the path let an
+    approval survive a rewrite of the file it approved (adversarial
+    review). Unreadable files are recorded as such rather than skipped:
+    a config the kernel cannot read is not a config it may vouch for.
+    """
+    if mcp is None:
+        return None
+    fingerprints: list[dict[str, Any]] = []
+    for raw_path in mcp.config_paths:
+        candidate = Path(raw_path)
+        if not candidate.is_absolute():
+            candidate = exec_root / candidate
+        try:
+            fingerprints.append({
+                "path": str(raw_path),
+                "sha256": hash_canonical(candidate.read_text(encoding="utf-8")),
+            })
+        except OSError as exc:
+            fingerprints.append({"path": str(raw_path), "unreadable": str(exc)})
+    return {"configs": fingerprints, "strict": mcp.strict}
 
 
 def agent_run_intent(binary: str, exec_root: Path, permission_mode: str,
-                     model: str | None, mcp: McpRunnerConfig | None) -> CommandIntent:
+                     model: str | None = None,
+                     mcp: McpRunnerConfig | None = None) -> CommandIntent:
     """The structured intent of launching an agent, for policy rules.
 
     Built explicitly rather than by parsing the CLI argv: the prompt is
@@ -66,9 +136,13 @@ def agent_run_intent(binary: str, exec_root: Path, permission_mode: str,
     identified by hash in the snapshot payload instead — which still binds
     an approval to the exact prompt without inlining it.
     """
-    flags = ["--permission-mode", "--output-format"]
+    # Flag VALUES, not bare names: `--permission-mode` alone tells a rule
+    # nothing, and the whole point of gating an agent launch is knowing
+    # whether it runs in `plan` or `bypassPermissions` (adversarial
+    # review — the value was silently discarded).
+    flags = [f"--permission-mode={permission_mode}", "--output-format=json"]
     if model:
-        flags.append("--model")
+        flags.append(f"--model={model}")
     if mcp is not None:
         flags.append("--mcp-config")
         if mcp.strict:
@@ -376,6 +450,57 @@ class TaskEngine:
             if pump is not None:
                 pump.stop()
 
+    def _gate(
+        self, *, stage: str, task_id: str, objective: str, prompt: str,
+        exec_root: Path, mcp: McpRunnerConfig | None,
+        worktree: WorktreeHandle | None, policy: PolicyEngine,
+        approvals: ApprovalStore | None, policy_actor: str,
+        code_intelligence: CodeIntelligenceProvider | None,
+        focus_symbols: Sequence[str] | None,
+        store: _GuardedRunStore, task_sm: TaskStateMachine,
+        run_ids: list[str], classifications: list[FailureClassification],
+        worktrees: WorktreeManager | None,
+    ) -> _GateResult:
+        """Ask the policy engine once, at one stage, and act on the answer."""
+        snapshot = ActionSnapshot(
+            intervention_point=AGENT_RUN_INTERVENTION_POINT,
+            tool="claude_cli", actor=policy_actor,
+            intent=agent_run_intent(
+                _runner_binary(self.cli_runner), exec_root,
+                permission_mode=DEFAULT_PERMISSION_MODE, model=None, mcp=mcp,
+            ),
+            payload={
+                "stage": stage,
+                "task_id": task_id,
+                # The prompt binds an approval without being inlined.
+                "prompt_sha256": hash_canonical(prompt),
+                # Content, not just path: a config file can be rewritten
+                # between the verdict and the launch, and the PATHS do not
+                # decide which tools the agent reaches — the CONTENTS do
+                # (adversarial review).
+                "mcp": _mcp_fingerprint(mcp, exec_root),
+                "code_intelligence": (
+                    type(code_intelligence).__name__ if code_intelligence else None
+                ),
+                "focus_symbols": sorted(focus_symbols or ()),
+                # Stable worktree identity only: `created_at` is a
+                # per-submission value that made every approval
+                # un-reusable, defeating the documented "approve, then
+                # resubmit" flow (adversarial review).
+                "worktree_branch": worktree.branch if worktree else None,
+            },
+            context={"exec_root": str(exec_root)},
+        )
+        decision = policy.decide(snapshot)
+        if approvals is not None:
+            decision = resolve_escalation(decision, snapshot, approvals)
+        if decision.verdict in (Verdict.ALLOW, Verdict.WARN):
+            return _GateResult(decision=decision, outcome=None)
+        return _GateResult(decision=None, outcome=self._refused_outcome(
+            task_id, objective, decision, store, task_sm, run_ids,
+            classifications, worktrees=worktrees, worktree=worktree,
+        ))
+
     def _refused_outcome(
         self,
         task_id: str,
@@ -416,22 +541,45 @@ class TaskEngine:
         run_ids.append(run_id)
         store.create_run(run_id, task_id)
         ledger = store.ledger_for(run_id)
-        ledger.append(run_id, "policy.decision", decision.to_dict())
+        ledger.append(run_id, "policy.decision", _safe_decision(decision))
 
+        # A deny caused by the engine breaking, or by missing
+        # configuration, is NOT the agent violating a policy: billing
+        # either to the agent would penalise it for the kernel's own
+        # problems, which rule 7 forbids (adversarial review).
+        if decision.is_runtime_error:
+            failure = FailureClass.FAIL_INFRA
+        elif decision.is_policy_gap:
+            failure = FailureClass.NEEDS_HUMAN
+        else:
+            failure = FailureClass.FAIL_POLICY
         classification = FailureClassification(
-            failure=FailureClass.FAIL_POLICY,
+            failure=failure,
             # The policy's own reason code travels unchanged into the
             # taxonomy and out to the scheduler (Directive 9).
             reason_code=decision.reason,
             evidence_grade=EvidenceGrade.STRUCTURED,
             classifier_id="policy_engine",
             evidence=f"{decision.verdict.value} by {decision.rule_id}",
-            detail={"action_id": decision.action_id, **decision.detail},
+            # Rule-supplied detail is untrusted data and goes FIRST: the
+            # kernel's own action_id is the identity an operator approves
+            # and a rule must not be able to overwrite it.
+            detail={**_safe_detail(decision.detail),
+                    "action_id": decision.action_id},
         )
         classifications.append(classification)
         ledger.append(run_id, "run.attempt_classified", classification.to_dict())
-        store.update_state(run_id, RunState.FAILED)
-        task_sm.transition(TaskState.FAILED)
+        # CANCELLED, not FAILED: the run never started, and PENDING->FAILED
+        # is not a legal transition — RunStore does not validate, so the
+        # illegal edge used to land on disk unchallenged (adversarial
+        # review).
+        store.update_state(run_id, RunState.CANCELLED)
+        # An unapproved escalation is not terminal: ESCALATED exists for
+        # exactly the "approve, then resubmit" state the report describes.
+        task_sm.transition(
+            TaskState.ESCALATED if decision.verdict is Verdict.ESCALATE
+            else TaskState.FAILED
+        )
 
         report = EngineerReport(
             task_id=task_id, run_id=run_id,
@@ -486,10 +634,31 @@ class TaskEngine:
         # store boundary — a forgotten guard() call cannot stale-write.
         store = _GuardedRunStore(self.run_store, guard)
 
-        pre_git = capture_git_evidence(exec_root)
         run_ids: list[str] = []
         classifications: list[FailureClassification] = []
         last_result: ExecutionResult | None = None
+        refusal_worktrees = worktrees if worktree_was_fresh else None
+
+        # Fail-closed gate BEFORE any child process exists at all.
+        # Stage 1 runs before code intelligence, which SHELLS OUT: the
+        # previous single gate sat after it, so a denied action had
+        # already run kernel-launched subprocesses against the workspace,
+        # falsifying this unit's headline invariant (adversarial review).
+        policy_decision: PolicyDecision | None = None
+        if policy is not None:
+            refusal = self._gate(
+                stage="pre_context", task_id=task_id, objective=objective,
+                prompt=prompt, exec_root=exec_root, mcp=mcp, worktree=worktree,
+                policy=policy, approvals=approvals, policy_actor=policy_actor,
+                code_intelligence=code_intelligence, focus_symbols=focus_symbols,
+                store=store, task_sm=task_sm, run_ids=run_ids,
+                classifications=classifications, worktrees=refusal_worktrees,
+            )
+            if refusal.outcome is not None:
+                return refusal.outcome
+            policy_decision = refusal.decision
+
+        pre_git = capture_git_evidence(exec_root)
 
         ci_evidence: dict[str, Any] | None = None
         effective_prompt = prompt
@@ -499,6 +668,25 @@ class TaskEngine:
             )
             if context_block:
                 effective_prompt = f"{context_block}\n\n---\n\n{prompt}"
+                if policy is not None:
+                    # The prompt the rules judged is no longer the prompt
+                    # that will run: kernel-generated context derived from
+                    # the repository was prepended, so ask again about the
+                    # real thing. Stage 1 already ensured nothing executed
+                    # before a first verdict.
+                    refusal = self._gate(
+                        stage="final_prompt", task_id=task_id, objective=objective,
+                        prompt=effective_prompt, exec_root=exec_root, mcp=mcp,
+                        worktree=worktree, policy=policy, approvals=approvals,
+                        policy_actor=policy_actor,
+                        code_intelligence=code_intelligence,
+                        focus_symbols=focus_symbols, store=store, task_sm=task_sm,
+                        run_ids=run_ids, classifications=classifications,
+                        worktrees=refusal_worktrees,
+                    )
+                    if refusal.outcome is not None:
+                        return refusal.outcome
+                    policy_decision = refusal.decision
 
         heartbeat_failures: list[str] = []
 
@@ -539,7 +727,7 @@ class TaskEngine:
                 # The verdict the child actually ran under, on the run's
                 # own ledger: an allowed action is evidence too, not just
                 # a refused one.
-                ledger.append(run_id, "policy.decision", policy_decision.to_dict())
+                ledger.append(run_id, "policy.decision", _safe_decision(policy_decision))
             ledger.append(run_id, "run.attempt_started", {
                 "attempt": attempt_number, "objective": objective,
                 "mcp": mcp.to_dict() if mcp is not None else None,
@@ -610,44 +798,6 @@ class TaskEngine:
             )
             last_result = result
             return result
-
-        # Fail-closed gate BEFORE any repository-writing child exists
-        # (ADR-0011 wired). The decision is the same for every attempt —
-        # same prompt, same argv, same workspace — so it is taken once,
-        # and a refusal means no child is ever launched.
-        if policy is not None:
-            binary = getattr(self.cli_runner, "binary", "agent")
-            snapshot = ActionSnapshot(
-                intervention_point=AGENT_RUN_INTERVENTION_POINT,
-                tool="claude_cli", actor=policy_actor,
-                intent=agent_run_intent(
-                    binary, exec_root, permission_mode="plan",
-                    model=None, mcp=mcp,
-                ),
-                payload={
-                    "task_id": task_id,
-                    # The prompt binds an approval without being inlined.
-                    "prompt_sha256": hash_canonical(effective_prompt),
-                    "prompt_chars": len(effective_prompt),
-                    "timeout_s": timeout_s,
-                    "mcp": mcp.to_dict() if mcp is not None else None,
-                    "worktree": worktree.to_dict() if worktree is not None else None,
-                },
-                context={"exec_root": str(exec_root)},
-            )
-            decision = policy.decide(snapshot)
-            if approvals is not None:
-                decision = resolve_escalation(decision, snapshot, approvals)
-            if decision.verdict not in (Verdict.ALLOW, Verdict.WARN):
-                return self._refused_outcome(
-                    task_id, objective, decision, store, task_sm, run_ids,
-                    classifications,
-                    worktrees=worktrees if worktree_was_fresh else None,
-                    worktree=worktree,
-                )
-            policy_decision = decision
-        else:
-            policy_decision = None
 
         def should_retry(result: ExecutionResult) -> bool:
             if result.cancelled or result.succeeded:

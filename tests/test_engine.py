@@ -323,7 +323,9 @@ class TestPolicyGate(unittest.TestCase):
         events = [e.event_type for e in self.store.ledger_for(run_id).read_all()]
         self.assertIn("policy.decision", events)
         self.assertIn("run.attempt_classified", events)
-        self.assertEqual(self.store.read_meta(run_id).state, RunState.FAILED.value)
+        # CANCELLED, not FAILED: the run never started, and PENDING->FAILED
+        # is not a legal run transition (adversarial review).
+        self.assertEqual(self.store.read_meta(run_id).state, RunState.CANCELLED.value)
 
     def test_an_unconfigured_intervention_point_denies_the_run(self):
         # Configuration gaps are never consent — including the gap of
@@ -338,7 +340,8 @@ class TestPolicyGate(unittest.TestCase):
             lambda s: RuleOutcome(Verdict.ESCALATE, "human:review_required"))
         approvals = ApprovalStore()
         blocked = self._run(policy, approvals)
-        self.assertEqual(blocked.final_task_state, TaskState.FAILED)
+        # ESCALATED, not FAILED: "approve, then resubmit" is not terminal.
+        self.assertEqual(blocked.final_task_state, TaskState.ESCALATED)
         self.assertEqual(blocked.report.status, ReportStatus.ESCALATION_REQUIRED)
 
         # Approve exactly what was evaluated, then it proceeds.
@@ -365,7 +368,7 @@ class TestPolicyGate(unittest.TestCase):
             repo_path=self.repo, policy=policy, approvals=approvals,
             policy_actor="agent://worker-a",
         )
-        self.assertEqual(other.final_task_state, TaskState.FAILED)
+        self.assertEqual(other.final_task_state, TaskState.ESCALATED)
         self.assertEqual(other.report.status, ReportStatus.ESCALATION_REQUIRED)
 
     def test_a_warning_proceeds_but_is_recorded(self):
@@ -444,6 +447,133 @@ class TestPolicyGate(unittest.TestCase):
             worktrees=worktrees, policy_actor="agent://worker-a",
         )
         self.assertTrue((Path(handle.path) / "prior_work.txt").exists())
+
+    def test_no_child_runs_before_the_verdict_including_code_intelligence(self):
+        # ADR-0013's headline invariant was false: code intelligence
+        # SHELLS OUT and ran ~120 lines before the gate, so a denied
+        # action had already launched kernel subprocesses (adversarial
+        # review).
+        provider = _FakeCodeIntelligenceProvider()
+        runner = _FakeCliRunner(["succeed"])
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=runner,
+            retry_policy=RetryPolicy(max_attempts=1),
+        )
+        engine.execute_task(
+            task_id="TASK-POL", objective="Demo", prompt="do it", repo_path=self.repo,
+            policy=self._engine_with(lambda s: RuleOutcome(Verdict.DENY, "security:no")),
+            code_intelligence=provider, focus_symbols=["compute"],
+            policy_actor="agent://worker-a",
+        )
+        self.assertEqual(runner.calls, 0)
+        self.assertEqual(provider.index_calls, [])    # no subprocess at all
+        self.assertEqual(provider.explore_calls, [])
+
+    def test_the_final_prompt_is_re_gated_after_context_is_prepended(self):
+        # Kernel-generated context derived from the repo is added AFTER
+        # the first verdict, so the prompt that runs is re-judged.
+        seen: list[str] = []
+
+        def capture(snapshot):
+            seen.append(snapshot.payload["stage"])
+            return RuleOutcome(Verdict.ALLOW, "ok:seen")
+
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]),
+            retry_policy=RetryPolicy(max_attempts=1),
+        )
+        engine.execute_task(
+            task_id="TASK-POL", objective="Demo", prompt="do it", repo_path=self.repo,
+            policy=self._engine_with(capture),
+            code_intelligence=_FakeCodeIntelligenceProvider(), focus_symbols=["compute"],
+            policy_actor="agent://worker-a",
+        )
+        self.assertEqual(seen, ["pre_context", "final_prompt"])
+
+    def test_rules_see_the_permission_mode_value_not_just_the_flag_name(self):
+        seen: list[ActionSnapshot] = []
+
+        def capture(snapshot):
+            seen.append(snapshot)
+            return RuleOutcome(Verdict.ALLOW, "ok:seen")
+
+        self._run(self._engine_with(capture))
+        intent = seen[0].intent
+        # The whole point of gating a launch is knowing whether it runs in
+        # `plan` or `bypassPermissions`.
+        self.assertEqual(intent.value_for("--permission-mode"), "plan")
+        self.assertEqual(intent.cwd, str(self.repo).replace("\\", "/").lower()
+                         if str(self.repo)[1:2] == ":" else str(self.repo).replace("\\", "/"))
+
+    def test_mcp_configs_are_bound_by_content_not_only_path(self):
+        # An approval must not survive a rewrite of the config file that
+        # decides which tools the agent can reach.
+        config = self.repo / "tools.json"
+        config.write_text('{"mcpServers": {}}', encoding="utf-8")
+        seen: list[ActionSnapshot] = []
+
+        def capture(snapshot):
+            seen.append(snapshot)
+            return RuleOutcome(Verdict.ALLOW, "ok:seen")
+
+        engine = TaskEngine(
+            run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]),
+            retry_policy=RetryPolicy(max_attempts=1),
+        )
+        def run():
+            engine.execute_task(
+                task_id="TASK-POL", objective="Demo", prompt="do it", repo_path=self.repo,
+                policy=self._engine_with(capture),
+                mcp=McpRunnerConfig(config_paths=(str(config),)),
+                policy_actor="agent://worker-a",
+            )
+
+        run()
+        before = seen[0].action_id()
+        config.write_text('{"mcpServers": {"danger": {"command": "sh"}}}', encoding="utf-8")
+        run()
+        self.assertNotEqual(seen[-1].action_id(), before)
+
+    def test_transform_is_refused_at_this_intervention_point(self):
+        # This point cannot rewrite an agent invocation; silently dropping
+        # a mitigation it cannot apply is worse than stopping.
+        runner = _FakeCliRunner(["succeed"])
+        outcome = self._run(
+            self._engine_with(lambda s: RuleOutcome(
+                Verdict.TRANSFORM, "rewrite:safer", transform={"prompt": "safer"})),
+            runner=runner,
+        )
+        self.assertEqual(runner.calls, 0)
+        self.assertEqual(outcome.final_task_state, TaskState.FAILED)
+
+    def test_a_rule_cannot_overwrite_the_kernels_action_id(self):
+        # The action_id is the identity an operator approves; rule detail
+        # is untrusted data (adversarial review).
+        outcome = self._run(self._engine_with(
+            lambda s: RuleOutcome(Verdict.DENY, "security:no",
+                                  detail={"action_id": "FORGED"})))
+        self.assertNotEqual(outcome.classification.detail["action_id"], "FORGED")
+        self.assertEqual(len(outcome.classification.detail["action_id"]), 64)
+
+    def test_an_unserializable_rule_detail_still_produces_a_durable_refusal(self):
+        # decide() goes to lengths to be total; the refusal path must not
+        # then die on the detail it carries.
+        outcome = self._run(self._engine_with(
+            lambda s: RuleOutcome(Verdict.DENY, "security:no",
+                                  detail={"obj": object()})))
+        self.assertEqual(outcome.final_task_state, TaskState.FAILED)
+        self.assertIn("_unencodable_detail", outcome.classification.detail)
+
+    def test_engine_breakage_and_config_gaps_do_not_penalize_the_agent(self):
+        # Rule 7: the kernel's own problems are not the agent's fault.
+        broken = self._run(self._engine_with(
+            lambda s: (_ for _ in ()).throw(ValueError("rule exploded"))))
+        self.assertEqual(broken.classification.failure, FailureClass.FAIL_INFRA)
+        self.assertFalse(broken.classification.penalizes_agent)
+
+        gap = self._run(PolicyEngine([]))
+        self.assertEqual(gap.classification.failure, FailureClass.NEEDS_HUMAN)
+        self.assertFalse(gap.classification.penalizes_agent)
 
     def test_a_run_without_a_policy_is_unchanged(self):
         # The gate is opt-in at this milestone; ungoverned runs behave

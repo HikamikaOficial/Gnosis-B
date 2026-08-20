@@ -63,7 +63,6 @@ class TestWorktreeManager(unittest.TestCase):
         (Path(handle.path) / "new_file.txt").write_text("hello", encoding="utf-8")
 
         worktree_evidence = self.manager.evidence_for(handle)
-        source_evidence = subprocess_evidence = None
         from gnosis.kernel.git_evidence import capture_git_evidence
         source_evidence = capture_git_evidence(self.repo)
 

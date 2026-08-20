@@ -109,6 +109,10 @@ _NON_PENALIZING = frozenset({
     FailureClass.STALE_LEASE,
     FailureClass.DEPENDENCY_ERROR,
     FailureClass.UNCLASSIFIED,
+    # A routing verdict ("the kernel cannot decide, a human must"), never a
+    # quality judgement. A gap in the rule set is the operator's hole, not
+    # the agent's mistake; work an agent did badly has its own class.
+    FailureClass.NEEDS_HUMAN,
 })
 
 
