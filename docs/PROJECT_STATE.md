@@ -1,9 +1,35 @@
 # GNOSIS Project State
 
-**Status:** PHASE -1 GATES SUBSTANTIALLY PASSED — Tier-S archaeology in progress
+**Status:** PHASE -1 COMPLETE; KERNEL HARDENING DIRECTIVES 1–5 IMPLEMENTED AND ADVERSARIALLY REVIEWED
 **Target machine:** Nicol
-**Phase:** -1 — Environment + Resource Inventory + Memory Fabric
-**Last update:** 2026-08-19 (autonomous Phase -1 execution session)
+**Phase:** 1 — Kernel hardening per archaeology directives
+**Last update:** 2026-08-20
+
+## Kernel hardening (post-Phase -1)
+
+Archaeology Directives 1–5 are implemented, each unit adversarially
+reviewed (multi-agent workflow + refutation verify) with all confirmed
+findings repaired pre- or immediately post-commit:
+
+- ADR-0004: `kernel.canonical` single hash contract; hash-chained
+  `RunLedger` with fail-closed full-chain verification; frozen transition
+  tables (commit 843a72e).
+- ADR-0005: `kernel.lease` fenced expiring leases, NO STALE WRITE
+  test-enforced (1e176a9).
+- ADR-0006: `kernel.claims` durable CAS claims + `WorkAuthority` +
+  `GrantHeartbeatPump`; engine write paths fenced (ed32fa2 + repairs in
+  2c50a8c). Includes the first independent **Codex** adversarial review
+  (FAIL verdict, 3 findings verified true and fixed — notably the
+  no-verifier INVALID DONE gate). Raw transcript:
+  `.gnosis/lab/kernel-reviews/`.
+- ADR-0007: provenance-gated worktree lifecycle (8ec4bfd; 13/14 review
+  findings confirmed and repaired, incl. destruction reordering and the
+  autosave conflict-gate holes).
+- L-0004: a refuted review finding resurrected as a real bug (shared
+  FileLock instances) — refutation assumptions are now recorded.
+
+Suite: **250 tests, all passing**; mypy strict clean (38 files); ruff
+clean on all touched files.
 
 ## Fixed locations
 
