@@ -9,3 +9,20 @@
 7. Optional, evidence-gated: Graphify benchmark vs Sverklo/CodeGraph (only per MEMORY_FABRIC.md rule, after GNOSIS-Bench exists).
 8. Consider upstream bug reports (with operator approval): zmem Windows diagnostic crash; m3 `--database` provisioning gap.
 9. Operator decision: delete or relocate the unrelated `security-audit/` leftovers.
+
+## Exact next command
+
+```bash
+export PATH="$HOME/.local/bin:$PATH" PYTHONUTF8=1
+cd "C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi"
+uv run --no-project --with pytest --with mypy --with ruff python scripts/capture_evidence.py
+```
+
+Green baseline first (552 passed, mypy clean, ruff at baseline), then
+start the **integration milestone**: the caller that assembles a
+DirectorBrief into one governed, recorded, convergent run —
+`TaskScheduler` → `DirectorOrchestrator(policy=, require_policy=)` →
+`recording_orchestrator(cassette=)` → `ConvergenceLoop(CliReviewer,
+CliFixer)`. Every piece exists and is tested in isolation; nothing
+composes them yet, which is the same "wire it or it is fiction" shape
+Directive 9 named, one level up.
