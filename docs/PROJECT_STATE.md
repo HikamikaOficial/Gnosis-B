@@ -1,6 +1,6 @@
 # GNOSIS Project State
 
-**Status:** PHASE -1 COMPLETE; KERNEL HARDENING DIRECTIVES 1–6 + GOVERNED-ISOLATION FOLLOW-UPS DONE
+**Status:** PHASE -1 COMPLETE; KERNEL HARDENING DIRECTIVES 1–7 DONE (8–9 remain)
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
 **Last update:** 2026-08-20
@@ -31,10 +31,15 @@ findings repaired pre- or immediately post-commit:
   boundary, governance-aware orchestrator. Closes the ADR-0006/0007
   structural follow-ups. Dual review: 19 findings, all repaired (incl. a
   heartbeat-pump leak that made a task permanently unreclaimable).
+- ADR-0010: strict replay + write-ahead intent (65cef20) — occurrence-aware
+  strict-by-default replay and an intent journal that makes rewind safety a
+  query. Dual review: 19 findings, all true, all repaired (two criticals
+  reproduced: a string mode silently downgraded strict replay to a live
+  call; unserializable metadata destroyed the row for a call that happened).
 - L-0004: a refuted review finding resurrected as a real bug (shared
   FileLock instances) — refutation assumptions are now recorded.
 
-Suite: **289 tests, all passing**; mypy strict clean (39 files); ruff
+Suite: **328 tests, all passing**; mypy strict clean (40 files); ruff
 clean on all touched files.
 
 ## Fixed locations
