@@ -3,13 +3,16 @@
 - Status: ACCEPTED
 - Date: 2026-08-20
 - Deciders: Claude Fable 5 (autonomous, per standing mandate)
-- Evidence: `tests/test_cli_review_adapters.py` (33 tests); suite
-  521/521; mypy strict clean; ruff clean on every file this ADR touches.
+- Evidence: `tests/test_cli_review_adapters.py` (39 tests); suite
+  527/527; mypy strict clean; ruff clean on every file this ADR touches.
 - Builds on: ADR-0008 (the loop), ADR-0014 (the runner a loop can be
   recorded through), ADR-0011 (the enforcement matrix).
-- Independent review: **not yet done.** Codex is `RATE_LIMITED` until
-  2026-09-19 (see NEXT_ACTIONS 1). Stated here rather than left implied,
-  because every previous unit in this sequence had findings.
+- Independent review: **not done.** Codex is `RATE_LIMITED` until
+  2026-09-19 and the internal reviewer agents died on usage credits (see
+  NEXT_ACTIONS 1). Self-review only, which found three real defects
+  including a critical one — recorded in the addendum below. Stated
+  plainly because every previous unit in this sequence had findings, and
+  a unit reviewed only by its author should be read as such.
 
 ## Context
 
@@ -37,6 +40,9 @@ workspace **before and after** and raises `ReviewerModifiedSubject` if
 the tree moved — the kernel's own evidence. The check runs *before* the
 output is parsed, because deciding whether to care about tampering after
 reading what the tamperer said is not a check.
+
+The fingerprint is `content_fingerprint`, not `workspace_fingerprint`,
+and the difference is the whole check — see addendum finding 1.
 
 The matrix records the honest level: `convergence/reviewer_read_only =
 SANDBOX_APPROX`. Detection after the fact is not prevention.
@@ -79,10 +85,43 @@ more round and cannot fake progress. `claims_done` is read with `is True`
   with raw stdout as fallback). A Codex reviewer needs its own message
   extractor over `--json` JSONL; the parser and the read-only check are
   already provider-agnostic, so that is an extractor, not a redesign.
-- The reviewer's fingerprint covers git-visible state. A reviewer that
-  wrote outside the repository, or to an ignored path, is not detected
-  here — that needs the sandbox boundary, which the matrix already
-  records as unsolved.
+- The reviewer's fingerprint covers git-visible state: tracked content
+  (via the full patch), and every untracked file's bytes. A reviewer that
+  wrote **outside the repository, or to a `.gitignore`d path**, is not
+  detected — `git status` does not list ignored files and enumerating
+  them means walking the tree. That needs the sandbox boundary, which the
+  matrix already records as unsolved.
 - Nothing yet *assembles* a convergence loop from a Director brief. The
   adapters are constructible and tested against the real loop, but the
   brief → loop → report path is the integration milestone's decision.
+
+## Self-review addendum (2026-08-20)
+
+With both independent reviewers unavailable, I red-teamed the module
+against the attack surfaces I had written into their briefs. Three real
+defects, one critical:
+
+1. *(critical)* **The rule-9 check was blind in the case that matters.**
+   It used `workspace_fingerprint`, which hashes `git status --porcelain`
+   — and a file already listed as ` M code.py` keeps that exact status
+   line however many more times it is rewritten. `diff --stat` is no
+   better: any same-length edit keeps "1 insertion(+), 1 deletion(-)".
+   During convergence a fix round has *always* already dirtied the tree,
+   so this was not an edge case, it was the normal path. Reproduced
+   directly: across a reviewer rewriting a tracked file, both probes were
+   byte-identical. `content_fingerprint` now hashes the actual patch plus
+   every untracked file's bytes, and the old fingerprint's blindness is
+   pinned by a test that fails against it.
+2. *(major)* `agent_message_text` read stdout unbounded, so an agent that
+   dumped a build log could make a review round pull an arbitrarily large
+   file into memory. Bounded at `MAX_AGENT_MESSAGE_CHARS`.
+3. *(minor)* `extract_json_object` considered only the **last** balanced
+   object, so anything brace-shaped appended after the answer — a
+   signature, a tool trace — pushed the real review out of reach and
+   turned a good round into INVALID. It now considers every top-level
+   object, latest first, and prefers one that names a verdict.
+
+A self-review is weaker evidence than an independent one and this does
+not substitute for the parked Codex pass. It does show the same thing
+every round of this project has shown: the defects are found by asking
+"what would a hostile input do here", not by rereading the code.

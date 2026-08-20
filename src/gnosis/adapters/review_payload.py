@@ -70,10 +70,13 @@ def extract_json_object(text: str) -> dict[str, Any]:
     fences = _FENCE_RE.findall(text)
     candidates.extend(reversed(fences))          # the last fence is the answer
     candidates.append(text.strip())
-    tail = _last_balanced_object(text)
-    if tail is not None:
-        candidates.append(tail)
+    # Every top-level object, latest first — not just the last one. An
+    # agent that appends anything brace-shaped after its answer (a
+    # signature, a tool trace) would otherwise push the real review out of
+    # reach and turn a perfectly good round into INVALID.
+    candidates.extend(reversed(_balanced_objects(text)))
 
+    parsed_objects: list[dict[str, Any]] = []
     for candidate in candidates:
         if not candidate:
             continue
@@ -82,21 +85,30 @@ def extract_json_object(text: str) -> dict[str, Any]:
         except (json.JSONDecodeError, ValueError):
             continue
         if isinstance(parsed, dict):
-            return parsed
+            # A dict carrying a verdict is the review; anything else that
+            # merely parses is some other object that happened to be in
+            # the message. Prefer the former, in the order tried.
+            if "verdict" in parsed or "claims_done" in parsed or "cannot_fix" in parsed:
+                return parsed
+            parsed_objects.append(parsed)
+    if parsed_objects:
+        # Nothing named itself; hand back the first thing that parsed and
+        # let the field validation refuse it with a specific message.
+        return parsed_objects[0]
     raise InvalidReviewOutput(
         f"no JSON review object found in {len(text)} characters of output"
     )
 
 
-def _last_balanced_object(text: str) -> str | None:
-    """The last brace-balanced span, ignoring braces inside strings.
+def _balanced_objects(text: str) -> list[str]:
+    """Every top-level brace-balanced span, ignoring braces inside strings.
 
     A naive `text[text.find('{'):text.rfind('}')+1]` swallows prose
     between two unrelated objects and produces JSON that parses but is
     not the review."""
     depth = 0
     start: int | None = None
-    best: str | None = None
+    found: list[str] = []
     in_string = False
     escaped = False
     for index, char in enumerate(text):
@@ -117,8 +129,8 @@ def _last_balanced_object(text: str) -> str | None:
         elif char == "}" and depth > 0:
             depth -= 1
             if depth == 0 and start is not None:
-                best = text[start:index + 1]
-    return best
+                found.append(text[start:index + 1])
+    return found
 
 
 def parse_review_payload(text: str, reviewer: str) -> ReviewReport:

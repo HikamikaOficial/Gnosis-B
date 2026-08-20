@@ -81,11 +81,14 @@ governs the order of work here: **prefer wiring over documenting**.
   because detection is not prevention). An unreadable review raises
   rather than becoming a verdict nobody gave; an unreadable FIX report is
   inconclusive rather than `cannot_fix`, because `cannot_fix` ends the
-  loop. Not yet independently reviewed — Codex is parked.
+  loop. **No independent review**: Codex is parked until 2026-09-19 and
+  the internal reviewer agents died on usage credits. Self-review found
+  three real defects, one critical — the rule-9 tamper check was blind
+  in the normal case (an already-dirty tree), see L-0011.
 - [ ] Hold/park plane + `boot_sweep` under a scheduler (no production
   caller today, stated in ADR-0012).
 
-Suite: **521 tests, all passing**; mypy strict clean (46 files); ruff
+Suite: **527 tests, all passing**; mypy strict clean (46 files); ruff
 clean on all touched files (20 pre-existing findings elsewhere in the
 repo, listed in NEXT_ACTIONS 3).
 

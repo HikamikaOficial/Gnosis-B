@@ -91,3 +91,11 @@ Format:
 - Lesson: an approval is for one launch, not for a task. Where the authorized inputs are re-read at launch time (config files, working trees, environment), a single pre-loop verdict is a TOCTOU hole by construction.
 - Operational consequence: the gate runs per attempt, and the action identity includes the workspace, so a material change re-escalates instead of riding the earlier decision.
 - Revalidation condition: standing rule; no expiry.
+
+## L-0011 — `git status` is a change detector only for files that were clean
+- Status: VERIFIED
+- Evidence: ADR-0015 self-review, reproduced directly. With `code.py` already modified, a reviewer rewriting it left `git status --porcelain` (" M code.py") and `git diff --stat` ("1 insertion(+), 1 deletion(-)") byte-identical. The rule-9 tamper check saw nothing.
+- Scope: any before/after comparison built on porcelain status or diff stat.
+- Lesson: status reports a file's *state class*, not its content, and stat reports counts, not bytes. Both are stable across arbitrary edits to an already-dirty file — which during a fix→review cycle is every file that matters.
+- Operational consequence: tamper detection uses `content_fingerprint` (hash of the full `git diff HEAD` patch plus each untracked file's bytes). Identity/keying keeps the cheap `workspace_fingerprint`; the two are deliberately different functions with different jobs.
+- Revalidation condition: standing rule; no expiry.

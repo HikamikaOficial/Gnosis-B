@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ..kernel.convergence import Finding, FixReport, FixRequest, ReviewReport
-from ..kernel.git_evidence import workspace_fingerprint
+from ..kernel.git_evidence import content_fingerprint
 from ..runner.capture import ExecutionResult
 from ..runner.claude_cli_runner import McpRunnerConfig
 from .review_payload import (
@@ -47,6 +47,10 @@ from .review_payload import (
 # `reviewer_read_only` as SANDBOX_APPROX rather than HARD.
 REVIEW_PERMISSION_MODE = "plan"
 FIX_PERMISSION_MODE = "acceptEdits"
+
+# An agent that dumps a build log to stdout must not turn a review round
+# into an unbounded read.
+MAX_AGENT_MESSAGE_CHARS = 2_000_000
 
 
 class ReviewerModifiedSubject(RuntimeError):
@@ -84,9 +88,14 @@ def agent_message_text(result: ExecutionResult) -> str:
         for key in ("result", "text", "content", "message"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
-                return value
+                return value[:MAX_AGENT_MESSAGE_CHARS]
     try:
-        return Path(result.stdout_path).read_text(encoding="utf-8", errors="replace")
+        with Path(result.stdout_path).open("r", encoding="utf-8", errors="replace") as fh:
+            # Bounded: an agent that dumps a log to stdout must not be able
+            # to make the reviewer read a multi-gigabyte file into memory,
+            # and a review that does not fit in this much text is not a
+            # review this parser was going to find an answer in anyway.
+            return fh.read(MAX_AGENT_MESSAGE_CHARS)
     except OSError:
         return ""
 
@@ -174,7 +183,7 @@ class CliReviewer:
         self.focus = tuple(focus or ())
         self.timeout_s = timeout_s
         self.mcp = mcp
-        self.fingerprint_fn = fingerprint_fn or workspace_fingerprint
+        self.fingerprint_fn = fingerprint_fn or content_fingerprint
 
     def __call__(self, round_index: int) -> ReviewReport:
         before = self.fingerprint_fn(self.repo_path)

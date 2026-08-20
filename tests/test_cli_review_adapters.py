@@ -153,6 +153,18 @@ class TestReviewPayloadParsing(unittest.TestCase):
         with self.assertRaises(InvalidReviewOutput):
             extract_json_object("[1, 2, 3]")
 
+    def test_a_trailing_object_does_not_push_the_review_out_of_reach(self):
+        # Self-review: taking only the LAST balanced object meant anything
+        # brace-shaped appended after the answer (a signature, a tool
+        # trace) turned a perfectly good round into INVALID.
+        text = ('{"verdict": "FAIL", "findings": []}\n'
+                'Reviewed by the model.\n{"tool_use_id": "abc"}')
+        self.assertEqual(parse_review_payload(text, "r1").verdict, ReviewVerdict.FAIL)
+
+    def test_the_verdict_bearing_object_is_preferred_over_a_bare_one(self):
+        text = '{"unrelated": 1}\n{"verdict": "PASS", "findings": []}\n{"trailing": 2}'
+        self.assertEqual(parse_review_payload(text, "r1").verdict, ReviewVerdict.PASS)
+
 
 class _AdapterTestCase(unittest.TestCase):
     def setUp(self):
@@ -198,6 +210,50 @@ class TestCliReviewer(_AdapterTestCase):
         agent = _ScriptedAgent([_PASS_REVIEW], on_run=sneak)
         with self.assertRaises(ReviewerModifiedSubject):
             self._reviewer(agent)(1)
+
+    def test_a_reviewer_is_caught_editing_an_already_dirty_file(self):
+        # THE case that matters, and the one the first implementation
+        # missed: during convergence a fix round has already dirtied the
+        # tree, so `git status --porcelain` still reads " M code.py" and
+        # `git diff --stat` still reads "1 insertion, 1 deletion" no
+        # matter how many more times the reviewer rewrites that file.
+        # Verified: both were byte-identical across the tamper.
+        (self.repo / "code.py").write_text("x = 2\n", encoding="utf-8")
+
+        def sneak(cwd):
+            (cwd / "code.py").write_text("x = 999\n", encoding="utf-8")
+
+        agent = _ScriptedAgent([_PASS_REVIEW], on_run=sneak)
+        with self.assertRaises(ReviewerModifiedSubject):
+            self._reviewer(agent)(1)
+
+    def test_a_reviewer_is_caught_editing_an_untracked_file(self):
+        (self.repo / "scratch.txt").write_text("first", encoding="utf-8")
+
+        def sneak(cwd):
+            (cwd / "scratch.txt").write_text("second", encoding="utf-8")
+
+        agent = _ScriptedAgent([_PASS_REVIEW], on_run=sneak)
+        with self.assertRaises(ReviewerModifiedSubject):
+            self._reviewer(agent)(1)
+
+    def test_a_failed_git_probe_does_not_read_as_nothing_changed(self):
+        # Otherwise breaking git would be the way to defeat the check.
+        from gnosis.kernel.git_evidence import content_fingerprint
+        fingerprint = content_fingerprint(self.repo)
+        self.assertIn("patch_sha256", fingerprint)
+        self.assertNotIn("probe_failed", fingerprint)
+
+    def test_an_oversized_agent_message_is_read_boundedly(self):
+        from gnosis.adapters.cli_review import MAX_AGENT_MESSAGE_CHARS
+        huge = self.root / "huge.out"
+        huge.write_text("x" * (MAX_AGENT_MESSAGE_CHARS + 5000), encoding="utf-8")
+        result = ExecutionResult(
+            command=("claude",), exit_code=0, timed_out=False, cancelled=False,
+            duration_s=0.1, stdout_path=str(huge), stderr_path=str(huge),
+            started_at="t0", ended_at="t1", parsed_json=None,
+        )
+        self.assertEqual(len(agent_message_text(result)), MAX_AGENT_MESSAGE_CHARS)
 
     def test_a_reviewer_that_only_reads_is_not_accused(self):
         def look(cwd):
