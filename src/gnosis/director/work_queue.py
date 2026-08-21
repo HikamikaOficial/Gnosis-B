@@ -33,9 +33,10 @@ What that leaves this module responsible for is small and specific:
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,10 @@ from ..kernel.claims import (
 PENDING = "pending"
 RUNNING = "running"
 DONE = "done"
+# Terminal until an operator requeues. A brief that has exhausted its
+# attempts must LEAVE the queue: leaving it in `pending` and skipping it
+# forever is a decision nobody can see.
+BLOCKED = "blocked"
 
 
 @dataclass(frozen=True)
@@ -72,10 +77,16 @@ class WorkQueue:
 
     def __init__(self, root: Path, authority: WorkAuthority,
                  lease_ttl_s: float | None = None,
-                 max_attempts: int | None = 5) -> None:
+                 max_attempts: int | None = 5,
+                 clock: Callable[[], float] = time.time) -> None:
         self.root = Path(root)
         self.authority = authority
         self.lease_ttl_s = lease_ttl_s
+        # WALL CLOCK, like the hold plane and for the same reason: a
+        # `not_before` is written to a durable record and read by another
+        # process, possibly after a restart. A monotonic reading means
+        # nothing to either.
+        self.clock = clock
         # Rule 8: no loop is unlimited. `release` returns a brief to
         # `pending` and `drain` re-offers it immediately, so a caller that
         # parks every time would spin forever — and the per-brief budget
@@ -87,7 +98,7 @@ class WorkQueue:
         # worker that skipped work and cannot say why is exactly the
         # silence every review of this project has punished.
         self.skipped: list[tuple[str, str]] = []
-        for state in (PENDING, RUNNING, DONE):
+        for state in (PENDING, RUNNING, DONE, BLOCKED):
             (self.root / state).mkdir(parents=True, exist_ok=True)
 
     # -- putting work in ---------------------------------------------------
@@ -138,10 +149,28 @@ class WorkQueue:
             brief_id = str(record["brief"]["brief_id"])
             attempts = int(record.get("attempts", 0))
             if self.max_attempts is not None and attempts >= self.max_attempts:
-                # Exhausted, and said so rather than silently skipped
-                # forever. An operator requeues it deliberately.
+                # Exhausted. It LEAVES the queue rather than being skipped
+                # on every future scan: a brief nobody will ever claim,
+                # sitting in `pending` forever, is a decision no operator
+                # can see.
                 self.skipped.append(
                     (brief_id, f"attempts_exhausted:{attempts}/{self.max_attempts}"))
+                self._move(brief_id, PENDING, BLOCKED,
+                           {"blocked_because": f"attempts_exhausted:{attempts}"})
+                continue
+
+            wait_until = _finite_time(record.get("not_before"))
+            if record.get("not_before") is not None and wait_until is None:
+                # A `not_before` that is not a finite number cannot pace
+                # anything, and honouring it literally (NaN, inf, a
+                # string) would leave the brief unclaimable forever while
+                # still sitting in `pending` — invisible, not blocked,
+                # which is the ghost rule 4 forbids. Ignored and recorded.
+                self.skipped.append(
+                    (brief_id, f"unusable not_before: {record.get('not_before')!r}"))
+            elif wait_until is not None and self.clock() < wait_until:
+                # Not an error and not a skip worth recording on every
+                # scan — the wait IS the mechanism.
                 continue
             try:
                 grant = self.authority.acquire(
@@ -228,8 +257,18 @@ class WorkQueue:
             # worse than the ghost this recovery exists to prevent, and
             # exactly the mistake ADR-0016's boot sweep already had to
             # learn (independent review caught it in this fix).
+            # A transition is a claims-plane call AND a file move, and a
+            # crash can land between them in either order. The intent is
+            # stamped on the record before the plane call, so recovery
+            # finishes what a dead worker decided instead of overruling
+            # it: a brief the worker BLOCKED must not come back pending,
+            # and a park's `not_before` must not be dropped on the way.
+            intent = record.pop("pending_transition", None)
             resolved = claim is not None and claim.status is ClaimStatus.RESOLVED
-            target = DONE if resolved else PENDING
+            if intent in (BLOCKED, DONE, PENDING):
+                target = str(intent)
+            else:
+                target = DONE if resolved else PENDING
             record["recovered_from"] = RUNNING
             record["recovered_because"] = (
                 claim.status.value if claim is not None else "no_claim")
@@ -241,18 +280,78 @@ class WorkQueue:
 
     def complete(self, work: ClaimedWork, outcome: str) -> None:
         """Finish the brief: the claim resolves and the work leaves the queue."""
+        self._stamp(work.brief_id, {"pending_transition": DONE, "outcome": outcome})
         self.authority.resolve(work.grant, outcome=outcome)
         self._move(work.brief_id, RUNNING, DONE, {"outcome": outcome})
 
-    def release(self, work: ClaimedWork, reason: str) -> None:
-        """Hand the brief back, still pending.
+    def release(self, work: ClaimedWork, reason: str,
+                not_before: float | None = None) -> None:
+        """Hand the brief back, still pending, optionally not just yet.
 
         A park is not a completion: rule 6 says a shut window leaves the
         work untouched and resumable, so it has to become claimable
         again — by this worker later, or by another one now.
+
+        `not_before` is DURABLE on the record, which is the whole point.
+        Backoff held in a worker's memory is backoff a restart forgets,
+        and the thing it is pacing — an agent launch against a shut
+        window — is exactly what should not resume at full speed after a
+        crash (L-0024's shape).
         """
+        extra: dict[str, Any] = {"released_because": reason}
+        if not_before is not None:
+            extra["not_before"] = float(not_before)
+        self._stamp(work.brief_id, {**extra, "pending_transition": PENDING})
         self.authority.release(work.grant)
-        self._move(work.brief_id, RUNNING, PENDING, {"released_because": reason})
+        self._move(work.brief_id, RUNNING, PENDING, extra)
+
+    def block(self, work: ClaimedWork, reason: str) -> None:
+        """Take the brief out of circulation for a human to look at."""
+        self._stamp(work.brief_id,
+                    {"pending_transition": BLOCKED, "blocked_because": reason})
+        self.authority.release(work.grant)
+        self._move(work.brief_id, RUNNING, BLOCKED, {"blocked_because": reason})
+
+    def requeue(self, brief_id: str, reason: str = "operator") -> bool:
+        """An operator's decision to try a blocked brief again.
+
+        Attempts reset here and nowhere else: a bound an automated path
+        could clear is not a bound.
+        """
+        origin = self.root / BLOCKED / f"{brief_id}.json"
+        record = _read(origin)
+        if record is None:
+            return False
+        record["attempts"] = 0
+        record.pop("not_before", None)
+        record.pop("blocked_because", None)
+        record.pop("pending_transition", None)
+        record["requeued_because"] = reason
+        _atomic_write(self.root / PENDING / f"{brief_id}.json",
+                      json.dumps(record, indent=2, sort_keys=True))
+        origin.unlink(missing_ok=True)
+        return True
+
+    def blocked_ids(self) -> list[str]:
+        return sorted(p.stem for p in (self.root / BLOCKED).glob("*.json"))
+
+    def waiting(self) -> list[tuple[str, float]]:
+        """Briefs that are pending but backing off, and until when.
+
+        `pending_ids()` alone would show a brief nobody can claim as
+        available. An operator asking "why is nothing moving" needs the
+        wait to be visible, not inferred.
+        """
+        out: list[tuple[str, float]] = []
+        now = self.clock()
+        for path in sorted((self.root / PENDING).glob("*.json")):
+            record = _read(path)
+            if record is None:
+                continue
+            wait_until = _finite_time(record.get("not_before"))
+            if wait_until is not None and now < wait_until:
+                out.append((str(record["brief"]["brief_id"]), wait_until))
+        return out
 
     # -- inspection --------------------------------------------------------
 
@@ -269,19 +368,46 @@ class WorkQueue:
         return len(self.pending_ids())
 
     def _locate(self, brief_id: str) -> str | None:
-        for state in (PENDING, RUNNING, DONE):
+        for state in (PENDING, RUNNING, DONE, BLOCKED):
             if (self.root / state / f"{brief_id}.json").exists():
                 return state
         return None
+
+    def _stamp(self, brief_id: str, extra: dict[str, Any]) -> None:
+        """Record a decision on the running record before acting on it.
+
+        A best-effort write: if it fails the transition still proceeds and
+        recovery falls back to reading the claim status, which is where it
+        was before. It can only add information, never withhold a move.
+        """
+        path = self.root / RUNNING / f"{brief_id}.json"
+        record = _read(path)
+        if record is None:
+            return
+        record.update(extra)
+        try:
+            _atomic_write(path, json.dumps(record, indent=2, sort_keys=True))
+        except OSError:
+            return
 
     def _move(self, brief_id: str, source: str, target: str,
               extra: dict[str, Any]) -> None:
         origin = self.root / source / f"{brief_id}.json"
         record = _read(origin) or {"brief": {"brief_id": brief_id}}
         record.update(extra)
+        record.pop("pending_transition", None)  # it arrived; nothing is pending
         _atomic_write(self.root / target / f"{brief_id}.json",
                       json.dumps(record, indent=2, sort_keys=True))
         origin.unlink(missing_ok=True)
+
+
+def _finite_time(value: Any) -> float | None:
+    """A usable timestamp, or None. `bool` is `int` in Python, and NaN
+    compares false against everything — neither can pace a queue."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
 
 
 def _read(path: Path) -> dict[str, Any] | None:

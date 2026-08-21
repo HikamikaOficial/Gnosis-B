@@ -243,3 +243,19 @@ Format:
 - Lesson: the assignment looks like configuration and behaves like a cache of the first caller. When the thing being assigned closes over per-call identity, sharing it silently reattributes work — and attribution is what a governance record is FOR, so the failure is invisible in behaviour and total in the audit trail.
 - Operational consequence: the reviewer is passed per call (`integrate(..., re_reviewer=...)`), and the coordinator holds a FACTORY keyed by task rather than an instance.
 - Revalidation condition: standing rule; no expiry.
+
+## L-0030 — A transition that is two writes has a gap, and the gap reverses decisions
+- Status: VERIFIED
+- Evidence: ADR-0022 self-review finding 1, reproduced directly before the fix. `WorkQueue.block` released the claim and then moved the file; a crash between them left the record in `running/` with no live claim, and `recover()` — routing on claim status alone — returned it to `pending`. The decision that a human must look at the brief was erased by the mechanism whose job is not losing things. `release` lost its `not_before` the same way, falsifying "backoff is durable" precisely when the system was least healthy.
+- Scope: any state change split across two stores — a plane call plus a file move, a database write plus a queue publish, a claim plus a ledger entry.
+- Lesson: recovery routing on the OTHER store's status can only reconstruct what happened TO the record, never what the worker DECIDED. Stamp the intent on the record before the first call: then a crash leaves recovery finishing the decision rather than overruling it. The stamp must clear itself on arrival, or a later revival carries a marker from a past life and the next crash acts on a reason that expired.
+- Operational consequence: `pending_transition` written by `_stamp` before every plane call; `recover()` routes on it first; `_move` and `requeue` clear it.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0031 — An invalid output coerced into a valid one is an unbounded loop wearing a bound's clothes
+- Status: VERIFIED
+- Evidence: ADR-0022 self-review finding 3. The supervisor dispatched COMPLETED, then BLOCK, then `else: park`. A handler with a bare `return` — the commonest handler bug there is — returned `None`, landed in `else`, and became an indefinite pacing loop that read from the outside exactly like a system correctly waiting on a shut window. Rule 8 asks for an invalid-output limit; the code had a default branch instead.
+- Scope: any dispatch whose final branch is an `else` rather than a rejection; any runtime handling of a value whose type annotation is a promise the runtime cannot enforce.
+- Lesson: the dangerous default is the one that resembles healthy behaviour. A malformed output is not a quiet vote for the last option — its outcome is as unknown as an exception and deserves the same treatment. Two corollaries: check with `isinstance`, not equality, when the enum is a `str` enum (the string "PARK" compares equal to a member); and type the incoming value as `object`, because annotating it as the promised type makes the guard read as dead code and invites its deletion.
+- Operational consequence: `StopReason.INVALID_OUTPUT`; a non-`Disposition` blocks the brief.
+- Revalidation condition: standing rule; no expiry.

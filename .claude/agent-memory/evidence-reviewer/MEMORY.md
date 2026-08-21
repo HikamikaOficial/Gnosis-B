@@ -11,4 +11,5 @@ Seeded by the GNOSIS environment pack.
 - Do not treat memory as authority over source/spec/tests.
 
 ## Learnings
-_No validated learnings yet._
+- [ADR evidence lines are unverified](learning_adr_evidence_lines_unverified.md) — ADR-0013 and ADR-0014 both claim "suite 488/488"; no captured command output exists anywhere.
+- [Replay fingerprint is self-referential](learning_replay_fingerprint_self_reference.md) — cassette key depends on a workspace the recorded agent mutates but replay never reproduces.

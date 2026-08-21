@@ -5,6 +5,7 @@ _twice` — everything else is a property of that path. It uses real
 threads racing on real files rather than a simulated interleaving,
 because the mechanism under test IS the race.
 """
+import json
 import tempfile
 import threading
 import time
@@ -234,8 +235,15 @@ class TestRepairsFromTheIndependentReview(_QueueTestCase):
         self.assertIsNone(queue.claim("worker-a"))
         self.assertTrue(any("attempts_exhausted" in reason
                             for _, reason in queue.skipped))
-        # Still on disk, for an operator to requeue deliberately.
-        self.assertEqual(queue.pending_ids(), ["BRIEF-1"])
+        # It LEAVES the queue rather than being skipped on every future
+        # scan: a brief nobody will ever claim, sitting in `pending`
+        # forever, is a decision no operator can see.
+        self.assertEqual(queue.pending_ids(), [])
+        self.assertEqual(queue.blocked_ids(), ["BRIEF-1"])
+
+        # And only an operator brings it back.
+        self.assertTrue(queue.requeue("BRIEF-1"))
+        self.assertIsNotNone(queue.claim("worker-a"))
 
     def test_concurrent_enqueue_of_one_brief_id_admits_exactly_one(self):
         # Both racers passed the existence check before either wrote, and
@@ -378,6 +386,126 @@ class TestBudget(unittest.TestCase):
         payload = ledger.to_dict()
         self.assertEqual(payload["launches"], 1)
         self.assertEqual(payload["remaining_launches"], 2)
+
+
+class TestACrashBetweenThePlaneAndTheFile(unittest.TestCase):
+    """Every transition is a claims-plane call AND a file move. The window
+    between them is where a decision gets silently reversed."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.now = [1_000_000.0]
+        self.authority = WorkAuthority(
+            ClaimStore(self.root / "claims.json"),
+            LeaseStore(self.root / "leases.json"),
+            default_ttl_s=300,
+        )
+        self.queue = WorkQueue(self.root / "queue", self.authority,
+                               clock=lambda: self.now[0])
+        self.queue.enqueue(_brief("BRIEF-1"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _crash_after_the_plane_call(self, method, **kwargs):
+        """Run the transition up to the plane call, then stop."""
+        work = self.queue.claim("worker-a")
+        assert work is not None
+        original = self.queue._move
+        self.queue._move = lambda *a, **k: None      # the crash
+        try:
+            method(work, **kwargs)
+        finally:
+            self.queue._move = original
+        return work
+
+    def test_a_lost_block_is_not_resurrected_by_recovery(self):
+        # The decision that a human must look at this brief was made and
+        # the claim was given up; recovery must finish it, not overrule it.
+        self._crash_after_the_plane_call(self.queue.block, reason="needs_human")
+        self.queue.recover()
+        self.assertEqual(self.queue.blocked_ids(), ["BRIEF-1"])
+        self.assertEqual(self.queue.pending_ids(), [])
+
+    def test_a_lost_park_keeps_its_backoff(self):
+        # "Backoff is durable" has to mean durable across the crash too,
+        # or the pacing evaporates exactly when the system is least well.
+        self._crash_after_the_plane_call(self.queue.release, reason="parked",
+                                         not_before=self.now[0] + 60)
+        self.queue.recover()
+        self.assertEqual(self.queue.pending_ids(), ["BRIEF-1"])
+        self.assertIsNone(self.queue.claim("worker-b"))
+        self.now[0] += 61
+        self.assertIsNotNone(self.queue.claim("worker-b"))
+
+    def test_a_lost_completion_is_still_not_re_executed(self):
+        self._crash_after_the_plane_call(self.queue.complete, outcome="COMPLETED")
+        self.queue.recover()
+        self.assertEqual(self.queue.done_ids(), ["BRIEF-1"])
+
+    def test_a_requeued_brief_does_not_carry_the_old_block_marker(self):
+        # Otherwise an operator revives a brief and the next crash sends
+        # it straight back to blocked, citing a reason from a past life.
+        self.queue.block(self.queue.claim("worker-a"), reason="needs_human")
+        self.assertTrue(self.queue.requeue("BRIEF-1", reason="operator looked"))
+        work = self.queue.claim("worker-b")
+        self.authority.release(work.grant)          # crash, no intent stamped
+        self.queue.recover()
+        self.assertEqual(self.queue.pending_ids(), ["BRIEF-1"])
+        self.assertEqual(self.queue.blocked_ids(), [])
+
+
+class TestAWaitNobodyCanSee(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.now = [1_000_000.0]
+        self.authority = WorkAuthority(
+            ClaimStore(self.root / "claims.json"),
+            LeaseStore(self.root / "leases.json"),
+            default_ttl_s=300,
+        )
+        self.queue = WorkQueue(self.root / "queue", self.authority,
+                               clock=lambda: self.now[0])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _park_with(self, brief_id, not_before):
+        self.queue.enqueue(_brief(brief_id))
+        work = self.queue.claim("worker-a")
+        self.queue.release(work, reason="parked", not_before=1.0)
+        path = self.root / "queue" / "pending" / f"{brief_id}.json"
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record["not_before"] = not_before
+        path.write_text(json.dumps(record), encoding="utf-8")
+
+    def test_an_unusable_not_before_does_not_strand_a_brief(self):
+        # inf, NaN and a string all read as "never claimable" if honoured
+        # literally, and the brief keeps sitting in `pending` looking
+        # available to anyone who lists the queue.
+        values = [float("inf"), float("nan"), "soon", True]
+        for index, value in enumerate(values):
+            brief_id = f"BRIEF-{index}"
+            self._park_with(brief_id, value)
+
+        claimed = []
+        while (work := self.queue.claim("worker-b")) is not None:
+            claimed.append(work.brief_id)
+            self.queue.complete(work, outcome="COMPLETED")
+
+        self.assertEqual(len(claimed), len(values))
+        # And the queue SAYS it ignored them rather than quietly deciding.
+        self.assertEqual(len(self.queue.skipped), len(values))
+        self.assertIn("unusable not_before", self.queue.skipped[0][1])
+
+    def test_waiting_names_what_is_backing_off_and_until_when(self):
+        self._park_with("BRIEF-1", self.now[0] + 90)
+        self.assertEqual(self.queue.pending_ids(), ["BRIEF-1"])
+        self.assertEqual(self.queue.waiting(), [("BRIEF-1", self.now[0] + 90)])
+        self.now[0] += 91
+        self.assertEqual(self.queue.waiting(), [])
 
 
 if __name__ == "__main__":

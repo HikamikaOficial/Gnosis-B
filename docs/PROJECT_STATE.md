@@ -1,6 +1,6 @@
 # GNOSIS Project State
 
-**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE
+**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
 **Last update:** 2026-08-20
@@ -103,10 +103,10 @@ governs the order of work here: **prefer wiring over documenting**.
   compete) from decisions (which supersede, with a reason). No
   independent review: both channels are unavailable.
 
-Suite: **672 tests, all passing**; mypy strict clean (47 files); ruff at
+Suite: **695 tests, all passing**; mypy strict clean (47 files); ruff at
 the recorded backlog baseline (19 pre-existing findings in untouched
 files, ratcheted down from 20; `.gnosis/state/lint_baseline.json` fails the run if it rises).
-Captured transcript, not prose: `.gnosis/evidence/20260821T125747Z/`.
+Captured transcript, not prose: `.gnosis/evidence/20260821T135555Z/`.
 
 ## Integration milestone (COMPLETE)
 
@@ -191,6 +191,23 @@ re-review was neither budgeted nor its refusals caught, while a comment
 claimed otherwise. Self-review separately caught the pipeline assigning
 the reviewer onto the shared integrator, which would have recorded every
 later task's re-review under the first task's name (L-0029).
+
+## Worker supervision and backoff (ADR-0022)
+
+`drain` was a generator with no worker, no restart and no pacing.
+`WorkerSupervisor` claims, runs, paces parks with a DURABLE exponential
+`not_before`, and bounds itself against rule 8's full list. The design
+question was authority, not retry: it may pace, stop and take work out of
+circulation; it may not clear an attempt count or resurrect a blocked
+brief.
+
+**Shipped WITHOUT an independent review** — Codex refused with a usage
+limit (reset reported 2026-09-20). The first unit since ADR-0016 with a
+weaker evidence claim, and the ADR says so at the top. Self-review found
+four defects, three repaired: a crash between the claims-plane call and
+the file move ERASED a block decision and dropped a park's backoff
+(L-0030), and a handler returning `None` was silently treated as a park
+(L-0031). The first two are mutation-checked.
 
 ## Fixed locations
 
