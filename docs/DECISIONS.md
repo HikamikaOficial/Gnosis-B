@@ -89,3 +89,6 @@ Convergence launches a reviewer and a fixer per round — usually more agents th
 
 ## D-030 — A brief's budget is durable, per brief, and consulted before spending
 `Budget` bounds wall clock and agent launches; `BudgetStore` keeps the running total keyed by brief id so a park/resume cycle cannot reset it. It is checked in `GatedAgentRunner` immediately before each launch — the last point at which refusing is free — and before the implementation phase, and a launch is counted before the child starts. Exhaustion is a PARK, never an agent failure. Tokens are deliberately not counted: the kernel shells out to a CLI and would be enforcing on an invented estimate. Details/evidence: ADR-0019.
+
+## D-031 — A review expires when the tree it judged moves
+Every planned landing carries `review_still_applies`, true only for a task that forked from the current head and lands first. `LandingCoordinator` refuses a stale-review landing by default and `GovernedPipeline` routes landings through it, so the gate is on the path real briefs take. Authority to land a stale-review task is per task id, never a global switch. Ordering itself prevents nothing: it reduces wasted rounds and reports staleness, and post-merge verification remains the only thing that decides. Details/evidence: ADR-0020.

@@ -211,3 +211,19 @@ Format:
 - Lesson: check what the loop actually spends. A limit on money does not bound a loop that is free; rule 8 lists max attempts SEPARATELY from wall-time and budget for exactly this reason, and the separation is not redundancy.
 - Operational consequence: `WorkQueue` carries `max_attempts`, durable on the record, and an exhausted brief is reported in `skipped` rather than silently passed over forever.
 - Revalidation condition: standing rule; no expiry.
+
+## L-0026 — A mechanism can be structurally unable to answer its own question
+- Status: VERIFIED
+- Evidence: ADR-0020 Codex finding 1. `WorkIntegrator.preview` returned the SOURCE repo's current head as a task's `base_sha`, so `base_sha == head` was true by construction. The whole ordering mechanism exists to detect "the target moved since this was reviewed", and through its own data path that condition could never be true. Every unit test passed because they fed the planner synthetic bases and never went through `preview`.
+- Scope: any predicate computed from a value the caller also supplies as the comparison target.
+- Lesson: testing the pure function proves the logic and proves nothing about whether the inputs can ever take the shape the logic distinguishes. The question to ask of a new predicate is not "does it compute correctly" but "can the real data path produce both answers" — and the way to find out is one end-to-end test through the real reader, not more cases fed by hand.
+- Operational consequence: `preview` reports `git merge-base <head> <branch>`, and a test drives the whole path (fork, advance the branch, plan) asserting STALE_BASE actually fires.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0027 — Convergence is two pieces of evidence and only one of them survives a base move
+- Status: VERIFIED
+- Evidence: ADR-0020. "Converged" means deterministic verification passed AND an independent review passed (ADR-0008). Integration re-runs the verification on the merged tree; nothing re-runs the review. So after the target moves, half the guarantee is re-established and half is assumed — and nothing said so until this milestone.
+- Scope: any composite guarantee whose parts have different lifetimes.
+- Lesson: when a claim is a conjunction, ask what invalidates each half separately. A review is evidence about a specific tree, so it expires when the tree changes; a test run can be repeated, so it does not. Treating the conjunction as one durable fact keeps the weaker half alive past its evidence.
+- Operational consequence: `review_still_applies` on every planned landing; the coordinator refuses a stale-review landing by default, and the pipeline routes landings through it.
+- Revalidation condition: standing rule; no expiry.

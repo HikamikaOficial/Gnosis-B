@@ -1,0 +1,11 @@
+ M .claude/agent-memory/evidence-reviewer/MEMORY.md
+ M src/gnosis/director/pipeline.py
+ M src/gnosis/kernel/integration.py
+?? .claude/agent-memory/evidence-reviewer/learning_adr_evidence_lines_unverified.md
+?? .claude/agent-memory/evidence-reviewer/learning_replay_fingerprint_self_reference.md
+?? .gnosis/evidence/20260821T022026Z/
+?? .gnosis/evidence/20260821T024050Z/
+?? .gnosis/evidence/20260821T024656Z/
+?? .gnosis/lab/kernel-reviews/codex-review-2026-08-21-ordering.jsonl
+?? src/gnosis/kernel/ordering.py
+?? tests/test_ordering.py

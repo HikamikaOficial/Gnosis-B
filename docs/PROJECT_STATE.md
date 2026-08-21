@@ -1,6 +1,6 @@
 # GNOSIS Project State
 
-**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET)
+**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING)
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
 **Last update:** 2026-08-20
@@ -103,10 +103,10 @@ governs the order of work here: **prefer wiring over documenting**.
   compete) from decisions (which supersede, with a reason). No
   independent review: both channels are unavailable.
 
-Suite: **643 tests, all passing**; mypy strict clean (47 files); ruff at
+Suite: **662 tests, all passing**; mypy strict clean (47 files); ruff at
 the recorded backlog baseline (19 pre-existing findings in untouched
 files, ratcheted down from 20; `.gnosis/state/lint_baseline.json` fails the run if it rises).
-Captured transcript, not prose: `.gnosis/evidence/20260821T020757Z/`.
+Captured transcript, not prose: `.gnosis/evidence/20260821T024656Z/`.
 
 ## Integration milestone (COMPLETE)
 
@@ -160,6 +160,21 @@ already-completed work to `pending` to be re-executed. Also: a stale
 grant could hand out work the worker no longer owned, and the budget was
 per INVOCATION rather than per brief, so a park/resume cycle launched
 agents without limit while each run looked bounded. See L-0023.
+
+## Cross-task ordering (ADR-0020)
+
+`plan_landings` orders converged tasks, and its real output is
+`review_still_applies`: "converged" is verification AND an independent
+review, and when the target moves only the verification gets re-run.
+`LandingCoordinator` refuses a stale-review landing by default and the
+pipeline routes landings through it.
+
+**Codex review: FAIL, 9 findings, all repaired** - three critical. The
+sharpest: `preview` returned the target's head as a task's base, so
+"the base is stale" was structurally impossible to detect through the
+module's own data path, and every test passed because they fed the
+planner synthetic bases (L-0026). The pipeline also bypassed the
+coordinator entirely, and a plan could be honoured after its head moved.
 
 ## Fixed locations
 

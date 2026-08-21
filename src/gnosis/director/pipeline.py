@@ -56,7 +56,12 @@ from ..kernel.convergence import (
 )
 from ..kernel.engine import TaskExecutionOutcome
 from ..kernel.ids import new_task_id
-from ..kernel.integration import IntegrationResult, WorkIntegrator
+from ..kernel.integration import (
+    IntegrationOutcome,
+    IntegrationResult,
+    WorkIntegrator,
+)
+from ..kernel.ordering import LandingCoordinator
 from ..kernel.policy import ApprovalStore, PolicyDecision, PolicyEngine
 from ..kernel.scheduler import ScheduleOutcome, TaskScheduler
 from ..kernel.verification import VerificationResult, Verifier
@@ -129,6 +134,7 @@ class GovernedPipeline:
         focus: Sequence[str] | None = None,
         integrator: WorkIntegrator | None = None,
         budget: Budget | None = None,
+        stale_review_authorised: set[str] | None = None,
     ) -> None:
         self.inbox = DirectorInbox(director_root)
         self.records = BriefRecordStore(director_root / "state" / "briefs")
@@ -179,6 +185,10 @@ class GovernedPipeline:
         # launches nobody authorised as a total. Rule 8 names wall-time
         # and budget as circuit breakers; this is where they live.
         self.budget = budget
+        # Task ids whose review an operator has re-done deliberately. Per
+        # task, never a global switch: authorising every stale landing at
+        # once is how an opt-out becomes the default.
+        self.stale_review_authorised = set(stale_review_authorised or ())
         # DURABLE, keyed by brief. An in-memory ledger tracked one
         # INVOCATION, so a parked brief that was released and re-claimed
         # started from zero and could launch agents forever while every
@@ -472,9 +482,44 @@ class GovernedPipeline:
 
     def _integrate(self, task_id: str,
                    convergence: ConvergenceResult) -> IntegrationResult | None:
+        """Land through the coordinator, so the review-validity gate is real.
+
+        Calling `integrator.integrate` directly bypassed
+        `review_still_applies` entirely: ordinary pipeline landings kept
+        the exact silent stale-review behaviour ADR-0020 says it prevents,
+        and `LandingCoordinator` was referenced only by its own tests —
+        Directive 9's parallel fiction, one more time (independent
+        review).
+
+        A task whose base moved since its review is refused here rather
+        than landed. Verification would be re-run by the integrator; the
+        REVIEW would not, and keeping half a guarantee while reporting a
+        whole one is the failure this project keeps correcting.
+        """
         if self.integrator is None:
             return None
-        return self.integrator.integrate(task_id, convergence)
+        head, _ = self.integrator.preview_head()
+        if head is None:
+            return self.integrator.integrate(task_id, convergence)
+
+        coordinator = LandingCoordinator(
+            self.integrator,
+            stale_review_authorised=self.stale_review_authorised,
+        )
+        plan = coordinator.plan(head, [task_id])
+        attempts = coordinator.land(plan, {task_id: convergence})
+        if not attempts:
+            return None
+        attempt = attempts[0]
+        if isinstance(attempt.result, IntegrationResult):
+            return attempt.result
+        return IntegrationResult(
+            IntegrationOutcome.REVIEW_STALE, task_id,
+            self.integrator.worktrees.planned_branch(task_id),
+            reason=f"review_stale:{attempt.status.value}",
+            base_sha=attempt.planned.task.base_sha,
+            changed_paths=attempt.planned.task.changed_paths,
+        )
 
     # -- reporting --------------------------------------------------------
 

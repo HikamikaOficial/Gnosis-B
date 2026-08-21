@@ -70,6 +70,8 @@ from .worktree import BRANCH_PREFIX, WorktreeError, WorktreeManager
 
 INTEGRATION_INTERVENTION_POINT = "before_integration"
 CHECKPOINT_REF_PREFIX = "refs/gnosis/checkpoints/"
+# `git status -z` separates records with NUL rather than quoting paths.
+NUL = chr(0)
 
 
 class IntegrationOutcome(str, Enum):
@@ -80,6 +82,9 @@ class IntegrationOutcome(str, Enum):
     NOTHING_TO_INTEGRATE = "NOTHING_TO_INTEGRATE"
     REFUSED_BY_POLICY = "REFUSED_BY_POLICY"
     WRONG_TARGET = "WRONG_TARGET"
+    # The task converged against a tree the target has since left behind:
+    # its verification can be re-run, its independent REVIEW cannot.
+    REVIEW_STALE = "REVIEW_STALE"
     # Attempted, and the target did not move.
     MERGE_CONFLICT = "MERGE_CONFLICT"
     VERIFICATION_FAILED = "VERIFICATION_FAILED"
@@ -365,7 +370,7 @@ class WorkIntegrator:
         # Only now does the shared branch move, and only by fast-forward
         # to a commit that has already been verified: there is no moment
         # at which an observer can see a broken target.
-        #
+
         # `--ff-only` guarantees ANCESTRY, not "the target is still what
         # was verified against" — a writer that rewound the ref to an
         # ancestor of the merge would be silently overwritten (Codex
@@ -439,6 +444,57 @@ class WorkIntegrator:
                     "action_id": snapshot.action_id()},
         )
 
+    def preview_head(self) -> tuple[str | None, None]:
+        """The target's current head, for a caller checking plan freshness."""
+        evidence = capture_git_evidence(self.source_repo)
+        return (evidence.head_sha if evidence.is_repo else None), None
+    def preview(self, task_id: str) -> tuple[str | None, tuple[str, ...]]:
+        """(base_sha, changed_paths) for a task, touching nothing.
+        Planning needs the same change set integration will land, and a
+        planner that had to integrate in order to learn it would not be a
+        planner.
+        Two things this had to learn, both from independent review:
+        **The base is the task's FORK POINT, not the target's head.**
+        Reporting the head made `base_sha == head` true by construction,
+        so a planner asking "did the target move since this was
+        reviewed?" always heard no — the one question the ordering
+        mechanism exists to answer, structurally unanswerable through its
+        own data path.
+        **Committed work is not enough.** Agents leave their work
+        UNCOMMITTED and `integrate` autosaves it, so a preview of the
+        committed diff reported nothing at all for a freshly worked task
+        and any planner reading it saw no paths and therefore no overlap.
+        Verified: two tasks both rewriting `lib.py` planned as disjoint.
+        """
+        evidence = capture_git_evidence(self.source_repo)
+        if not evidence.is_repo or evidence.head_sha is None:
+            return None, ()
+        branch = self.worktrees.planned_branch(task_id)
+        merge_base = _git(self.source_repo, ["merge-base", evidence.head_sha, branch])
+        if merge_base.returncode != 0:
+            return None, ()
+        fork_point = merge_base.stdout.strip()
+        paths = set(self._changed_paths(fork_point, branch))
+        paths.update(self._uncommitted_paths(task_id))
+        return fork_point, tuple(sorted(paths))
+    def _uncommitted_paths(self, task_id: str) -> tuple[str, ...]:
+        """What the agent has changed but not committed, from the worktree.
+        `-z` for the same reason `content_fingerprint` needs it: plain
+        porcelain C-quotes any non-ASCII path, and a planner that cannot
+        read a filename cannot reason about overlap on it.
+        """
+        try:
+            worktree = Path(self.worktrees.load_handle(task_id).path)
+        except (WorktreeError, FileNotFoundError, OSError):
+            return ()
+        if not worktree.exists():
+            return ()
+        proc = _git(worktree, ["status", "--porcelain", "-z",
+                               "--untracked-files=all"])
+        if proc.returncode != 0:
+            return ()
+        found = [entry[3:] for entry in proc.stdout.split(NUL) if len(entry) > 3]
+        return tuple(sorted(set(found)))
     # -- provenance and rollback ------------------------------------------
 
     def _write_checkpoint(self, task_id: str, base_sha: str) -> str | None:
