@@ -438,6 +438,10 @@ class TaskEngine:
         policy: PolicyEngine | None = None,
         approvals: ApprovalStore | None = None,
         policy_actor: str | None = None,
+        # A credential binding built by the caller (TaskScheduler, from a
+        # CredentialPool). None means inherit, which is the single-
+        # credential behaviour this engine has always had.
+        launch_env: Mapping[str, str] | None = None,
     ) -> TaskExecutionOutcome:
         # Two-plane ownership (Directive 4 / ADR-0006): when a WorkAuthority
         # is supplied, this engine invocation must hold the durable claim
@@ -531,7 +535,7 @@ class TaskEngine:
                 max_context_chars=max_context_chars, authority=authority,
                 grant=grant, guard=guard, policy=policy, approvals=approvals,
                 policy_actor=policy_actor or worker_id or "agent://unattributed",
-                worktrees=worktrees,
+                worktrees=worktrees, launch_env=launch_env,
             )
         finally:
             if pump is not None:
@@ -689,6 +693,7 @@ class TaskEngine:
         approvals: ApprovalStore | None = None,
         policy_actor: str = "agent://unattributed",
         worktrees: WorktreeManager | None = None,
+        launch_env: Mapping[str, str] | None = None,
     ) -> TaskExecutionOutcome:
         task_sm = TaskStateMachine(TaskState.CREATED)
         task_sm.transition(TaskState.PLANNED)
@@ -869,10 +874,16 @@ class TaskEngine:
             # pump; its structural closure (worktree isolation + token
             # enforcement inside RunStore) is tracked in NEXT_ACTIONS.
             guard()
+            launch_kwargs: dict[str, Any] = {}
+            if launch_env is not None:
+                # Passed only when a credential was actually bound: a
+                # runner without the parameter (a cassette, a fake) must
+                # not be handed one it cannot honour.
+                launch_kwargs["env"] = launch_env
             result = self.cli_runner.run(
                 prompt=effective_prompt, cwd=exec_root, stdout_path=paths.stdout, stderr_path=paths.stderr,
                 timeout_s=timeout_s, cancellation_token=cancellation_token, mcp=mcp,
-                heartbeat_fn=lambda pid: on_heartbeat(run_id),
+                heartbeat_fn=lambda pid: on_heartbeat(run_id), **launch_kwargs,
             )
 
             # The CLI run is a long window in which a deposition can happen

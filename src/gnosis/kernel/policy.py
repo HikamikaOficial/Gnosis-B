@@ -838,6 +838,45 @@ GNOSIS_ENFORCEMENT = EnforcementMatrix([
         ),
     ),
     EnforcementClaim(
+        "credentials", "billing_boundary", EnforcementLevel.HARD,
+        note=(
+            "rotation stays inside the primary credential's KIND unless "
+            "another kind is explicitly authorised, so an exhausted "
+            "subscription seat can never become a metered launch by "
+            "itself (rules 25, 26, 13). Machine-checked: CredentialPool."
+            "select refuses, and the launch parks (ADR-0024)"
+        ),
+    ),
+    EnforcementClaim(
+        "credentials", "no_ambient_fallback", EnforcementLevel.HARD,
+        note=(
+            "a credential whose source variable is unset raises "
+            "CredentialUnavailable rather than returning the ambient "
+            "environment. Inheriting would launch as whatever identity is "
+            "configured and report a successful rotation (ADR-0024)"
+        ),
+    ),
+    EnforcementClaim(
+        "credentials", "child_honours_the_binding", EnforcementLevel.PROMPT_ONLY,
+        note=(
+            "THE LIMIT OF THIS WHOLE MECHANISM. The kernel builds the "
+            "child's environment and passes it to Popen; it cannot verify "
+            "that the CLI binary AUTHENTICATES with it. A tool that "
+            "prefers a cached session token, a config file or an OS "
+            "keychain would run every 'rotation' as the same identity, "
+            "and every check here would still pass. Verifying it needs a "
+            "provider-side signal the kernel does not have (ADR-0024)"
+        ),
+    ),
+    EnforcementClaim(
+        "credentials", "declared_kind_is_true", EnforcementLevel.IGNORED,
+        note=(
+            "a credential declared SUBSCRIPTION could be a metered key. "
+            "The boundary is only as honest as the configuration that "
+            "declares it, and nothing here can tell them apart (ADR-0024)"
+        ),
+    ),
+    EnforcementClaim(
         "integration", "rereview_provenance", EnforcementLevel.IGNORED,
         note=(
             "a re-review is an injected callable returning a ReviewReport, "

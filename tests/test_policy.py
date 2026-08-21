@@ -581,7 +581,12 @@ class TestEnforcementMatrix(unittest.TestCase):
                                 ("convergence", "verifier_execution"),
                                 ("integration", "shared_branch_gate"),
                                 ("integration", "semantic_correctness"),
-                                ("integration", "rereview_provenance")})
+                                ("integration", "rereview_provenance"),
+                                # The limit of rotation: the kernel builds
+                                # the child's environment but cannot tell
+                                # whether the CLI authenticated with it.
+                                ("credentials", "child_honours_the_binding"),
+                                ("credentials", "declared_kind_is_true")})
 
     def test_gnosis_matrix_is_pinned_exactly(self):
         # Four mutants survived the previous suite: deleting a claim,
@@ -604,6 +609,10 @@ class TestEnforcementMatrix(unittest.TestCase):
             ("convergence", "verifier_execution"): EnforcementLevel.IGNORED,
             ("policy", "rule_purity"): EnforcementLevel.IGNORED,
             ("policy", "agent_launch_gate"): EnforcementLevel.PROMPT_ONLY,
+            ("credentials", "billing_boundary"): EnforcementLevel.HARD,
+            ("credentials", "no_ambient_fallback"): EnforcementLevel.HARD,
+            ("credentials", "child_honours_the_binding"): EnforcementLevel.PROMPT_ONLY,
+            ("credentials", "declared_kind_is_true"): EnforcementLevel.IGNORED,
         }
         actual = {(c.adapter, c.restriction): c.level
                   for c in GNOSIS_ENFORCEMENT.claims()}

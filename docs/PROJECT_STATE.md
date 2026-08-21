@@ -1,6 +1,6 @@
 # GNOSIS Project State
 
-**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION; THE PROBE HAS A CALLER
+**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION; THE PROBE HAS A CALLER; MULTI-CREDENTIAL ROTATION
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
 **Last update:** 2026-08-20
@@ -103,10 +103,10 @@ governs the order of work here: **prefer wiring over documenting**.
   compete) from decisions (which supersede, with a reason). No
   independent review: both channels are unavailable.
 
-Suite: **711 tests, all passing**; mypy strict clean (47 files); ruff at
+Suite: **740 tests, all passing**; mypy strict clean (47 files); ruff at
 the recorded backlog baseline (19 pre-existing findings in untouched
 files, ratcheted down from 20; `.gnosis/state/lint_baseline.json` fails the run if it rises).
-Captured transcript, not prose: `.gnosis/evidence/20260821T145030Z/`.
+Captured transcript, not prose: `.gnosis/evidence/20260821T154202Z/`.
 
 ## Integration milestone (COMPLETE)
 
@@ -227,6 +227,26 @@ the new caller went into `submit()`, which the pipeline never uses —
 fixing "nothing calls it" with a caller nothing reaches (L-0033). A
 concurrency test also passed with its guard mutated away, because the
 race it was named after never occurred (L-0032).
+
+## Multi-credential rotation (ADR-0024)
+
+The last ADR-0016 residual. The scope was set by one check made BEFORE
+designing anything: `Popen` was called without `env`, so no launch could
+run as a different identity under any design — everything above it would
+have been a decision plane with nothing underneath (L-0034).
+
+A credential set is a **privilege boundary, not a pool**. Rules 25 and 26
+are about crossing one, so the boundary is data the kernel checks:
+rotation stays inside the primary credential's KIND unless another kind
+is explicitly authorised, and an exhausted seat parks rather than
+starting to bill. Secrets never enter the kernel — a credential names the
+variables its value lives in.
+
+**Shipped WITHOUT an independent review** (Codex usage limit) — three
+units of debt now. Self-review found five defects, two critical: the
+launch could not bind a credential at all, and once it could, the child
+still had every OTHER credential's secret in its environment, so an agent
+could spend the key the kernel had refused to select (L-0035).
 
 ## Fixed locations
 

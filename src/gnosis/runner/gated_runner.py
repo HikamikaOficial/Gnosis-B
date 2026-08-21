@@ -22,11 +22,13 @@ thing the whole review apparatus exists to prevent.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+import os
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
 from ..kernel.budget import BudgetLedger
+from ..kernel.credentials import CredentialKind, CredentialPool, Rotation
 from ..kernel.engine import DEFAULT_PERMISSION_MODE, agent_launch_snapshot
 from ..kernel.failures import (
     DEFAULT_CHAIN,
@@ -90,12 +92,13 @@ class HoldGate(Protocol):
     never probes — the same mechanism-nobody-calls it was meant to fix,
     one level up."""
 
-    def admits(self, *, is_resume: bool = ..., probe_run_id: str | None = ...) -> bool: ...
+    def admits(self, *, is_resume: bool = ..., probe_run_id: str | None = ...,
+               credential: str | None = ...) -> bool: ...
 
     def observe(self, classification: FailureClassification | None,
-                probe_run_id: str | None = ...) -> Any: ...
+                probe_run_id: str | None = ..., credential: str | None = ...) -> Any: ...
 
-    def claim_probe(self, run_id: str) -> Any: ...
+    def claim_probe(self, run_id: str, credential: str | None = ...) -> Any: ...
 
 
 class GatedAgentRunner:
@@ -120,6 +123,13 @@ class GatedAgentRunner:
         on_decision: Callable[[str, PolicyDecision], None] | None = None,
         failure_chain: FailureClassifierChain | None = None,
         budget: BudgetLedger | None = None,
+        credentials: CredentialPool | None = None,
+        # Kinds this caller may cross INTO. Empty by default: an exhausted
+        # seat is a reason to wait, not a reason to start billing (rules
+        # 25, 26 and 13). Crossing is a decision, and a decision needs an
+        # authority that said so.
+        authorised_kinds: frozenset[CredentialKind] = frozenset(),
+        base_environment: Mapping[str, str] | None = None,
     ) -> None:
         self.inner = inner
         self.policy = policy
@@ -138,6 +148,16 @@ class GatedAgentRunner:
         # reason: it is the last point at which refusing still costs
         # nothing.
         self.budget = budget
+        self.credentials = credentials
+        self.authorised_kinds = authorised_kinds
+        # Captured once, not read per launch: a credential binding built
+        # from an environment that changed underneath is not reproducible.
+        self._base_environment = dict(
+            base_environment if base_environment is not None else os.environ)
+        # Which credential each launch actually ran as, for provenance.
+        # Ids and variable NAMES only — never a value (rule: no secrets in
+        # logs, records or evidence).
+        self.rotations: list[dict[str, Any]] = []
         self.classification: FailureClassification | None = None
         self.decisions: list[tuple[str, PolicyDecision]] = []
         # Per-launch, so two rounds of the same stage cannot share a probe.
@@ -173,8 +193,37 @@ class GatedAgentRunner:
             # BudgetExhausted, which is nobody's failure.
             self.budget.check()
 
+        rotation: Rotation | None = None
+        credential_id: str | None = None
+        if self.holds is not None and self.credentials is not None:
+            # ROTATION. Ask the pool which identity may run now, and let
+            # the hold plane answer per credential — "the account is held"
+            # and "this key is held" stopped being the same statement.
+            rotation = self.credentials.select(
+                lambda cid: bool(self.holds.admits(credential=cid))
+                if self.holds is not None else False,
+                authorised_kinds=self.authorised_kinds,
+            )
+            if rotation is None:
+                # Every credential is held, or behind a boundary this
+                # caller has no authority to cross. Both are parks.
+                raise CredentialHeld(
+                    f"no credential admits {self.stage} for task {self.task_id}; "
+                    f"tried {list(self.credentials.ids())}"
+                )
+            credential_id = rotation.credential.credential_id
+            # Bound HERE, before the policy verdict and before the budget
+            # is charged: a credential that cannot be bound is a
+            # configuration fault, and paying a launch for it — or
+            # spending a verdict on it — is waste on top of a fault.
+            # It RAISES rather than routing around, because skipping an
+            # unbindable credential hides the misconfiguration behind an
+            # availability behaviour.
+            launch_env = self.credentials.launch_environment(
+                rotation.credential, self._base_environment)
+
         probe_run_id: str | None = None
-        if self.holds is not None and not self.holds.admits():
+        if self.holds is not None and not self.holds.admits(credential=credential_id):
             # Held — but if the hold is the kernel's own GUESS about when
             # the window reopens, one launch should test it rather than
             # every parked round resuming together when the guess elapses.
@@ -187,8 +236,9 @@ class GatedAgentRunner:
             # mechanism has already been repaired for once.
             self._probe_seq += 1
             candidate = f"{self.task_id}:{self.stage}:{self._probe_seq}"
-            if (self.holds.claim_probe(candidate) is not None
-                    and self.holds.admits(probe_run_id=candidate)):
+            if (self.holds.claim_probe(candidate, credential=credential_id) is not None
+                    and self.holds.admits(probe_run_id=candidate,
+                                          credential=credential_id)):
                 probe_run_id = candidate
             else:
                 # Checked BEFORE the policy question: spending a verdict on
@@ -222,11 +272,24 @@ class GatedAgentRunner:
             # consumed the thing being bounded, and counting on the way
             # out would let a crash-looping brief spend forever.
             self.budget.spend_launch()
+        launch_kwargs = dict(kwargs)
+        if rotation is not None:
+            # THE BINDING. Deciding which credential to use and then
+            # launching with the ambient environment is not rotation — the
+            # child authenticates as whatever is configured, the run is
+            # billed to somebody nobody chose, and the audit trail records
+            # the decision rather than what happened.
+            launch_kwargs["env"] = launch_env
+            self.rotations.append({
+                "stage": self.stage, "task_id": self.task_id,
+                "credential": rotation.credential.to_dict(),
+                "skipped": [list(pair) for pair in rotation.skipped],
+            })
         result: ExecutionResult = self.inner.run(
             prompt=prompt, cwd=cwd, stdout_path=stdout_path,
             stderr_path=stderr_path, timeout_s=timeout_s,
             permission_mode=permission_mode, mcp=mcp, model=model,
-            extra_args=extra_args, **kwargs,
+            extra_args=extra_args, **launch_kwargs,
         )
 
         # Classify what came back, and tell the hold plane. Without this a
@@ -247,7 +310,8 @@ class GatedAgentRunner:
             # it the narrowing stands until its own deadline while the
             # window is demonstrably open — every other round still
             # parked on a question that has been answered.
-            self.holds.observe(self.classification, probe_run_id=probe_run_id)
+            self.holds.observe(self.classification, probe_run_id=probe_run_id,
+                               credential=credential_id)
         if self.classification.is_park:
             # Park the round rather than handing the caller a "review"
             # that is really a provider refusal.

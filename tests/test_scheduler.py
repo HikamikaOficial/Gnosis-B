@@ -12,7 +12,13 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
+from gnosis.kernel.credentials import (
+    Credential,
+    CredentialKind,
+    CredentialPool,
+)
 from gnosis.kernel.engine import TaskEngine
 from gnosis.kernel.failures import (
     Disposition,
@@ -53,6 +59,19 @@ class _Runner:
             stderr_path=str(stderr_path), started_at="t0", ended_at="t1",
             parsed_json=self.structured,
         )
+
+
+class _EnvRunner(_Runner):
+    """Records the environment each launch was actually given."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.environments: list = []
+
+    def run(self, prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs):
+        self.environments.append(kwargs.get("env"))
+        return super().run(prompt, cwd, stdout_path, stderr_path, timeout_s,
+                           **{k: v for k, v in kwargs.items() if k != "env"})
 
 
 class _SchedulerTestCase(unittest.TestCase):
@@ -637,6 +656,74 @@ class TestTheProbeHasACaller(_SchedulerTestCase):
                 ProbePolicy(**kwargs)
         with self.assertRaises(TypeError):
             ProbePolicy(ttl_s=True)
+
+
+class TestRotationAtTheEnginesLaunch(_SchedulerTestCase):
+    """The implementation launch does not go through `GatedAgentRunner`;
+    it goes through `submit` -> `execute_task`. Rotating only the gated
+    launches would leave the main one on a single credential while the
+    mechanism claimed otherwise."""
+
+    def _pool(self):
+        return CredentialPool([
+            Credential("seat-a", CredentialKind.SUBSCRIPTION,
+                       env_from={"CLAUDE_TOKEN": "SEAT_A_TOKEN"}),
+            Credential("seat-b", CredentialKind.SUBSCRIPTION,
+                       env_from={"CLAUDE_TOKEN": "SEAT_B_TOKEN"}),
+            Credential("metered", CredentialKind.METERED,
+                       env_from={"ANTHROPIC_API_KEY": "METERED_TOKEN"}),
+        ])
+
+    BASE: ClassVar[dict[str, str]] = {
+        "PATH": "/usr/bin", "SEAT_A_TOKEN": "aaa", "SEAT_B_TOKEN": "bbb",
+        "METERED_TOKEN": "mmm"}
+
+    def _rotating(self, runner, **kwargs):
+        return self._scheduler(runner, credential="seat-a",
+                               credentials=self._pool(),
+                               base_environment=self.BASE, **kwargs)
+
+    def _hold(self, credential):
+        self.holds.place(RateLimitHold(
+            credential=credential, scope=HoldScope.ACCOUNT,
+            reason_code="rate_limited:usage", reset_at=self.now + 900,
+            placed_at=self.now,
+        ))
+
+    def test_the_implementation_launch_is_bound_to_the_selected_credential(self):
+        runner = _EnvRunner()
+        self._submit(self._rotating(runner))
+        self.assertEqual(runner.environments[0]["CLAUDE_TOKEN"], "aaa")
+
+    def test_a_held_seat_moves_the_implementation_to_the_next_seat(self):
+        self._hold("seat-a")
+        runner = _EnvRunner()
+        outcome = self._submit(self._rotating(runner))
+        self.assertTrue(outcome.launched)
+        self.assertEqual(runner.environments[0]["CLAUDE_TOKEN"], "bbb")
+
+    def test_every_seat_held_parks_instead_of_billing(self):
+        self._hold("seat-a")
+        self._hold("seat-b")
+        runner = _EnvRunner()
+        outcome = self._submit(self._rotating(runner))
+        self.assertTrue(outcome.parked)
+        self.assertEqual(outcome.reason_code, PARK_REASON)
+        self.assertEqual(runner.calls, 0, "it billed a metered key to keep moving")
+
+    def test_the_crossing_happens_only_when_authorised(self):
+        self._hold("seat-a")
+        self._hold("seat-b")
+        runner = _EnvRunner()
+        outcome = self._submit(self._rotating(
+            runner, authorised_kinds=frozenset({CredentialKind.METERED})))
+        self.assertTrue(outcome.launched)
+        self.assertEqual(runner.environments[0]["ANTHROPIC_API_KEY"], "mmm")
+
+    def test_without_a_pool_the_launch_inherits_as_it_always_did(self):
+        runner = _EnvRunner()
+        self._submit(self._scheduler(runner))
+        self.assertIsNone(runner.environments[0])
 
 
 if __name__ == "__main__":

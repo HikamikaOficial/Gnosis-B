@@ -11,12 +11,19 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
 from gnosis.contracts.director_brief import BriefSource, DirectorBrief
 from gnosis.contracts.engineer_report import ReportStatus
 from gnosis.director.brief_record import BriefRecordState
 from gnosis.director.pipeline import FIX_STAGE, REVIEW_STAGE, GovernedPipeline
 from gnosis.kernel.convergence import ConvergenceOutcome, ConvergencePolicy
+from gnosis.kernel.credentials import (
+    Credential,
+    CredentialKind,
+    CredentialPool,
+    CredentialUnavailable,
+)
 from gnosis.kernel.engine import AGENT_RUN_INTERVENTION_POINT, TaskEngine
 from gnosis.kernel.failures import HoldScope, RateLimitHold
 from gnosis.kernel.policy import (
@@ -715,6 +722,173 @@ class TestTheProbeReachesThePathThatLaunches(_PipelineTestCase):
         holders = [r["hold"]["probe_holder"] for r in rows if r.get("row") == "narrow"]
         self.assertEqual(len(holders), 2)
         self.assertEqual(len(set(holders)), 2, f"a probe identity was reused: {holders}")
+
+
+class _EnvRecordingAgent(_Agent):
+    """Records the environment each launch was actually given."""
+
+    def __init__(self):
+        super().__init__()
+        self.environments: list = []
+
+    def run(self, prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs):
+        self.environments.append(kwargs.get("env"))
+        return super().run(prompt, cwd, stdout_path, stderr_path, timeout_s,
+                           **{k: v for k, v in kwargs.items() if k != "env"})
+
+
+class _RateLimitedAgent(_EnvRecordingAgent):
+    """A launch that comes back as a provider rate limit."""
+
+    def run(self, prompt, cwd, stdout_path, stderr_path, timeout_s, **kwargs):
+        self.environments.append(kwargs.get("env"))
+        stdout_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"error": {"type": "rate_limit_error"}, "rate_limited": True}
+        stdout_path.write_text(json.dumps(payload), encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return ExecutionResult(
+            command=("claude",), exit_code=1, timed_out=False, cancelled=False,
+            duration_s=0.1, stdout_path=str(stdout_path),
+            stderr_path=str(stderr_path), started_at="t0", ended_at="t1",
+            parsed_json=payload,
+        )
+
+
+class TestRotationReachesTheLaunch(_PipelineTestCase):
+    """Deciding which credential to use and then launching with the ambient
+    environment is not rotation: the child authenticates as whatever is
+    configured and the audit trail records the decision instead of what
+    happened."""
+
+    BASE: ClassVar[dict[str, str]] = {
+        "PATH": "/usr/bin", "SEAT_A_TOKEN": "aaa", "SEAT_B_TOKEN": "bbb",
+        "METERED_TOKEN": "mmm"}
+
+    def _gate(self):
+        engine = TaskEngine(run_store=self.run_store, cli_runner=_Agent(),
+                            retry_policy=_FAST_RETRY)
+        return TaskScheduler(
+            engine=engine, run_store=self.run_store, holds=self.holds,
+            credential="seat-a", clock=lambda: self.now,
+        )
+
+    def _pool(self):
+        return CredentialPool([
+            Credential("seat-a", CredentialKind.SUBSCRIPTION,
+                       env_from={"CLAUDE_TOKEN": "SEAT_A_TOKEN"}),
+            Credential("seat-b", CredentialKind.SUBSCRIPTION,
+                       env_from={"CLAUDE_TOKEN": "SEAT_B_TOKEN"}),
+            Credential("metered", CredentialKind.METERED,
+                       env_from={"ANTHROPIC_API_KEY": "METERED_TOKEN"}),
+        ])
+
+    def _runner(self, gate, agent, **kwargs):
+        return GatedAgentRunner(
+            inner=agent, policy=_permissive(), exec_root=self.repo,
+            stage="review", task_id="TASK-1", policy_actor="agent://worker-a",
+            holds=gate, credentials=self._pool(), base_environment=self.BASE,
+            **kwargs,
+        )
+
+    def _hold(self, credential):
+        self.holds.place(RateLimitHold(
+            credential=credential, scope=HoldScope.ACCOUNT,
+            reason_code="rate_limited:usage", reset_at=self.now + 900,
+            placed_at=self.now,
+        ))
+
+    def _run(self, runner, name="r"):
+        return runner.run(
+            prompt="review it", cwd=self.repo,
+            stdout_path=self.root / f"{name}.out",
+            stderr_path=self.root / f"{name}.err", timeout_s=30,
+        )
+
+    def test_the_child_is_launched_with_the_selected_credential(self):
+        agent = _EnvRecordingAgent()
+        self._run(self._runner(self._gate(), agent))
+        env = agent.environments[0]
+        self.assertIsNotNone(env, "the launch inherited the ambient environment")
+        self.assertEqual(env["CLAUDE_TOKEN"], "aaa")
+        self.assertEqual(env["PATH"], "/usr/bin")
+
+    def test_a_held_seat_rotates_to_the_next_seat_and_binds_it(self):
+        self._hold("seat-a")
+        agent = _EnvRecordingAgent()
+        runner = self._runner(self._gate(), agent)
+        self._run(runner)
+        self.assertEqual(agent.environments[0]["CLAUDE_TOKEN"], "bbb")
+        self.assertEqual(runner.rotations[0]["credential"]["credential_id"], "seat-b")
+
+    def test_every_seat_held_parks_rather_than_reaching_for_the_metered_key(self):
+        # THE test. An exhausted plan is a reason to wait; billing is a
+        # decision, and no decision was made here.
+        self._hold("seat-a")
+        self._hold("seat-b")
+        agent = _EnvRecordingAgent()
+        with self.assertRaises(CredentialHeld):
+            self._run(self._runner(self._gate(), agent))
+        self.assertEqual(agent.environments, [], "it launched anyway")
+
+    def test_crossing_is_possible_when_a_caller_holds_the_authority(self):
+        self._hold("seat-a")
+        self._hold("seat-b")
+        agent = _EnvRecordingAgent()
+        runner = self._runner(
+            self._gate(), agent,
+            authorised_kinds=frozenset({CredentialKind.METERED}),
+        )
+        self._run(runner)
+        self.assertEqual(agent.environments[0]["ANTHROPIC_API_KEY"], "mmm")
+        self.assertNotIn("CLAUDE_TOKEN", agent.environments[0])
+        self.assertEqual(
+            [pair[0] for pair in runner.rotations[0]["skipped"]], ["seat-a", "seat-b"])
+
+    def test_a_rate_limit_holds_only_the_credential_that_hit_it(self):
+        # "The account is held" and "this key is held" stopped being the
+        # same statement, which is the point of the whole unit.
+        limited = _RateLimitedAgent()
+        gate = self._gate()
+        runner = self._runner(gate, limited)
+        with self.assertRaises(CredentialHeld):
+            self._run(runner)                       # the round parks...
+        self.assertFalse(gate.admits(credential="seat-a"))
+        self.assertTrue(gate.admits(credential="seat-b"))
+
+    def test_an_unbindable_credential_refuses_instead_of_running_as_anyone(self):
+        pool = CredentialPool([Credential(
+            "seat-a", CredentialKind.SUBSCRIPTION,
+            env_from={"CLAUDE_TOKEN": "NOT_SET_ANYWHERE"})])
+        agent = _EnvRecordingAgent()
+        runner = GatedAgentRunner(
+            inner=agent, policy=_permissive(), exec_root=self.repo,
+            stage="review", task_id="TASK-1", policy_actor="agent://worker-a",
+            holds=self._gate(), credentials=pool, base_environment=self.BASE,
+        )
+        with self.assertRaises(CredentialUnavailable):
+            self._run(runner)
+        self.assertEqual(agent.environments, [])
+
+    def test_provenance_records_the_identity_and_never_the_secret(self):
+        runner = self._runner(self._gate(), _EnvRecordingAgent())
+        self._run(runner)
+        payload = json.dumps(runner.rotations)
+        self.assertIn("seat-a", payload)
+        self.assertIn("SEAT_A_TOKEN", payload)      # the variable NAME
+        self.assertNotIn("aaa", payload)            # never the value
+
+    def test_without_a_pool_nothing_changes(self):
+        # A runner with no credential configuration behaves exactly as it
+        # did before: ambient environment, single-credential gate.
+        agent = _EnvRecordingAgent()
+        runner = GatedAgentRunner(
+            inner=agent, policy=_permissive(), exec_root=self.repo,
+            stage="review", task_id="TASK-1", policy_actor="agent://worker-a",
+            holds=self._gate(),
+        )
+        self._run(runner)
+        self.assertIsNone(agent.environments[0])
+        self.assertEqual(runner.rotations, [])
 
 
 if __name__ == "__main__":

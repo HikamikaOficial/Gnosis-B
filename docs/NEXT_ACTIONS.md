@@ -1,7 +1,7 @@
 # GNOSIS Next Actions — Nicol workstation
 
 1. ~~codex login~~ DONE; quota confirmed restored 2026-08-20 and the parked policy-gate review was run (FAIL, 7 findings, all adjudicated — transcript in `.gnosis/lab/kernel-reviews/codex-review-2026-08-20-policy-gate.jsonl`). ~~Codex RATE_LIMITED until 2026-09-19~~ **RESOLVED 2026-08-21**: the operator re-ran `codex login` and quota returned. The parked review of the convergence adapters ran immediately (FAIL, 8 findings, all repaired — ADR-0015 addendum 2); the scheduler review ran too (FAIL, 9 findings, all repaired — ADR-0016 addendum). **Both review debts are now paid; no unreviewed unit remains.** Historical note, kept because the failure mode will recur: **Codex reported a month-long reset** (reported reset "Sep 19th, 2026 2:52 AM" — a month, not a day; it ran out mid-review of the replay wiring, transcript `.gnosis/lab/kernel-reviews/codex-review-2026-08-20-replay-runner.jsonl`). Per rule 6 this is a park, not a failure: and the internal reviewer subagents separately died with "out of usage credits", so for a stretch there was no independent review channel at all and two units (ADR-0015, ADR-0016) shipped self-reviewed. L-0016 measures what that cost: the self-review of ADR-0015 found 3 real defects and missed 8, including a rule-9 bypass reachable with an accent in a filename. When a channel is down, units still ship — but the ADR says so, and the debt goes here. Still parked for Codex: the replay-wiring review it could not finish, and the earlier kernel-hardening commits (843a72e, 1e176a9).
-2. **Adapter milestone COMPLETE** (ADR-0013..0016; 552 tests). All four mechanisms Directive 9 found unwired now have production callers: the policy gate (reachable from `DirectorOrchestrator`), record/replay (`recording_orchestrator()`), convergence (`CliReviewer`/`CliFixer`), and the hold/park plane (`TaskScheduler`). ~~Next: integration~~ **DONE** (ADR-0017): `GovernedPipeline` runs a brief through schedule → implement → converge → report, with every agent launch gated. ~~Next: integration of results~~ **DONE** (ADR-0018): `WorkIntegrator` lands converged work by fast-forward to an already-verified merge on a named branch. ~~Next: multi-worker plane~~ **PART 1 DONE** (ADR-0019): durable queue with fenced claims, crash recovery, and a durable per-brief budget. ~~Next: cross-task ordering~~ **DONE** (ADR-0020). ~~Next: worker supervision and backoff~~ **DONE** (ADR-0022, self-reviewed only). ~~Next: `probe()` having an automatic caller~~ **DONE** (ADR-0023, self-reviewed only). **Next, by decision: multi-credential rotation** — the whole hold plane is keyed on ONE `credential` string fixed at scheduler construction, so "the account is held" and "this key is held" are the same statement and there is nothing to rotate to. This is the last ADR-0016 residual. Second priority: pay down the two independent-review debts (ADR-0015 and ADR-0016 shipped self-reviewed) as soon as a review channel reopens. Directive 9's rule governs: a mechanism nothing calls is a parallel fiction, so prefer wiring over documenting — and per L-0006, wiring it to the kernel primitive is not enough, it must be exercised from the outermost production entry point. Also deferred by decision: per-epoch worktrees (rejected for V1); RunStore-internal token verification (multi-process worker milestone); the M4 memory-provider benchmark (ADR-0003 criteria).
+2. **Adapter milestone COMPLETE** (ADR-0013..0016; 552 tests). All four mechanisms Directive 9 found unwired now have production callers: the policy gate (reachable from `DirectorOrchestrator`), record/replay (`recording_orchestrator()`), convergence (`CliReviewer`/`CliFixer`), and the hold/park plane (`TaskScheduler`). ~~Next: integration~~ **DONE** (ADR-0017): `GovernedPipeline` runs a brief through schedule → implement → converge → report, with every agent launch gated. ~~Next: integration of results~~ **DONE** (ADR-0018): `WorkIntegrator` lands converged work by fast-forward to an already-verified merge on a named branch. ~~Next: multi-worker plane~~ **PART 1 DONE** (ADR-0019): durable queue with fenced claims, crash recovery, and a durable per-brief budget. ~~Next: cross-task ordering~~ **DONE** (ADR-0020). ~~Next: worker supervision and backoff~~ **DONE** (ADR-0022, self-reviewed only). ~~Next: `probe()` having an automatic caller~~ **DONE** (ADR-0023). ~~Next: multi-credential rotation~~ **DONE** (ADR-0024) — with it the ADR-0016 residuals are closed. **Next, by decision: pay down the review debt.** Three consecutive units (ADR-0022, 0023, 0024) shipped self-reviewed because Codex refuses on a usage limit, and two older ones (ADR-0015, ADR-0016) were never reviewed either. That is five, and the newest three touch ownership, spending and credentials. Second priority: pay down the two independent-review debts (ADR-0015 and ADR-0016 shipped self-reviewed) as soon as a review channel reopens. Directive 9's rule governs: a mechanism nothing calls is a parallel fiction, so prefer wiring over documenting — and per L-0006, wiring it to the kernel primitive is not enough, it must be exercised from the outermost production entry point. Also deferred by decision: per-epoch worktrees (rejected for V1); RunStore-internal token verification (multi-process worker milestone); the M4 memory-provider benchmark (ADR-0003 criteria).
 3. Optional lint polish: 20 pre-existing ruff residuals repo-wide (BLE001/PLW1510/TRY004/UP046-47), none in files touched by ADR-0011..0013 — whitelist with per-line noqa+reason or fix, when touching those files anyway. mypy strict is at zero for src/gnosis.
 4. M4 memory-provider selection criteria written (ADR-0003); execute the M4 benchmark itself when memory adapters become the active milestone.
 5. Restart Claude Code once so the `.mcp.json` memory servers (zerker-memory, m3-memory) attach; smoke one MCP tool call each.
@@ -18,18 +18,25 @@ cd "C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi"
 uv run --no-project --with pytest --with mypy --with ruff python scripts/capture_evidence.py
 ```
 
-Green baseline first (711 passed, mypy clean, ruff at baseline), then
-**multi-credential rotation**. `TaskScheduler` takes one `credential`
-string and every hold, probe and admission decision is keyed on it, so
-the kernel cannot express "this key is exhausted, use the other one" —
-which is also what makes ADR-0023's probe narrower than its name
-suggests. Read ADR-0023's Known limitations first, and note that rotation
-interacts with rule 25 (no subscription credentials as an improvised API)
-and rule 13: a credential set is a privilege boundary, not a pool.
+Green baseline first (740 passed, mypy clean, ruff at baseline), then
+**pay down the review debt** rather than adding a sixth unreviewed unit.
+Options, in order of preference: (a) re-run `codex exec --sandbox
+read-only --json` if quota has returned — check with a one-line probe
+first, it is cheap; (b) if it has not, park new kernel milestones and do
+the reviews with a different independent channel when one exists. Rule 10
+says INDEPENDENT BEFORE INTERACTION for critical decisions, and
+ownership, spending and credentials are exactly that.
 
-**REVIEW DEBT — two units owed.** ADR-0022 (worker supervision) and
-ADR-0023 (the probe caller) both shipped self-reviewed because Codex
-refuses on a usage limit (reset reported 2026-09-20, re-checked
-2026-08-21). Re-run both when quota returns; each ADR's self-review
-section names the categories to attack. Until then, treat the claims in
-those two ADRs as weaker than the ten units that preceded them.
+**REVIEW DEBT — five units owed.**
+- ADR-0015, ADR-0016: shipped self-reviewed (older debt).
+- ADR-0022 (worker supervision): claims to attack are "backoff is
+  durable", "every exit names its reason", and the line the supervisor
+  says it does not cross.
+- ADR-0023 (the probe caller): the lead-window mitigation, the abandoned
+  probe holding its lease, and whether any path still stampedes.
+- ADR-0024 (credential rotation): whether the boundary can be crossed
+  without authorisation by ANY path, whether a secret can reach a
+  record, a cassette or a log, and whether the child can still see a
+  credential it was not given.
+Codex reset reported 2026-09-20, re-checked 2026-08-21. Until these are
+reviewed, treat their claims as weaker than the ten units before them.

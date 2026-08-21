@@ -28,13 +28,14 @@ from __future__ import annotations
 import json
 import os
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from ..runner.liveness import ProcessFingerprint, is_alive
+from .credentials import CredentialKind, CredentialPool, Rotation
 from .engine import TaskEngine, TaskExecutionOutcome
 from .failures import (
     UNKNOWN_WINDOW_FALLBACK_S,
@@ -317,6 +318,12 @@ class TaskScheduler:
         clock: Callable[[], float] = time.time,
         stale_after_s: float = 120.0,
         probe_policy: ProbePolicy | None = None,
+        # When present, `submit` chooses among these instead of using the
+        # single `credential`. Rotation stays inside the primary's KIND
+        # unless a kind is explicitly authorised (rules 25, 26, 13).
+        credentials: CredentialPool | None = None,
+        authorised_kinds: frozenset[CredentialKind] = frozenset(),
+        base_environment: Mapping[str, str] | None = None,
         # Default ON. It is strictly LESS permissive than the behaviour it
         # replaces — today an estimated window elapsing admits everyone —
         # so deny-by-default argues for it, not against it.
@@ -330,6 +337,12 @@ class TaskScheduler:
         self.clock = clock
         self.stale_after_s = stale_after_s
         self.probe_policy = probe_policy or ProbePolicy()
+        self.credentials = credentials
+        self.authorised_kinds = authorised_kinds
+        # Captured once: a binding built from an environment that changed
+        # underneath is not reproducible.
+        self._base_environment = dict(
+            base_environment if base_environment is not None else os.environ)
         self.probe_when_due = probe_when_due
         self.registry = HoldRegistry()
 
@@ -339,7 +352,8 @@ class TaskScheduler:
         """Rebuild from durable rows. Idempotent by construction."""
         return self.registry.reconcile(self.holds.read().holds, self.clock())
 
-    def admits(self, *, is_resume: bool = False, probe_run_id: str | None = None) -> bool:
+    def admits(self, *, is_resume: bool = False, probe_run_id: str | None = None,
+               credential: str | None = None) -> bool:
         """May work start on this credential right now?
 
         `probe_run_id` names the RUN being admitted, not the process
@@ -355,7 +369,7 @@ class TaskScheduler:
             return False
         self.registry.reconcile(snapshot.holds, self.clock())
         return self.registry.admits(
-            self.credential, self.clock(), is_resume=is_resume,
+            credential or self.credential, self.clock(), is_resume=is_resume,
             runner_id=probe_run_id,
         )
 
@@ -368,7 +382,26 @@ class TaskScheduler:
         somebody else's traffic closed.
         """
         task_id = str(task_kwargs.get("task_id", "<unknown>"))
-        if not self.admits(is_resume=is_resume, probe_run_id=probe_run_id):
+        rotation: Rotation | None = None
+        credential_id: str | None = None
+        if self.credentials is not None:
+            rotation = self.credentials.select(
+                lambda cid: self.admits(is_resume=is_resume,
+                                        probe_run_id=probe_run_id, credential=cid),
+                authorised_kinds=self.authorised_kinds,
+            )
+            if rotation is not None:
+                credential_id = rotation.credential.credential_id
+            else:
+                # Every credential held, or behind a boundary nobody
+                # authorised. Both are parks, and the second one is a
+                # refusal to spend rather than an absence of capacity.
+                return ScheduleOutcome(
+                    task_id=task_id, launched=False, reason_code=PARK_REASON,
+                    hold=self.registry.hold_for(self.credentials.primary.credential_id),
+                )
+        if not self.admits(is_resume=is_resume, probe_run_id=probe_run_id,
+                           credential=credential_id):
             # THE AUTOMATIC CALLER. `probe()` existed and nothing invoked
             # it, so the kernel's own guessed windows still ended in a
             # stampede — a mechanism nothing calls is a parallel fiction.
@@ -381,11 +414,12 @@ class TaskScheduler:
             # a shared identity was the original defect, and this one is
             # unique to the unit of work asking.
             if self.probe_when_due and probe_run_id is None:
-                claimed = self.claim_probe(task_id)
+                claimed = self.claim_probe(task_id, credential=credential_id)
                 if claimed is not None:
                     probe_run_id = task_id
-            if not self.admits(is_resume=is_resume, probe_run_id=probe_run_id):
-                held = self.registry.hold_for(self.credential)
+            if not self.admits(is_resume=is_resume, probe_run_id=probe_run_id,
+                               credential=credential_id):
+                held = self.registry.hold_for(credential_id or self.credential)
                 return ScheduleOutcome(
                     task_id=task_id, launched=False, reason_code=PARK_REASON,
                     hold=held,
@@ -397,14 +431,23 @@ class TaskScheduler:
         # same pattern the engine's ownership guard uses. It does NOT close
         # the window: a check-then-act without a reservation cannot, and
         # the ADR says so rather than implying otherwise.
-        if not self.admits(is_resume=is_resume, probe_run_id=probe_run_id):
+        if not self.admits(is_resume=is_resume, probe_run_id=probe_run_id,
+                           credential=credential_id):
             return ScheduleOutcome(
                 task_id=task_id, launched=False, reason_code=PARK_REASON,
-                hold=self.registry.hold_for(self.credential),
+                hold=self.registry.hold_for(credential_id or self.credential),
             )
 
+        if rotation is not None and self.credentials is not None:
+            # THE BINDING, at the engine's launch too. Choosing a
+            # credential and then running with the ambient environment
+            # would rotate the DECISION and not the launch — the audit
+            # trail would record an identity the child never used.
+            task_kwargs["launch_env"] = self.credentials.launch_environment(
+                rotation.credential, self._base_environment)
         outcome = self.engine.execute_task(**task_kwargs)
-        hold = self.observe(outcome.classification, probe_run_id=probe_run_id)
+        hold = self.observe(outcome.classification, probe_run_id=probe_run_id,
+                            credential=credential_id)
         return ScheduleOutcome(
             task_id=task_id, launched=True,
             reason_code=(outcome.classification.reason_code
@@ -413,7 +456,8 @@ class TaskScheduler:
         )
 
     def observe(self, classification: FailureClassification | None,
-                probe_run_id: str | None = None) -> RateLimitHold | None:
+                probe_run_id: str | None = None,
+                credential: str | None = None) -> RateLimitHold | None:
         """Record what one launch's classification implies for the window.
 
         Public because the implementation is not the only thing that
@@ -433,31 +477,35 @@ class TaskScheduler:
             # narrowing stood until its own deadline while the window was
             # demonstrably open, so a successful probe kept every other
             # run parked. Reopening is a recorded decision, not a silence.
-            self._resolve_probe(probe_run_id)
+            self._resolve_probe(probe_run_id, credential)
             return None
         hold = hold_from_classification(
-            classification, self.credential, self.clock(), scope=HoldScope.ACCOUNT,
+            classification, credential or self.credential, self.clock(),
+            scope=HoldScope.ACCOUNT,
         )
         if hold is None:
             return None
         return self.holds.place(hold)
 
-    def _resolve_probe(self, probe_run_id: str | None) -> None:
+    def _resolve_probe(self, probe_run_id: str | None,
+                       credential: str | None = None) -> None:
         """A probe that came back clean reopens the credential."""
         if probe_run_id is None:
             return
+        target = credential or self.credential
         self.live_holds()
-        hold = self.registry.hold_for(self.credential)
+        hold = self.registry.hold_for(target)
         if (hold is None or hold.scope is not HoldScope.PROBE
                 or hold.probe_holder != probe_run_id):
             # Not this run's probe to end — including the case where a
             # later hold already superseded it.
             return
-        self.holds.supersede(self.credential, self.clock(),
+        self.holds.supersede(target, self.clock(),
                              reason=f"probe_succeeded:{probe_run_id}")
         self.live_holds()
 
-    def probe(self, run_id: str, ttl_s: float | None = None) -> RateLimitHold:
+    def probe(self, run_id: str, ttl_s: float | None = None,
+              credential: str | None = None) -> RateLimitHold:
         """Narrow an ACCOUNT hold to a single probing run.
 
         The named run is the ONLY one admitted while this stands. An
@@ -472,8 +520,9 @@ class TaskScheduler:
         credential to a run that may already be dead. A probe is a lease
         on the credential, and a lease that cannot expire is not one.
         """
+        target = credential or self.credential
         self.live_holds()
-        current = self.registry.hold_for(self.credential)
+        current = self.registry.hold_for(target)
         reason = current.reason_code if current else "rate_limited:probe"
         reset_at = self.clock() + (
             ttl_s if ttl_s is not None else self.probe_policy.ttl_s)
@@ -482,9 +531,9 @@ class TaskScheduler:
         # the probe never takes effect. Both rows go down in ONE append, so
         # a crash between them cannot leave the credential wide open.
         return self.holds.narrow(
-            self.credential, self.clock(), reason=f"probe:{run_id}",
+            target, self.clock(), reason=f"probe:{run_id}",
             replacement=RateLimitHold(
-                credential=self.credential, scope=HoldScope.PROBE,
+                credential=target, scope=HoldScope.PROBE,
                 reason_code=reason, reset_at=reset_at, placed_at=self.clock(),
                 probe_holder=run_id,
                 # Estimated by construction: this deadline is the kernel's
@@ -493,7 +542,7 @@ class TaskScheduler:
             ),
         )
 
-    def probe_is_due(self) -> RateLimitHold | None:
+    def probe_is_due(self, credential: str | None = None) -> RateLimitHold | None:
         """The hold one run should now be let through to test, if any.
 
         Due when the kernel is about to act on its OWN guess: an estimated
@@ -504,7 +553,7 @@ class TaskScheduler:
         somebody is already answering the question.
         """
         self.live_holds()
-        hold = self.registry.hold_for(self.credential)
+        hold = self.registry.hold_for(credential or self.credential)
         if hold is None or hold.scope is not HoldScope.ACCOUNT:
             return None
         if not hold.window_estimated and hold.reset_at is not None:
@@ -517,7 +566,8 @@ class TaskScheduler:
             due_at = hold.reset_at - self.probe_policy.lead_s
         return hold if now >= due_at else None
 
-    def claim_probe(self, run_id: str) -> RateLimitHold | None:
+    def claim_probe(self, run_id: str,
+                    credential: str | None = None) -> RateLimitHold | None:
         """Take the probe for `run_id`, or None if it is not ours to take.
 
         Exactly one winner, because the read and the append happen under
@@ -527,14 +577,15 @@ class TaskScheduler:
         own admission check and launched — two runs testing a window that
         may still be shut.
         """
-        current = self.probe_is_due()
+        target = credential or self.credential
+        current = self.probe_is_due(target)
         if current is None:
             return None
         now = self.clock()
         return self.holds.narrow_if_unclaimed(
-            self.credential, now, reason=f"probe:{run_id}",
+            target, now, reason=f"probe:{run_id}",
             replacement=RateLimitHold(
-                credential=self.credential, scope=HoldScope.PROBE,
+                credential=target, scope=HoldScope.PROBE,
                 reason_code=current.reason_code, placed_at=now,
                 reset_at=now + self.probe_policy.ttl_s, probe_holder=run_id,
                 window_estimated=True,

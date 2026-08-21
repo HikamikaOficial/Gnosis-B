@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -189,6 +189,12 @@ class ReplayingCLIRunner:
         extra_args: Sequence[str] | None = None,
         cancellation_token: CancellationToken | None = None,
         heartbeat_fn: Callable[[int], None] | None = None,
+        # Accepted and DELIBERATELY ignored. A replayed launch spends no
+        # credential — the cassette is the answer — and the environment
+        # must never reach the fingerprint below: a cassette is a file
+        # that gets committed, and a key built from the child's
+        # environment would write a secret into it.
+        env: Mapping[str, str] | None = None,
     ) -> ExecutionResult:
         spec = CallSpec(
             tool=CLI_TOOL,

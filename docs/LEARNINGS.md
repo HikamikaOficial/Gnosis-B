@@ -275,3 +275,19 @@ Format:
 - Lesson: before adding a caller, find out who consumes the thing TODAY — grep the interface, not the implementation. A gate has as many entry points as there are callers of its protocol, and adding capability to one of them fixes exactly that one. The test that closes it must live where the real path is, not where the mechanism is.
 - Operational consequence: `claim_probe` is on the `HoldGate` protocol; the gated runner claims a probe per LAUNCH, not per task or stage.
 - Revalidation condition: standing rule; no expiry.
+
+## L-0034 — Ask whether the mechanism CAN exist before designing how it should behave
+- Status: VERIFIED
+- Evidence: ADR-0024. Before designing rotation I checked the launch path and found `subprocess.Popen(argv, cwd=..., stdout=..., stderr=...)` — no `env`. The child inherited the parent environment, so no launch could run as a different identity under any design. Everything above it — pool, ordering, holds per credential, provenance — would have been a decision plane with nothing underneath.
+- Scope: any feature whose value depends on an effect at a boundary the code does not yet cross (a subprocess, a network call, a filesystem the tool owns).
+- Lesson: the first question is not "how should this behave" but "can the effect happen at all, and how would I know". Design started at the top would have produced a complete, tested, reviewable mechanism whose every assertion passed and whose child process authenticated as somebody else. The check costs one grep of the launch site.
+- Operational consequence: `env` threaded through `CLIRunner`, `ClaudeCLIRunner`, `TaskEngine.execute_task` and `_execute_guarded`; `Credential.environment` raises rather than returning the ambient set.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0035 — Enforcing a boundary against the kernel is not enforcing it against the agent
+- Status: VERIFIED
+- Evidence: ADR-0024 self-review finding 2. Rotation bound the selected credential into the child's environment and left every OTHER credential's source variable in place. `CredentialPool.select` refused to cross into a metered key — while the child launched on a subscription seat could read `METERED_TOKEN` out of its own environment and spend it directly. Every test of the boundary passed.
+- Scope: any policy whose subject is an agent or a child process rather than the code that decides.
+- Lesson: ask who the rule is ABOUT. A rule about spending is about the party that can spend, and a gate the kernel obeys while the agent retains the capability is a gate against the wrong party — an agent does not have to defeat the check, only to ignore it. Least privilege (rule 13) is what closes it: the child receives the identity it was given and nothing else, so the boundary holds even against a child that never consults it.
+- Operational consequence: `CredentialPool.launch_environment` strips every pool source variable before binding the chosen credential.
+- Revalidation condition: standing rule; no expiry.

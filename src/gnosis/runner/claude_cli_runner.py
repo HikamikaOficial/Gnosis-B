@@ -12,7 +12,7 @@ import json
 import subprocess
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -80,6 +80,7 @@ class CLIRunner:
         cancellation_token: CancellationToken | None = None,
         heartbeat_fn: Callable[[int], None] | None = None,
         heartbeat_interval_s: float = 5.0,
+        env: Mapping[str, str] | None = None,
     ) -> ExecutionResult:
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
         stderr_path.parent.mkdir(parents=True, exist_ok=True)
@@ -87,7 +88,16 @@ class CLIRunner:
         start_monotonic = time.monotonic()
 
         with stdout_path.open("wb") as out_fh, stderr_path.open("wb") as err_fh:
-            proc = subprocess.Popen(list(argv), cwd=str(cwd), stdout=out_fh, stderr=err_fh)
+            # `env=None` inherits, which is the right default and the
+            # wrong one to reach by accident: a caller that MEANT to bind
+            # a credential and passed nothing would launch as whatever
+            # identity the ambient environment carries and report success.
+            # That is why the binding is built by `Credential.environment`,
+            # which raises rather than returning the ambient set.
+            proc = subprocess.Popen(
+                list(argv), cwd=str(cwd), stdout=out_fh, stderr=err_fh,
+                env=dict(env) if env is not None else None,
+            )
 
             timed_out = False
             cancelled = False
@@ -176,6 +186,7 @@ class ClaudeCodeCLIRunner:
         extra_args: Sequence[str] | None = None,
         cancellation_token: CancellationToken | None = None,
         heartbeat_fn: Callable[[int], None] | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> ExecutionResult:
         argv = self.build_argv(
             prompt, session_id=session_id, permission_mode=permission_mode,
@@ -183,7 +194,8 @@ class ClaudeCodeCLIRunner:
         )
         result = self._cli_runner.run(
             argv, cwd=cwd, stdout_path=stdout_path, stderr_path=stderr_path,
-            timeout_s=timeout_s, cancellation_token=cancellation_token, heartbeat_fn=heartbeat_fn,
+            timeout_s=timeout_s, cancellation_token=cancellation_token,
+            heartbeat_fn=heartbeat_fn, env=env,
         )
         # Parse on FAILURE too. A structured error payload (rate-limit
         # fields, error_type) only exists on the failing path, so gating

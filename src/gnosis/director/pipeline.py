@@ -54,6 +54,7 @@ from ..kernel.convergence import (
     EvidenceFailure,
     git_fingerprint,
 )
+from ..kernel.credentials import CredentialKind, CredentialPool
 from ..kernel.engine import TaskExecutionOutcome
 from ..kernel.ids import new_task_id
 from ..kernel.integration import (
@@ -132,6 +133,14 @@ class GovernedPipeline:
         approvals: ApprovalStore | None = None,
         policy_actor: str = "agent://unattributed",
         worktrees: WorktreeManager | None = None,
+        # Rotation for the GATED launches (review, fix, re-review). The
+        # implementation launch rotates through the scheduler's own pool,
+        # which is configured where the scheduler is built — two places
+        # because they are two different launch paths, and wiring only one
+        # of them would leave the other running on a single credential
+        # while the mechanism claimed otherwise.
+        credentials: CredentialPool | None = None,
+        authorised_kinds: frozenset[CredentialKind] = frozenset(),
         prompt_builder: Callable[[DirectorBrief], str] | None = None,
         reviewer_id: str = "claude-cli",
         focus: Sequence[str] | None = None,
@@ -142,6 +151,8 @@ class GovernedPipeline:
         self.inbox = DirectorInbox(director_root)
         self.records = BriefRecordStore(director_root / "state" / "briefs")
         self.scheduler = scheduler
+        self.credentials = credentials
+        self.authorised_kinds = authorised_kinds
         self.repo_path = repo_path
         # A verifier is REQUIRED, not optional. Convergence is defined as
         # "deterministic verification passed AND an independent review
@@ -481,7 +492,8 @@ class GovernedPipeline:
                 inner=self.review_runner, policy=self.policy, exec_root=exec_root,
                 stage=stage, task_id=task_id, approvals=self.approvals,
                 policy_actor=self.policy_actor, holds=self.scheduler,
-                budget=ledger,
+                budget=ledger, credentials=self.credentials,
+                authorised_kinds=self.authorised_kinds,
                 worktree_branch=(
                     self.worktrees.planned_branch(task_id) if self.worktrees else None
                 ),
@@ -572,6 +584,8 @@ class GovernedPipeline:
                 inner=self.review_runner, policy=self.policy, exec_root=tree,
                 stage=REREVIEW_STAGE, task_id=task_id, approvals=self.approvals,
                 policy_actor=self.policy_actor, holds=self.scheduler,
+                credentials=self.credentials,
+                authorised_kinds=self.authorised_kinds,
                 # A re-review is an agent launch like any other: gated,
                 # held AND budgeted. The first version passed no ledger, so
                 # a brief with an exhausted budget could still spend one
