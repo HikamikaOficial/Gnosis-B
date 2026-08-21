@@ -210,7 +210,7 @@ class WorkerSupervisor:
         claim younger than its grace window.
         """
         self.queue.authority.sweep()
-        self.queue.recover()
+        self.queue.recover(pace=self.backoff.delay_for)
         started = self.clock()
         completed: list[str] = []
         parked: list[str] = []

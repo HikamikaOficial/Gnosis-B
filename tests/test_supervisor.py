@@ -282,8 +282,18 @@ class TestWhatASupervisorMayNotDecide(_SupervisorTestCase):
         self.authority.release(work.grant)          # crash after the release
         self.assertEqual(self.queue.running_ids(), ["BRIEF-1"])
 
-        report = self._supervisor().run("worker-b", lambda w: Disposition.COMPLETED)
-        self.assertEqual(report.completed, ("BRIEF-1",))
+        # It comes back PACED. A park's `not_before` survives on the
+        # record; a worker that simply died left none, so a crash loop
+        # re-launched at full speed with only `max_attempts` between it
+        # and forever (independent review).
+        supervisor = self._supervisor(BackoffPolicy(base_s=60.0))
+        first = supervisor.run("worker-b", lambda w: Disposition.COMPLETED)
+        self.assertEqual(first.stopped_because, StopReason.ALL_WAITING)
+        self.assertEqual([b for b, _ in first.waiting], ["BRIEF-1"])
+
+        self.now[0] += 61
+        second = supervisor.run("worker-b", lambda w: Disposition.COMPLETED)
+        self.assertEqual(second.completed, ("BRIEF-1",))
 
 
 if __name__ == "__main__":

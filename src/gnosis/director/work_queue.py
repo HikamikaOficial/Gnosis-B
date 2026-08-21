@@ -48,6 +48,7 @@ from ..kernel.claims import (
     WorkAuthority,
     WorkGrant,
 )
+from ..kernel.file_lock import FileLock, lock_path_for
 
 PENDING = "pending"
 RUNNING = "running"
@@ -87,6 +88,16 @@ class WorkQueue:
         # process, possibly after a restart. A monotonic reading means
         # nothing to either.
         self.clock = clock
+        # Recovery and claiming both move records between directories, and
+        # `replace` alone cannot separate them: it proves the origin was
+        # still there, not that it was still the SAME record. A recovery
+        # that listed `running/` before a claim landed would happily move
+        # the file a live owner had just re-created, leaving an ACTIVE
+        # grant over a record sitting in `pending/` for anyone to take
+        # (found by the concurrent test written for the previous fix).
+        # One lock, taken in one order — queue before claims plane — so
+        # the two operations cannot interleave.
+        self._lock_path = lock_path_for(self.root / "queue")
         # Rule 8: no loop is unlimited. `release` returns a brief to
         # `pending` and `drain` re-offers it immediately, so a caller that
         # parks every time would spin forever — and the per-brief budget
@@ -172,10 +183,13 @@ class WorkQueue:
                 # Not an error and not a skip worth recording on every
                 # scan — the wait IS the mechanism.
                 continue
+            lock = FileLock(self._lock_path, timeout_s=30.0)
+            lock.acquire()
             try:
                 grant = self.authority.acquire(
                     brief_id, worker_id, ttl_s=self.lease_ttl_s)
             except ClaimConflictError:
+                lock.release()
                 continue
             except Exception as exc:  # noqa: BLE001 - see below
                 # Claim taken but the lease is still held by a previous
@@ -187,6 +201,7 @@ class WorkQueue:
                 # project keeps finding, and `skipped` is readable by
                 # whoever asks the queue what it did.
                 self.skipped.append((brief_id, f"{type(exc).__name__}: {exc}"))
+                lock.release()
                 continue
 
             moved = self.root / RUNNING / path.name
@@ -198,10 +213,14 @@ class WorkQueue:
                 # a record we no longer hold would be acting on a guess,
                 # so hand the grant back and move on.
                 self.authority.release(grant)
+                lock.release()
                 continue
 
             record["attempts"] = int(record.get("attempts", 0)) + 1
             _atomic_write(moved, json.dumps(record, indent=2, sort_keys=True))
+            # The record is in `running/` with a live grant: recovery can
+            # no longer mistake it for a stranded one.
+            lock.release()
 
             try:
                 # The grant was taken before the file moved, and a stalled
@@ -224,7 +243,7 @@ class WorkQueue:
             )
         return None
 
-    def recover(self) -> list[str]:
+    def recover(self, pace: Callable[[int], float] | None = None) -> list[str]:
         """Return briefs whose owner is gone to `pending`.
 
         The claims plane reclaims a dead worker's CLAIM through the lease
@@ -237,8 +256,19 @@ class WorkQueue:
 
         Liveness is still not this module's notion. It asks the claims
         plane whether the claim is ACTIVE and moves the ones that are not;
-        the sweep that decides that lives in `WorkAuthority`.
+        the sweep that decides that lives in `WorkAuthority` — and until
+        ADR-0022's addendum nothing in production called it, so this
+        method skipped every crashed brief on every boot.
+
+        `pace` maps a brief's attempt count to a delay, so work that comes
+        back from a crash is paced like work that came back from a park.
         """
+        returned: list[str] = []
+        with FileLock(self._lock_path, timeout_s=30.0):
+            returned = self._recover_locked(pace)
+        return returned
+
+    def _recover_locked(self, pace: Callable[[int], float] | None) -> list[str]:
         returned: list[str] = []
         for path in sorted((self.root / RUNNING).glob("*.json")):
             record = _read(path)
@@ -269,12 +299,41 @@ class WorkQueue:
                 target = str(intent)
             else:
                 target = DONE if resolved else PENDING
-            record["recovered_from"] = RUNNING
-            record["recovered_because"] = (
+            # THE MOVE IS THE CLAIM, exactly as in `claim()`. Writing the
+            # target and then unlinking the origin let two supervisors
+            # both act on one stale read: the first moved the record to
+            # `pending` and re-claimed it, and the second — still holding
+            # its earlier read — wrote `pending` again and deleted the
+            # `running` record the first now owned, leaving one brief in
+            # both directories and, once the claim resolved, running it a
+            # second time (independent review). `replace` has exactly one
+            # winner; the loser's origin is simply gone.
+            destination = self.root / target / path.name
+            try:
+                path.replace(destination)
+            except OSError:
+                self.skipped.append((brief_id, "recovered by another worker"))
+                continue
+
+            # Annotate AFTER winning. The record is ours now, so this
+            # cannot land on somebody else's file.
+            moved = _read(destination) or record
+            moved.pop("pending_transition", None)
+            moved["recovered_from"] = RUNNING
+            moved["recovered_because"] = (
                 claim.status.value if claim is not None else "no_claim")
-            _atomic_write(self.root / target / path.name,
-                          json.dumps(record, indent=2, sort_keys=True))
-            path.unlink(missing_ok=True)
+            if target == PENDING and pace is not None:
+                # A crash that was NOT a park came back unpaced: a park's
+                # `not_before` survives on the record, but a worker that
+                # simply died left none, so a crash loop re-launched
+                # agents at full speed — bounded only by `max_attempts`,
+                # which is not pacing (independent review). What is being
+                # paced is the same thing in both cases: another launch.
+                delay = pace(int(moved.get("attempts", 0)))
+                if delay > 0:
+                    moved["not_before"] = self.clock() + delay
+                    moved["paced_because"] = "recovered"
+            _atomic_write(destination, json.dumps(moved, indent=2, sort_keys=True))
             returned.append(brief_id)
         return returned
 

@@ -16,6 +16,7 @@ from gnosis.contracts.director_brief import BriefSource, DirectorBrief
 from gnosis.director.work_queue import WorkQueue, drain
 from gnosis.kernel.budget import Budget, BudgetExhausted, BudgetLedger
 from gnosis.kernel.claims import ClaimStatus, ClaimStore, WorkAuthority
+from gnosis.kernel.file_lock import FileLock
 from gnosis.kernel.lease import LeaseStore
 
 
@@ -454,6 +455,152 @@ class TestACrashBetweenThePlaneAndTheFile(unittest.TestCase):
         self.queue.recover()
         self.assertEqual(self.queue.pending_ids(), ["BRIEF-1"])
         self.assertEqual(self.queue.blocked_ids(), [])
+
+
+class TestConcurrentRecovery(unittest.TestCase):
+    """Two supervisors start together and both call `recover()` — the
+    designed deployment, since concurrency comes from running several."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.now = [1_000_000.0]
+        self.authority = WorkAuthority(
+            ClaimStore(self.root / "c.json"), LeaseStore(self.root / "l.json"),
+            default_ttl_s=300)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _queue(self):
+        return WorkQueue(self.root / "q", self.authority, clock=lambda: self.now[0])
+
+    def _stranded(self, brief_id):
+        queue = self._queue()
+        queue.enqueue(_brief(brief_id))
+        work = queue.claim("worker-that-dies")
+        self.authority.release(work.grant)      # the claim is gone, the record is not
+
+    def test_a_brief_never_ends_up_in_two_directories_at_once(self):
+        # Write-then-unlink let the loser act on a stale read: it wrote
+        # `pending` again and deleted the `running` record the winner had
+        # just re-claimed, so one brief sat in both — and once the claim
+        # resolved, a third worker ran it a second time.
+        for i in range(8):
+            self._stranded(f"BRIEF-{i}")
+
+        barrier = threading.Barrier(4)
+        errors: list = []
+
+        def recover_and_claim(worker_id):
+            # A DISTINCT worker id per thread. Sharing one is not a
+            # deployment: the claims plane lets a holder re-acquire its
+            # own claim, so four threads under one id depose each other
+            # by design and the test would be measuring that instead.
+            queue = self._queue()
+            try:
+                barrier.wait()
+                queue.recover()
+                while (work := queue.claim(worker_id)) is not None:
+                    queue.complete(work, outcome="COMPLETED")
+            except Exception as exc:            # noqa: BLE001 - reported below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=recover_and_claim, args=(f"worker-{i}",))
+                   for i in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+        self.assertFalse([t for t in threads if t.is_alive()], "a recovery hung")
+        self.assertEqual(errors, [])
+        queue = self._queue()
+        overlap = set(queue.pending_ids()) & set(queue.running_ids())
+        self.assertEqual(overlap, set(), f"a brief is in two directories: {overlap}")
+        # Every brief ended up in exactly one place, and each ran once.
+        placed = (queue.pending_ids() + queue.running_ids()
+                  + queue.done_ids() + queue.blocked_ids())
+        self.assertEqual(sorted(placed), [f"BRIEF-{i}" for i in range(8)])
+        self.assertEqual(len(placed), len(set(placed)))
+
+    def test_claiming_and_recovering_cannot_interleave(self):
+        # The invariant, tested directly. The multi-thread test above is a
+        # smoke test: it does not force the interleaving and passes with
+        # the lock removed, so on its own it would be a green test over a
+        # race that never happened (L-0032). THIS is the evidence.
+        #
+        # `replace` alone cannot separate the two operations: it proves
+        # the origin was still there, not that it was still the same
+        # record. A recovery holding a read from before a claim landed
+        # would move the file a live owner had just re-created.
+        queue = self._queue()
+        queue.enqueue(_brief("BRIEF-1"))     # claimable work, or claim
+        held = FileLock(queue._lock_path, timeout_s=30.0)   # returns at once
+        held.acquire()
+
+        started, finished = threading.Event(), threading.Event()
+        taken: list = []
+
+        def claim_in_background():
+            started.set()
+            taken.append(self._queue().claim("worker-b"))
+            finished.set()
+
+        thread = threading.Thread(target=claim_in_background, daemon=True)
+        thread.start()
+        self.assertTrue(started.wait(timeout=10))
+        self.assertFalse(finished.wait(timeout=1.5),
+                         "claim did not wait for the queue lock")
+        held.release()
+        self.assertTrue(finished.wait(timeout=20), "claim never resumed")
+        thread.join(timeout=10)
+        self.assertIsNotNone(taken[0], "the claim was lost, not merely delayed")
+
+    def test_recovering_waits_for_a_claim_in_progress(self):
+        self._stranded("BRIEF-1")
+        queue = self._queue()
+        held = FileLock(queue._lock_path, timeout_s=30.0)
+        held.acquire()
+
+        started, finished = threading.Event(), threading.Event()
+
+        def recover_in_background():
+            started.set()
+            self._queue().recover()
+            finished.set()
+
+        thread = threading.Thread(target=recover_in_background, daemon=True)
+        thread.start()
+        self.assertTrue(started.wait(timeout=10))
+        self.assertFalse(finished.wait(timeout=1.5),
+                         "recover did not wait for the queue lock")
+        held.release()
+        self.assertTrue(finished.wait(timeout=20), "recover never resumed")
+        thread.join(timeout=10)
+
+    def test_recovered_work_comes_back_paced(self):
+        # A park's `not_before` survives on the record; a worker that
+        # simply died left none, so a crash loop re-launched at full
+        # speed with only `max_attempts` between it and forever.
+        self._stranded("BRIEF-1")
+        queue = self._queue()
+        queue.recover(pace=lambda attempts: 45.0)
+
+        self.assertEqual(queue.pending_ids(), ["BRIEF-1"])
+        self.assertIsNone(queue.claim("worker-b"), "the crash came back unpaced")
+        self.assertEqual([b for b, _ in queue.waiting()], ["BRIEF-1"])
+        self.now[0] += 46
+        self.assertIsNotNone(queue.claim("worker-b"))
+
+    def test_a_recovered_completion_is_not_paced_it_is_done(self):
+        queue = self._queue()
+        queue.enqueue(_brief("BRIEF-1"))
+        work = queue.claim("worker-a")
+        self.authority.resolve(work.grant, outcome="COMPLETED")   # crash before the move
+        queue.recover(pace=lambda attempts: 45.0)
+        self.assertEqual(queue.done_ids(), ["BRIEF-1"])
+        self.assertEqual(queue.waiting(), [])
 
 
 class TestAVanishedRecordIsNotALicenceToGuess(unittest.TestCase):

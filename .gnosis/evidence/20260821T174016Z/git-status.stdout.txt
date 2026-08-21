@@ -1,0 +1,5 @@
+ M src/gnosis/director/supervisor.py
+ M src/gnosis/director/work_queue.py
+ M tests/test_supervisor.py
+ M tests/test_work_queue.py
+?? .gnosis/evidence/20260821T174016Z/

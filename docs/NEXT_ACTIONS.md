@@ -18,15 +18,13 @@ cd "C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi"
 uv run --no-project --with pytest --with mypy --with ruff python scripts/capture_evidence.py
 ```
 
-Green baseline first (755 passed, mypy clean, ruff at baseline), then
+Green baseline first (760 passed, mypy clean, ruff at baseline), then
 **the seventeen findings the reviews left open**. They are listed at the
 end of each ADR addendum; the ones that matter most, in order:
 
-1. **Concurrent `recover()` is not safe** (ADR-0022) — two supervisors
-   starting together can leave one brief in `running/` AND `pending/`,
-   ending in a second execution. It needs the `reclaim_if` shape: hold
-   the lock and re-check the claim at mutation time.
-2. **A crash that was not a park resumes unpaced** (ADR-0022).
+~~1. Concurrent `recover()`~~ **DONE** — and the obvious fix, an atomic
+   `replace`, was wrong; see L-0042.
+~~2. A crash that was not a park resumes unpaced~~ **DONE.**
 3. **`_resolve_probe` is check-then-act** (ADR-0023) — a provider hold
    placed between its read and its append is erased.
 4. **The credential is absent from the policy action identity**
@@ -42,7 +40,7 @@ end of each ADR addendum; the ones that matter most, in order:
 **REVIEW DEBT: PAID, with a weaker channel.** ADR-0022/0023/0024 were
 reviewed 2026-08-21 by independent read-only agents in clean contexts,
 not by Codex (rate-limited, reset reported 2026-09-20). All three FAIL;
-47 findings, 26 repaired, 17 open. When Codex quota returns, re-run all
+47 findings, 28 repaired, 15 open. When Codex quota returns, re-run all
 three — a same-family reviewer shares blind spots a different model would
 not, and L-0041 now measures the self-review channel at roughly one
 finding in four.

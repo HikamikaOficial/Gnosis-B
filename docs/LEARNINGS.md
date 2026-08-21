@@ -339,3 +339,11 @@ Format:
 - Lesson: self-review is worth doing and is not a substitute; the ratio is roughly one in four and the miss is concentrated in exactly the claims the author is most confident about. When the usual reviewer is unavailable, a same-family agent in a clean context still found six criticals — a weaker channel is not the same as no channel, and shipping unreviewed should be the last option rather than the first fallback. Record which channel reviewed, because the strength of the claim depends on it.
 - Operational consequence: ADR-0022/0023/0024 carry addenda naming the channel and separating repaired findings from still-open ones.
 - Revalidation condition: re-measure when a Codex review runs against a unit that also had a same-family review.
+
+## L-0042 — An atomic move proves the file was there, not that it was the same file
+- Status: VERIFIED
+- Evidence: ADR-0022 addendum. `recover()` raced `claim()`, and the first repair was to move the record with `path.replace` — the single-winner the claim path already used. A concurrency test written for that fix found something worse: recovery had listed `running/`, read the record and decided, and by the time it moved, a different worker had recovered the SAME brief, claimed it, and re-created a file at that exact path. `replace` succeeded, because a file was there. It was somebody else's live work, and the move left an ACTIVE grant over a record sitting in `pending/` for anyone to take.
+- Scope: any compare-and-set built on a filesystem path, a key name, or any other stable address rather than on the value at it.
+- Lesson: `replace`/`rename` is atomic about the OPERATION, not about identity. It answers "was something here?" and the question was "is this still the thing I read?". Where the address can be recycled by a legitimate actor, a move is not a CAS: the guard must be a lock held across read-decide-write, or a version compared at mutation time — the shape `ClaimStore.reclaim_if` already uses in this kernel.
+- Operational consequence: `WorkQueue` serialises `recover()` and `claim()` on one lock, taken before the claims plane so the ordering is fixed. The evidence is a mutual-exclusion test; the multi-threaded one passes with the lock removed and is labelled a smoke test (L-0032).
+- Revalidation condition: standing rule; no expiry.

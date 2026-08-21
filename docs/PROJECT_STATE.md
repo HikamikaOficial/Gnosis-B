@@ -103,10 +103,10 @@ governs the order of work here: **prefer wiring over documenting**.
   compete) from decisions (which supersede, with a reason). No
   independent review: both channels are unavailable.
 
-Suite: **755 tests, all passing**; mypy strict clean (47 files); ruff at
+Suite: **760 tests, all passing**; mypy strict clean (47 files); ruff at
 the recorded backlog baseline (19 pre-existing findings in untouched
 files, ratcheted down from 20; `.gnosis/state/lint_baseline.json` fails the run if it rises).
-Captured transcript, not prose: `.gnosis/evidence/20260821T170951Z/`.
+Captured transcript, not prose: `.gnosis/evidence/20260821T174016Z/`.
 
 ## Integration milestone (COMPLETE)
 
@@ -264,8 +264,10 @@ of ACTIVE was inert, and the suite was green because every test swept by
 hand (L-0036). The second worst was a probe whose failure mode left the
 credential MORE open than not probing at all (L-0037).
 
-26 findings repaired and verified; 17 recorded as still open in the
-addenda rather than carried silently. Rule 9 verified mechanically: the
+28 findings repaired and verified; 15 still open and listed in the
+addenda rather than carried silently. The two closed since: concurrent
+`recover()` — where the obvious fix was wrong and a test caught it
+(L-0042) — and unpaced crash recovery. Rule 9 verified mechanically: the
 tree fingerprint was identical before and after the reviews.
 
 ## Fixed locations
