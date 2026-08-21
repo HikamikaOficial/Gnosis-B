@@ -74,3 +74,9 @@ Review agents run with edit tools withheld, and `CliReviewer` fingerprints the w
 
 ## D-025 — A safety mechanism that cannot read its own state denies
 `HoldStore.read()` returns holds AND whatever was unreadable, and `admits()` denies when anything is damaged. The original policy — skip the bad row, return the rest — was backwards: skipping a row opens the window that row described, so a single truncated line admitted work against a credential known to be shut. Related: an atomic state transition must fit in ONE durable line, because two lines in one append can be torn by a crash; `probe()` writes a single `narrow` row, and a test walks every byte-prefix of the log asserting none admits work. Details/evidence: ADR-0016 Codex addendum.
+
+## D-026 — The gate covers every AGENT launch a brief causes, and says what it does not cover
+Convergence launches a reviewer and a fixer per round — usually more agents than the implementation itself — so those run through `GatedAgentRunner`, which asks the hold plane and the policy engine before each launch and reports the result back to the hold plane afterwards. It uses `agent_launch_snapshot`, extracted from the engine so there is exactly one action identity rather than two that drift. Verifier subprocesses are deliberately outside the gate: a policy able to deny verification could switch off the evidence requirement that makes a DONE claim checkable. Recorded as `convergence/verifier_execution = IGNORED`. Details/evidence: ADR-0017.
+
+## D-027 — A task closes on convergence, never on the implementer's opinion
+`GovernedPipeline` derives the report status from the convergence outcome alone; the implementation's own verdict never sets it. Reviewer independence is enforced as far as the kernel can check it — the same runner object cannot implement and review — and recorded as `convergence/reviewer_independence = SANDBOX_APPROX`, because object identity is not mind identity. Details/evidence: ADR-0017.

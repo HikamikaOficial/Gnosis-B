@@ -28,6 +28,10 @@ class BriefRecordState(str, Enum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     ESCALATED = "ESCALATED"
+    # A rate-limit window shut before or during the work. Distinct from
+    # FAILED on purpose: the work is untouched and resumable, and rule 7
+    # forbids charging a provider's window to the agent.
+    PARKED = "PARKED"
 
 
 @dataclass

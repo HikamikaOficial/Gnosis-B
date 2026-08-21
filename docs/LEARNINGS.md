@@ -155,3 +155,19 @@ Format:
 - Lesson: fail-open is not a bug you fix one at a time — it is an author's default under uncertainty. Every branch that answers "I am not sure" gets resolved toward *proceed*, because proceeding is what the surrounding code is for. The countermeasure is to enumerate the "I am not sure" branches deliberately and check each one's direction, rather than to review them for correctness individually.
 - Operational consequence: for restriction mechanisms, tests assert the DENY direction on every degraded input — missing file, torn line, hostile value, partial write — and `test_a_probe_never_leaves_the_credential_open_between_two_rows` walks every byte-prefix of the durable log.
 - Revalidation condition: standing rule; no expiry.
+
+## L-0019 — A rule can be satisfied by every part and violated by the composition
+- Status: VERIFIED
+- Evidence: ADR-0017 self-review, reproduced. The engine classified rate limits and parked (rule 6). The scheduler placed durable holds. The convergence adapters parsed agent output strictly. Compose them and a rate limit hit by a REVIEW round produced unreadable text, which the parser correctly called `InvalidReviewOutput`, which the loop correctly filed as an evidence failure — and no hold was ever placed, so the next round launched into the same shut window. Every part behaved as specified.
+- Scope: any rule that holds at a boundary, in a system with more than one boundary.
+- Lesson: a per-component invariant does not aggregate. The rule "a rate limit parks" was implemented where launches were known to happen, and the composition created new launch sites whose results nobody classified. The question that finds these is not "does each part obey the rule?" but "enumerate every place the rule's trigger can now occur, and check each one".
+- Operational consequence: `GatedAgentRunner` classifies every launch it makes and reports it to the hold plane (`TaskScheduler.observe`), so the trigger is handled wherever a launch happens rather than wherever it happened to be handled first.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0020 — A test fixture that takes a shortcut can hide the absence of the rule it should exercise
+- Status: VERIFIED
+- Evidence: ADR-0017 Codex finding 1. `GovernedPipeline` had no check that the reviewer was independent of the implementer, and every test passed one `_Agent` as both — the exact degenerate case rule 10 forbids. Seventeen tests, all green, none capable of noticing.
+- Scope: any fixture that shares one double across roles a rule says must differ.
+- Lesson: the shortcut in the fixture WAS the missing requirement, written down in test form. Sharing a double across two roles quietly asserts the roles are interchangeable; if a rule says they are not, the fixture has already contradicted it. This is the same shape as L-0013 (a double that cannot exhibit the failure), one level up: there the double was too simple, here it was too shared.
+- Operational consequence: fixtures give separate doubles to roles a rule distinguishes, and the constructor refuses the shared case so a future fixture cannot reintroduce it silently.
+- Revalidation condition: standing rule; no expiry.

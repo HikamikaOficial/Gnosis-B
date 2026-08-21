@@ -1,6 +1,6 @@
 # GNOSIS Project State
 
-**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE (4/4)
+**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
 **Last update:** 2026-08-20
@@ -103,10 +103,27 @@ governs the order of work here: **prefer wiring over documenting**.
   compete) from decisions (which supersede, with a reason). No
   independent review: both channels are unavailable.
 
-Suite: **566 tests, all passing**; mypy strict clean (47 files); ruff at
+Suite: **589 tests, all passing**; mypy strict clean (47 files); ruff at
 the recorded backlog baseline (19 pre-existing findings in untouched
 files, ratcheted down from 20; `.gnosis/state/lint_baseline.json` fails the run if it rises).
-Captured transcript, not prose: `.gnosis/evidence/20260821T001211Z/`.
+Captured transcript, not prose: `.gnosis/evidence/20260821T004647Z/`.
+
+## Integration milestone (COMPLETE)
+
+`GovernedPipeline.run_brief` (ADR-0017) is the path a real request takes
+through the whole kernel: schedule (hold plane) → implement (policy gate,
+worktree isolation, retries, typed classification) → converge (verify →
+independent review → fix, bounded, with every reviewer and fixer launch
+behind the same gate) → one `EngineerReport` whose status can only say
+COMPLETED if convergence converged.
+
+**Codex review: FAIL, 7 findings, all repaired** — two critical. Nothing
+enforced that the reviewer was independent of the implementer
+(`reviewer_id` was a label, and the test fixture used one agent for
+both), and a crashing fixer stranded an already-consumed brief with no
+report. Self-review separately found a rule 6 violation created purely by
+composition: a rate limit hit by a review round never reached the hold
+plane, so the next round launched into the same shut window. See L-0019.
 
 ## Fixed locations
 

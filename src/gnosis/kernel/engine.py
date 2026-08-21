@@ -181,6 +181,68 @@ def agent_run_intent(binary: str, exec_root: Path, permission_mode: str,
     return parse_command([binary, *flags, *operands], cwd=exec_root)
 
 
+def agent_launch_snapshot(
+    *,
+    stage: str,
+    task_id: str,
+    prompt: str,
+    binary: str,
+    exec_root: Path,
+    planned_root: Path,
+    mcp: McpRunnerConfig | None = None,
+    worktree_branch: str | None = None,
+    policy_actor: str = "agent://unattributed",
+    permission_mode: str = DEFAULT_PERMISSION_MODE,
+    model: str | None = None,
+    code_intelligence: str | None = None,
+    focus_symbols: Sequence[str] | None = None,
+) -> ActionSnapshot:
+    """The identity of "launch an agent", built in exactly one place.
+
+    Extracted so the engine and the convergence loop's reviewer/fixer
+    launches produce the SAME shape. A second gate with its own snapshot
+    would mean an operator approving two different identities for what is,
+    to them, one decision — and the two would drift apart on the first
+    field either side forgot to add.
+    """
+    return ActionSnapshot(
+        intervention_point=AGENT_RUN_INTERVENTION_POINT,
+        tool="claude_cli", actor=policy_actor,
+        intent=agent_run_intent(
+            # Where the agent WOULD run, which before the worktree is
+            # minted is not where the identity is measured.
+            binary, planned_root,
+            permission_mode=permission_mode, model=model, mcp=mcp,
+        ),
+        payload={
+            "stage": stage,
+            "task_id": task_id,
+            # The prompt binds an approval without being inlined.
+            "prompt_sha256": hash_canonical(prompt),
+            # Content, not just path: a config file can be rewritten
+            # between the verdict and the launch, and the PATHS do not
+            # decide which tools the agent reaches — the CONTENTS do
+            # (adversarial review).
+            "mcp": _mcp_fingerprint(mcp, exec_root),
+            "code_intelligence": code_intelligence,
+            "focus_symbols": sorted(focus_symbols or ()),
+            # What the agent can SEE. Without it an approval for "run
+            # the migration" survived HEAD moving underneath it: same
+            # prompt, same paths, same action_id, materially different
+            # action (Codex review). Read-only git probes are the one
+            # thing the kernel runs before a verdict, because computing
+            # the identity being judged is part of judging it.
+            "workspace": content_fingerprint(exec_root),
+            # Stable worktree identity only: `created_at` is a
+            # per-submission value that made every approval
+            # un-reusable, defeating the documented "approve, then
+            # resubmit" flow (adversarial review).
+            "worktree_branch": worktree_branch,
+        },
+        context={"exec_root": str(planned_root)},
+    )
+
+
 def _report_status(task_state: TaskState,
                    classifications: Sequence[FailureClassification]) -> ReportStatus:
     """Give an escalation its own channel.
@@ -487,43 +549,16 @@ class TaskEngine:
         worktrees: WorktreeManager | None,
     ) -> _GateResult:
         """Ask the policy engine once, at one stage, and act on the answer."""
-        snapshot = ActionSnapshot(
-            intervention_point=AGENT_RUN_INTERVENTION_POINT,
-            tool="claude_cli", actor=policy_actor,
-            intent=agent_run_intent(
-                # Where the agent WOULD run, which before the worktree is
-                # minted is not where the identity is measured.
-                _runner_binary(self.cli_runner), planned_root,
-                permission_mode=DEFAULT_PERMISSION_MODE, model=None, mcp=mcp,
+        snapshot = agent_launch_snapshot(
+            stage=stage, task_id=task_id, prompt=prompt,
+            binary=_runner_binary(self.cli_runner),
+            exec_root=exec_root, planned_root=planned_root, mcp=mcp,
+            worktree_branch=worktree_branch, policy_actor=policy_actor,
+            permission_mode=DEFAULT_PERMISSION_MODE,
+            code_intelligence=(
+                type(code_intelligence).__name__ if code_intelligence else None
             ),
-            payload={
-                "stage": stage,
-                "task_id": task_id,
-                # The prompt binds an approval without being inlined.
-                "prompt_sha256": hash_canonical(prompt),
-                # Content, not just path: a config file can be rewritten
-                # between the verdict and the launch, and the PATHS do not
-                # decide which tools the agent reaches — the CONTENTS do
-                # (adversarial review).
-                "mcp": _mcp_fingerprint(mcp, exec_root),
-                "code_intelligence": (
-                    type(code_intelligence).__name__ if code_intelligence else None
-                ),
-                "focus_symbols": sorted(focus_symbols or ()),
-                # What the agent can SEE. Without it an approval for "run
-                # the migration" survived HEAD moving underneath it: same
-                # prompt, same paths, same action_id, materially different
-                # action (Codex review). Read-only git probes are the one
-                # thing the kernel runs before a verdict, because computing
-                # the identity being judged is part of judging it.
-                "workspace": content_fingerprint(exec_root),
-                # Stable worktree identity only: `created_at` is a
-                # per-submission value that made every approval
-                # un-reusable, defeating the documented "approve, then
-                # resubmit" flow (adversarial review).
-                "worktree_branch": worktree_branch,
-            },
-            context={"exec_root": str(planned_root)},
+            focus_symbols=focus_symbols,
         )
         decision = policy.decide(snapshot)
         if approvals is not None:

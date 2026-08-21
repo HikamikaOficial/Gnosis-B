@@ -1,0 +1,16 @@
+ M .claude/agent-memory/evidence-reviewer/MEMORY.md
+ M src/gnosis/director/brief_record.py
+ M src/gnosis/kernel/engine.py
+ M src/gnosis/kernel/policy.py
+ M src/gnosis/kernel/scheduler.py
+ M tests/test_policy.py
+?? .claude/agent-memory/evidence-reviewer/learning_adr_evidence_lines_unverified.md
+?? .claude/agent-memory/evidence-reviewer/learning_replay_fingerprint_self_reference.md
+?? .gnosis/evidence/20260821T002446Z/
+?? .gnosis/evidence/20260821T002913Z/
+?? .gnosis/evidence/20260821T004647Z/
+?? .gnosis/lab/kernel-reviews/codex-review-2026-08-21-pipeline.jsonl
+?? docs/adr/ADR-0017-governed-pipeline.md
+?? src/gnosis/director/pipeline.py
+?? src/gnosis/runner/gated_runner.py
+?? tests/test_pipeline.py

@@ -807,6 +807,26 @@ GNOSIS_ENFORCEMENT = EnforcementMatrix([
         ),
     ),
     EnforcementClaim(
+        "convergence", "reviewer_independence", EnforcementLevel.SANDBOX_APPROX,
+        note=(
+            "the pipeline refuses the SAME runner object for implementing "
+            "and reviewing, which catches the degenerate case; it cannot "
+            "verify that a different object is a different mind, so same "
+            "provider and same model is still weak independence "
+            "(ADR-0017, rule 10)"
+        ),
+    ),
+    EnforcementClaim(
+        "convergence", "verifier_execution", EnforcementLevel.IGNORED,
+        note=(
+            "verifier subprocesses run OUTSIDE the policy gate and the "
+            "rate-limit hold, deliberately: a policy able to deny "
+            "verification could switch off the evidence requirement that "
+            "makes a DONE claim checkable. It is operator-configured, not "
+            "agent-chosen (ADR-0017)"
+        ),
+    ),
+    EnforcementClaim(
         "policy", "agent_launch_gate", EnforcementLevel.PROMPT_ONLY,
         note=(
             "opt-in: a TaskEngine or DirectorOrchestrator built without a "

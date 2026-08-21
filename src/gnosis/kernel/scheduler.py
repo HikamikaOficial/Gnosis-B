@@ -306,7 +306,7 @@ class TaskScheduler:
             )
 
         outcome = self.engine.execute_task(**task_kwargs)
-        hold = self._maybe_place_hold(outcome)
+        hold = self.observe(outcome.classification)
         return ScheduleOutcome(
             task_id=task_id, launched=True,
             reason_code=(outcome.classification.reason_code
@@ -314,15 +314,20 @@ class TaskScheduler:
             execution=outcome, hold=hold,
         )
 
-    def _maybe_place_hold(self, outcome: TaskExecutionOutcome) -> RateLimitHold | None:
-        """Turn a parked run into a durable, credential-scoped hold.
+    def observe(self, classification: FailureClassification | None) -> RateLimitHold | None:
+        """Record what one launch's classification implies for the window.
 
-        Only a RATE_LIMITED classification places one. Every other failure
-        is about the work, not the window, and holding a credential
-        because a test failed would take the whole system down for a bug.
+        Public because the implementation is not the only thing that
+        launches an agent: a convergence round's reviewer and fixer hit
+        the same credential, and a rate limit there used to be invisible
+        to the hold plane — it surfaced as unreadable agent output, no
+        hold was placed, and the next round launched straight into the
+        same shut window. Rule 6 says that is a park, not agent output.
         """
-        classification = outcome.classification
         if classification is None or classification.failure is not FailureClass.RATE_LIMITED:
+            # Every other failure is about the work, not the window.
+            # Holding a credential because a test failed would take the
+            # whole system down for a bug.
             return None
         hold = hold_from_classification(
             classification, self.credential, self.clock(), scope=HoldScope.ACCOUNT,
