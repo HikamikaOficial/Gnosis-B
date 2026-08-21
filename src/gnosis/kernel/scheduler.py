@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -126,7 +127,9 @@ class HoldStore:
         return replacement
 
     def narrow_if_unclaimed(self, credential: str, at: float, reason: str,
-                            replacement: RateLimitHold) -> RateLimitHold | None:
+                            replacement: RateLimitHold,
+                            still_due: Callable[[RateLimitHold | None], bool]
+                            | None = None) -> RateLimitHold | None:
         """Narrow, but only if nobody else already did — one winner.
 
         A check-then-append is not a claim. Two schedulers finding the
@@ -145,9 +148,19 @@ class HoldStore:
                 # Deny in the shut direction, as everywhere else.
                 return None
             live = HoldRegistry().reconcile(snapshot.holds, at)
-            for hold in live:
-                if hold.credential == credential and hold.scope is HoldScope.PROBE:
-                    return None
+            current = next((h for h in live if h.credential == credential), None)
+            if current is not None and current.scope is HoldScope.PROBE:
+                return None
+            if still_due is not None and not still_due(current):
+                # DUENESS IS RE-CHECKED HERE, not only before the lock.
+                # The atomic section used to guard "nobody else is
+                # probing" while leaving "there is still a hold worth
+                # probing" a check-then-act — so a provider window placed
+                # between the two reads could be probed, and the ADR
+                # promises a provider window never is (independent
+                # review). Guarding the winner without guarding the
+                # PRECONDITION is half a claim.
+                return None
             self._write_unlocked([{
                 "row": "narrow", "credential": credential, "at": at,
                 "reason": reason, "hold": replacement.to_dict(),
@@ -227,9 +240,13 @@ class HoldStore:
             try:
                 payload = json.loads(line)
                 if payload.get("row") == "narrow":
-                    # Supersede and replace, indivisibly.
-                    credential = _require_supersede_fields(payload)
-                    holds = [h for h in holds if h.credential != credential]
+                    # SUSPEND and cover, indivisibly — not replace. The
+                    # rows this narrows are kept, so a probe lease that
+                    # expires unanswered hands the credential back to the
+                    # hold it was testing instead of leaving it open
+                    # (independent review). Ordering is decided in
+                    # `HoldRegistry.reconcile`, by decision time.
+                    _require_supersede_fields(payload)
                     holds.append(RateLimitHold.from_dict(payload["hold"]))
                     continue
                 if payload.get("row") == "supersede":
@@ -276,6 +293,17 @@ class ProbePolicy:
                 raise TypeError(f"{name} must be a number, got {value!r}")
             if value <= 0:
                 raise ValueError(f"{name} must be positive, got {value!r}")
+        if self.ttl_s <= self.lead_s:
+            # The probe SUSPENDS the window for the length of its lease.
+            # A lease shorter than the lead hands the credential back
+            # before the window it replaced would have ended — opening it
+            # EARLIER than not probing at all, while the constructor
+            # claims the feature is strictly less permissive (independent
+            # review).
+            raise ValueError(
+                f"ttl_s ({self.ttl_s}) must exceed lead_s ({self.lead_s}): "
+                "a probe lease shorter than the lead reopens the window early"
+            )
 
 
 @dataclass(frozen=True)
@@ -416,7 +444,7 @@ class TaskScheduler:
             if self.probe_when_due and probe_run_id is None:
                 claimed = self.claim_probe(task_id, credential=credential_id)
                 if claimed is not None:
-                    probe_run_id = task_id
+                    probe_run_id = claimed.probe_holder
             if not self.admits(is_resume=is_resume, probe_run_id=probe_run_id,
                                credential=credential_id):
                 held = self.registry.hold_for(credential_id or self.credential)
@@ -472,20 +500,44 @@ class TaskScheduler:
             # Holding a credential because a test failed would take the
             # whole system down for a bug.
             #
-            # But a launch that did NOT hit the limit is the answer the
-            # probe was asking for, and nothing used to read it: the
-            # narrowing stood until its own deadline while the window was
-            # demonstrably open, so a successful probe kept every other
-            # run parked. Reopening is a recorded decision, not a silence.
-            self._resolve_probe(probe_run_id, credential)
+            # A CLEAN launch is the answer the probe was asking for, and
+            # nothing used to read it: the narrowing stood until its own
+            # deadline while the window was demonstrably open, so a
+            # successful probe kept every other run parked.
+            #
+            # "Not rate-limited" is NOT that answer. A timeout, a crash or
+            # an unparseable result is an ABSENCE of an answer, and
+            # reading absence as "the window is open" reopens a credential
+            # on no evidence — a safety mechanism has to fail in the shut
+            # direction (independent review). The probe simply stays
+            # claimed until its lease runs out, and the suspended hold
+            # governs again after it.
+            if classification is not None and classification.failure is FailureClass.PASS:
+                self._resolve_probe(probe_run_id, credential)
             return None
+        target = credential or self.credential
         hold = hold_from_classification(
-            classification, credential or self.credential, self.clock(),
-            scope=HoldScope.ACCOUNT,
+            classification, target, self.clock(), scope=HoldScope.ACCOUNT,
         )
         if hold is None:
             return None
+        if probe_run_id is not None:
+            # The probe ANSWERED, and the answer is "still shut". A live
+            # PROBE row outranks an ACCOUNT row, so leaving it standing
+            # would keep admitting the very run that just hit the limit
+            # until its lease ran out. Ending it is what makes the new
+            # observation govern.
+            self._end_probe(probe_run_id, target, reason="probe_rate_limited")
         return self.holds.place(hold)
+
+    def _end_probe(self, probe_run_id: str, credential: str, reason: str) -> None:
+        """Retire this run's probe row, if it is still the live one."""
+        self.live_holds()
+        live = self.registry.hold_for(credential)
+        if (live is not None and live.scope is HoldScope.PROBE
+                and live.probe_holder == probe_run_id):
+            self.holds.supersede(credential, self.clock(),
+                                 reason=f"{reason}:{probe_run_id}")
 
     def _resolve_probe(self, probe_run_id: str | None,
                        credential: str | None = None) -> None:
@@ -556,15 +608,18 @@ class TaskScheduler:
         hold = self.registry.hold_for(credential or self.credential)
         if hold is None or hold.scope is not HoldScope.ACCOUNT:
             return None
+        return hold if self._is_probeable(hold, self.clock()) else None
+
+    def _is_probeable(self, hold: RateLimitHold, now: float) -> bool:
+        """Is this hold one of the kernel's own guesses, and due?"""
         if not hold.window_estimated and hold.reset_at is not None:
-            return None
-        now = self.clock()
+            return False
         if hold.reset_at is None:
             # A hold that never expires needs a probe or it is an outage.
             due_at = hold.placed_at + self.probe_policy.unknown_window_wait_s
         else:
             due_at = hold.reset_at - self.probe_policy.lead_s
-        return hold if now >= due_at else None
+        return now >= due_at
 
     def claim_probe(self, run_id: str,
                     credential: str | None = None) -> RateLimitHold | None:
@@ -582,13 +637,26 @@ class TaskScheduler:
         if current is None:
             return None
         now = self.clock()
+        # The holder is the caller's name PLUS a secret minted here. A
+        # holder of `TASK-7`, or of `TASK-7:review:1`, is a string any
+        # process holding the task id can assert — and since `admits`
+        # matches on it alone, asserting it IS the admission. "A claim any
+        # caller could make was the original defect; an exact identity is
+        # not that" was only true while the identity was unguessable, and
+        # it never was (independent review). The name keeps attribution;
+        # the token makes winning the claim the only way to have it.
+        holder = f"{run_id}:{secrets.token_hex(8)}"
         return self.holds.narrow_if_unclaimed(
             target, now, reason=f"probe:{run_id}",
             replacement=RateLimitHold(
                 credential=target, scope=HoldScope.PROBE,
                 reason_code=current.reason_code, placed_at=now,
-                reset_at=now + self.probe_policy.ttl_s, probe_holder=run_id,
+                reset_at=now + self.probe_policy.ttl_s, probe_holder=holder,
                 window_estimated=True,
+            ),
+            still_due=lambda live: (
+                live is not None and live.scope is HoldScope.ACCOUNT
+                and self._is_probeable(live, now)
             ),
         )
 

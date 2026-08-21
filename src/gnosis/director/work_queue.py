@@ -393,7 +393,22 @@ class WorkQueue:
     def _move(self, brief_id: str, source: str, target: str,
               extra: dict[str, Any]) -> None:
         origin = self.root / source / f"{brief_id}.json"
-        record = _read(origin) or {"brief": {"brief_id": brief_id}}
+        record = _read(origin)
+        if record is None:
+            # The origin is GONE — another worker's recovery moved it, or
+            # it was damaged. The old code invented `{"brief": {"brief_id":
+            # ...}}` here and wrote it on, which was worse than doing
+            # nothing in two ways: the stub has no `attempts`, so the next
+            # `claim` read 0 and the max-attempts bound was cleared by an
+            # automated path the module swears cannot clear it; and the
+            # stub has no title/mission, so `DirectorBrief.from_dict`
+            # raised inside `claim` AFTER the grant was taken, poisoning
+            # the brief permanently (independent review).
+            #
+            # A vanished record is not a licence to guess. It is recorded
+            # and the move is abandoned: whoever moved it owns it now.
+            self.skipped.append((brief_id, f"record vanished from {source}/"))
+            return
         record.update(extra)
         record.pop("pending_transition", None)  # it arrived; nothing is pending
         _atomic_write(self.root / target / f"{brief_id}.json",

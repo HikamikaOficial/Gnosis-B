@@ -586,6 +586,8 @@ class TestEnforcementMatrix(unittest.TestCase):
                                 # the child's environment but cannot tell
                                 # whether the CLI authenticated with it.
                                 ("credentials", "child_honours_the_binding"),
+                                ("credentials", "no_ambient_fallback"),
+                                ("credentials", "ambient_isolation"),
                                 ("credentials", "declared_kind_is_true")})
 
     def test_gnosis_matrix_is_pinned_exactly(self):
@@ -610,8 +612,9 @@ class TestEnforcementMatrix(unittest.TestCase):
             ("policy", "rule_purity"): EnforcementLevel.IGNORED,
             ("policy", "agent_launch_gate"): EnforcementLevel.PROMPT_ONLY,
             ("credentials", "billing_boundary"): EnforcementLevel.HARD,
-            ("credentials", "no_ambient_fallback"): EnforcementLevel.HARD,
-            ("credentials", "child_honours_the_binding"): EnforcementLevel.PROMPT_ONLY,
+            ("credentials", "no_ambient_fallback"): EnforcementLevel.SANDBOX_APPROX,
+            ("credentials", "ambient_isolation"): EnforcementLevel.SANDBOX_APPROX,
+            ("credentials", "child_honours_the_binding"): EnforcementLevel.IGNORED,
             ("credentials", "declared_kind_is_true"): EnforcementLevel.IGNORED,
         }
         actual = {(c.adapter, c.restriction): c.level

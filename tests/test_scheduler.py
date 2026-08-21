@@ -570,23 +570,55 @@ class TestTheProbeHasACaller(_SchedulerTestCase):
         )
 
     def test_a_caller_past_the_due_check_is_still_refused_by_the_claim(self):
-        # Deterministic version of the race. Both schedulers see the probe
-        # due; one appends; the other is now holding a stale answer and
-        # only the compare-and-set can stop it. Without that guard it
-        # narrows too, its row wins the rebuild, and TWO runs believe they
-        # are the probe.
+        # Deterministic version of the race, at the STORE level: both
+        # callers saw the probe due, one appended, and only the
+        # compare-and-set can stop the other. Its partner below runs the
+        # same contention through `claim_probe`, the entry production
+        # actually takes — a guard verified only as a function leaves its
+        # production use unverified (independent review).
         self._estimated_hold()
         self.now += 900 - 30
         first, second = self._scheduler(), self._scheduler()
         self.assertIsNotNone(first.probe_is_due())
         self.assertIsNotNone(second.probe_is_due())
 
-        self.assertIsNotNone(first.claim_probe("RUN-A"))
+        granted = first.claim_probe("RUN-A")
+        self.assertIsNotNone(granted)
         self.assertIsNone(self._contested_claim("RUN-B"))
 
         fresh = self._scheduler()
-        self.assertTrue(fresh.admits(probe_run_id="RUN-A"))
+        self.assertTrue(fresh.admits(probe_run_id=granted.probe_holder))
         self.assertFalse(fresh.admits(probe_run_id="RUN-B"))
+        # And the raw name, without the minted secret, is not admission.
+        self.assertFalse(fresh.admits(probe_run_id="RUN-A"))
+
+    def test_a_provider_window_arriving_mid_claim_is_not_probed(self):
+        # Dueness is re-checked INSIDE the lock. Guarding "nobody else is
+        # probing" while leaving "there is still a hold worth probing" a
+        # check-then-act let a provider window — which the ADR promises is
+        # never probed — be suspended by a claim decided before it landed.
+        self._estimated_hold()
+        self.now += 900 - 30
+        scheduler = self._scheduler()
+        self.assertIsNotNone(scheduler.probe_is_due())
+
+        stale_answer = scheduler.probe_is_due()
+
+        # A real provider limit lands before the claim takes the lock.
+        self.holds.place(RateLimitHold(
+            credential="claude://default", scope=HoldScope.ACCOUNT,
+            reason_code="rate_limited:usage", reset_at=self.now + 8000,
+            placed_at=self.now, window_estimated=False,
+        ))
+        # The caller is now holding an answer that was true a moment ago.
+        # Only the re-check inside the lock can stop it.
+        scheduler.probe_is_due = lambda credential=None: stale_answer
+        self.assertIsNone(scheduler.claim_probe("RUN-LATE"),
+                          "a provider window was suspended by a stale claim")
+        live = self._scheduler().live_holds()
+        self.assertEqual(len(live), 1)
+        self.assertIs(live[0].scope, HoldScope.ACCOUNT)
+        self.assertFalse(live[0].window_estimated)
 
     def test_racing_claims_produce_exactly_one_probe(self):
         # The same contention with real threads on real files. Every
@@ -602,8 +634,11 @@ class TestTheProbeHasACaller(_SchedulerTestCase):
         barrier = threading.Barrier(6)
 
         def claim(index):
+            # Through `claim_probe`, the production entry — not the store
+            # API underneath it.
+            scheduler = self._scheduler()
             barrier.wait()
-            got = self._contested_claim(f"RUN-{index}")
+            got = scheduler.claim_probe(f"RUN-{index}")
             if got is not None:
                 with lock:
                     winners.append(got)
@@ -617,8 +652,8 @@ class TestTheProbeHasACaller(_SchedulerTestCase):
         self.assertFalse([t for t in threads if t.is_alive()], "a claim hung")
         self.assertEqual(len(winners), 1, f"{len(winners)} callers all probed")
         fresh = self._scheduler()
-        admitted = [i for i in range(6) if fresh.admits(probe_run_id=f"RUN-{i}")]
-        self.assertEqual(len(admitted), 1)
+        self.assertTrue(fresh.admits(probe_run_id=winners[0].probe_holder))
+        self.assertFalse(any(fresh.admits(probe_run_id=f"RUN-{i}") for i in range(6)))
 
     def test_a_second_probe_is_not_claimed_while_one_is_answering(self):
         self._estimated_hold()
@@ -639,7 +674,13 @@ class TestTheProbeHasACaller(_SchedulerTestCase):
                 in self.holds.path.read_text(encoding="utf-8").splitlines()]
         narrowed = [r for r in rows if r.get("row") == "narrow"]
         self.assertEqual(len(narrowed), 1)
-        self.assertEqual(narrowed[0]["hold"]["probe_holder"], "TASK-PROBE")
+        holder = narrowed[0]["hold"]["probe_holder"]
+        # Attributable AND unguessable: the task names it, a secret minted
+        # inside the claim makes winning the claim the only way to hold
+        # it. A holder equal to the task id is a string any process with
+        # the task id can assert, and asserting it IS admission.
+        self.assertTrue(holder.startswith("TASK-PROBE:"), holder)
+        self.assertGreater(len(holder), len("TASK-PROBE:") + 8)
 
     def test_probing_can_be_switched_off_without_reopening_the_window(self):
         # Off means MORE conservative, never less: everyone keeps waiting.

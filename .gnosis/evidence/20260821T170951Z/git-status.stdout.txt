@@ -1,0 +1,18 @@
+ M scripts/capture_evidence.py
+ M src/gnosis/director/supervisor.py
+ M src/gnosis/director/work_queue.py
+ M src/gnosis/kernel/credentials.py
+ M src/gnosis/kernel/failures.py
+ M src/gnosis/kernel/policy.py
+ M src/gnosis/kernel/scheduler.py
+ M src/gnosis/runner/gated_runner.py
+ M src/gnosis/runner/replay_runner.py
+ M tests/test_credentials.py
+ M tests/test_failures.py
+ M tests/test_pipeline.py
+ M tests/test_policy.py
+ M tests/test_scheduler.py
+ M tests/test_supervisor.py
+ M tests/test_work_queue.py
+?? .gnosis/evidence/20260821T170049Z/
+?? .gnosis/evidence/20260821T170951Z/

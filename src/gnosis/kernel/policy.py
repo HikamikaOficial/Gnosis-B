@@ -840,24 +840,44 @@ GNOSIS_ENFORCEMENT = EnforcementMatrix([
     EnforcementClaim(
         "credentials", "billing_boundary", EnforcementLevel.HARD,
         note=(
-            "rotation stays inside the primary credential's KIND unless "
-            "another kind is explicitly authorised, so an exhausted "
-            "subscription seat can never become a metered launch by "
-            "itself (rules 25, 26, 13). Machine-checked: CredentialPool."
-            "select refuses, and the launch parks (ADR-0024)"
+            "no METERED credential is ever selected without explicit "
+            "authorisation — not even when the pool's primary is itself "
+            "metered, which used to authorise unlimited rotation across "
+            "every metered key (rules 25, 26, 13). Machine-checked: "
+            "CredentialPool.select refuses and the launch parks. HARD "
+            "describes the SELECTION only; whether the child then spends "
+            "some other key is credentials/child_honours_the_binding and "
+            "credentials/ambient_isolation (ADR-0024 addendum)"
         ),
     ),
     EnforcementClaim(
-        "credentials", "no_ambient_fallback", EnforcementLevel.HARD,
+        "credentials", "ambient_isolation", EnforcementLevel.SANDBOX_APPROX,
         note=(
-            "a credential whose source variable is unset raises "
-            "CredentialUnavailable rather than returning the ambient "
-            "environment. Inheriting would launch as whatever identity is "
-            "configured and report a successful rotation (ADR-0024)"
+            "a bound launch has every pool source variable and every name "
+            "in SENSITIVE_ENVIRONMENT_VARIABLES removed from its "
+            "environment, so an agent cannot simply read a key the kernel "
+            "refused to select. It is a deny-LIST, not an allow-list: a "
+            "provider variable nobody listed still reaches the child, and "
+            "HOME must, so a cached session token on disk is reachable "
+            "regardless (ADR-0024 addendum)"
         ),
     ),
     EnforcementClaim(
-        "credentials", "child_honours_the_binding", EnforcementLevel.PROMPT_ONLY,
+        "credentials", "no_ambient_fallback", EnforcementLevel.SANDBOX_APPROX,
+        note=(
+            "a credential whose source variable is unset or EMPTY raises "
+            "CredentialUnavailable rather than returning the ambient "
+            "environment. Claimed HARD until an independent review found "
+            "four ways past it — a record-mode cassette dropping the env, "
+            "a pool with no hold gate, an empty-string value, and "
+            "env_clear beating env_from — all repaired. It is "
+            "SANDBOX_APPROX because the guarantee still depends on every "
+            "duck-typed wrapper runner forwarding `env`, which no type "
+            "enforces (ADR-0024 addendum)"
+        ),
+    ),
+    EnforcementClaim(
+        "credentials", "child_honours_the_binding", EnforcementLevel.IGNORED,
         note=(
             "THE LIMIT OF THIS WHOLE MECHANISM. The kernel builds the "
             "child's environment and passes it to Popen; it cannot verify "
@@ -865,7 +885,12 @@ GNOSIS_ENFORCEMENT = EnforcementMatrix([
             "prefers a cached session token, a config file or an OS "
             "keychain would run every 'rotation' as the same identity, "
             "and every check here would still pass. Verifying it needs a "
-            "provider-side signal the kernel does not have (ADR-0024)"
+            "provider-side signal the kernel does not have. Declared "
+            "PROMPT_ONLY at first, which was one level too generous: "
+            "PROMPT_ONLY means asked-for-not-enforced and NOTHING asks — "
+            "there is no instruction to the CLI, no post-hoc check, and "
+            "HOME reaches the child so a cached session token is right "
+            "there. IGNORED is the honest level (ADR-0024 addendum)"
         ),
     ),
     EnforcementClaim(

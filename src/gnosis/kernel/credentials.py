@@ -28,6 +28,26 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+# Variables that carry a provider identity and are NOT declared by any
+# credential in a pool. They are stripped from every bound launch.
+#
+# This list is a mitigation, not a proof, and saying so is the point: the
+# strip used to remove only the pool's OWN source variables, so a child
+# launched on a subscription seat still had the operator's ambient
+# `ANTHROPIC_API_KEY` in its environment and could spend it — the
+# boundary enforced against the kernel and not against the agent, which
+# is the only party the rule is about (independent review). A name absent
+# from this list still reaches the child; `Credential.env_clear` is how a
+# deployment adds its own.
+SENSITIVE_ENVIRONMENT_VARIABLES: frozenset[str] = frozenset({
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_API_KEY",
+    "OPENAI_API_KEY", "OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY",
+    "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+    "AWS_BEARER_TOKEN_BEDROCK",
+})
+
 
 class CredentialKind(str, Enum):
     """What using this credential COSTS, which is what makes it a boundary."""
@@ -86,7 +106,13 @@ class Credential:
         environment carries, report success, and bill somebody nobody
         chose — an availability optimisation that crossed a boundary.
         """
-        missing = [parent for parent in self.env_from.values() if parent not in base]
+        # An EMPTY value is missing. Every CLI treats an empty key as
+        # unset and falls back to its config file or keychain, so binding
+        # one is the ambient fallback wearing a successful rotation's
+        # clothes — and `set VAR=` produces exactly that (independent
+        # review).
+        missing = [parent for parent in self.env_from.values()
+                   if not base.get(parent)]
         if missing:
             raise CredentialUnavailable(
                 f"{self.credential_id}: source variable(s) not set: "
@@ -159,6 +185,10 @@ class CredentialPool:
             for parent in credential.env_from.values()
         )
 
+    def stripped_variables(self) -> frozenset[str]:
+        """Everything removed from a bound child's environment."""
+        return self.source_variables() | SENSITIVE_ENVIRONMENT_VARIABLES
+
     def launch_environment(self, credential: Credential,
                            base: Mapping[str, str]) -> dict[str, str]:
         """The child's environment for `credential`, and NOTHING else's.
@@ -176,15 +206,38 @@ class CredentialPool:
         kernel stores it under.
         """
         stripped = {name: value for name, value in base.items()
-                    if name not in self.source_variables()}
-        # Bind from the FULL base — the source variables were only removed
+                    if name not in self.stripped_variables()}
+        for name in credential.env_clear:
+            stripped.pop(name, None)
+        # Bind LAST, from the FULL base: the source variables were removed
         # from what the child sees, not from what the kernel may read.
+        #
+        # Order matters and it used to be the other way round here while
+        # `environment()` did it this way — so the same credential yielded
+        # two different environments, and on the launch path a variable
+        # named in BOTH `env_clear` and `env_from` was cleared after being
+        # bound. That silently unbound the chosen credential and the child
+        # fell back to whatever it found on disk, with `rotations`
+        # recording a successful rotation (independent review). "Clear the
+        # stale one, then bind mine" is the idiom; it must mean that.
         bound = credential.environment(base)
         for child_var in credential.env_from:
             stripped[child_var] = bound[child_var]
-        for name in credential.env_clear:
-            stripped.pop(name, None)
         return stripped
+
+    def allowed(self, authorised_kinds: frozenset[CredentialKind] | None = None,
+                ) -> tuple[Credential, ...]:
+        """The credentials this caller may use, in declared order.
+
+        Separate from `select` so a caller can ask "which of these could I
+        legitimately fall back to" without also asking "which is free
+        right now" — the probe path needs the first question answered
+        while the answer to the second is no.
+        """
+        allow = {self.primary.kind} - {CredentialKind.METERED}
+        if authorised_kinds:
+            allow |= set(authorised_kinds)
+        return tuple(c for c in self.credentials if c.kind in allow)
 
     def select(
         self,
@@ -203,7 +256,14 @@ class CredentialPool:
         boundary this caller has no authority to cross. A park is not a
         failure (rule 6) and nobody is charged for it (rule 7).
         """
-        allowed = {self.primary.kind}
+        # Rotation is free among kinds that cost nothing to switch
+        # between. METERED is never free — not even when the PRIMARY is
+        # metered, which used to authorise unlimited rotation across every
+        # metered key in the pool with no authorisation at all: an
+        # exhausted metered key simply became a second one and the spend
+        # doubled (independent review). Rule 26 is about money nobody
+        # authorised, and the per-key case is exactly that.
+        allowed = {self.primary.kind} - {CredentialKind.METERED}
         if authorised_kinds:
             allowed |= set(authorised_kinds)
         skipped: list[tuple[str, str]] = []

@@ -526,13 +526,26 @@ class RateLimitHold:
     def restrictiveness(self) -> tuple[int, float]:
         """Sort key: how much this hold forbids.
 
-        ACCOUNT outranks PROBE, and an unknown window (None) outranks any
-        known one — "we do not know when it reopens" forbids more than a
-        deadline. Among known windows the LATER reset wins: keeping an
-        earlier one reopened a window a later durable record says is
-        still shut (Codex review)."""
-        scope_rank = 1 if self.scope is HoldScope.ACCOUNT else 0
-        return (scope_rank, float("inf") if self.reset_at is None else self.reset_at)
+        An unknown window (None) outranks any known one — "we do not know
+        when it reopens" forbids more than a deadline. Among known windows
+        the LATER reset wins: keeping an earlier one reopened a window a
+        later durable record says is still shut (Codex review).
+
+        Scope is deliberately NOT part of this key. It used to be, with
+        ACCOUNT outranking PROBE, which forced `narrow` to DESTROY the
+        hold it replaced — otherwise the ACCOUNT row simply outranked the
+        PROBE row and the probe never took effect. Destroying it meant
+        that when the probe lease expired the credential was left with no
+        hold at all: wide open, and unprobeable ever after, because
+        `probe_is_due` needs an ACCOUNT hold to narrow. A mechanism whose
+        failure mode is "more open than not having it" is worse than
+        absent (independent review).
+
+        So a PROBE now SUSPENDS rather than replaces, and the two are
+        ordered by `decided_at` — see `HoldRegistry.reconcile`. This key
+        orders competing OBSERVATIONS, which is all it was ever able to
+        do honestly."""
+        return (0, float("inf") if self.reset_at is None else self.reset_at)
 
     def expired(self, now: float) -> bool:
         # A hold with an unknown window never expires on its own: guessing
@@ -559,10 +572,32 @@ class HoldRegistry:
             if hold.expired(now):
                 continue
             current = rebuilt.get(hold.credential)
-            # The MOST RESTRICTIVE competing hold wins, by comparison
-            # rather than by iteration order: reconcile is a rebuild, and
-            # a rebuild whose answer depends on record order is not one.
-            if current is None or hold.restrictiveness() > current.restrictiveness():
+            if current is None:
+                rebuilt[hold.credential] = hold
+                continue
+            # A LIVE PROBE governs. It is a DECISION, not an observation:
+            # the only way one exists is a deliberate `narrow`, and by
+            # this line the expired ones are already gone. While it lives
+            # it admits its holder and nobody else; when its lease expires
+            # the hold it SUSPENDED is still in the rows and governs
+            # again. That is the whole reason a narrow no longer destroys
+            # what it covers — the old ordering (ACCOUNT over PROBE)
+            # forced it to, and a probe lease expiring then left the
+            # credential with no hold at all: wide open, and unprobeable
+            # ever after (independent review).
+            #
+            # No timestamps: a rebuild whose answer depends on wall-clock
+            # ties, or on the order rows happen to be read, is not one.
+            # A probe that turns out to have hit the limit is ended by
+            # `observe`, which supersedes it — not by out-ranking.
+            if current.scope is not hold.scope:
+                if hold.scope is HoldScope.PROBE:
+                    rebuilt[hold.credential] = hold
+                continue
+            # Two observations of the same kind: the MOST RESTRICTIVE
+            # wins, by comparison rather than by iteration order — a
+            # rebuild whose answer depends on record order is not one.
+            if hold.restrictiveness() > current.restrictiveness():
                 rebuilt[hold.credential] = hold
         self._holds = rebuilt
         return sorted(rebuilt.values(), key=lambda h: h.credential)

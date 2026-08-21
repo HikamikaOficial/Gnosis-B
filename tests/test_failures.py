@@ -303,13 +303,60 @@ class TestRateLimitHolds(unittest.TestCase):
         ], now=100.0)
         self.assertIsNone(registry.hold_for("claude:nicol").reset_at)
 
-    def test_account_hold_outranks_a_probe_hold_for_the_same_credential(self):
+    def test_a_live_probe_governs_the_hold_it_suspends(self):
+        # REVERSED, deliberately. ACCOUNT used to outrank PROBE, which
+        # forced `narrow` to DESTROY the row it replaced — otherwise the
+        # probe never took effect. Destroying it meant a probe lease that
+        # expired unanswered left the credential with NO hold: wide open,
+        # and unprobeable ever after, because `probe_is_due` needs an
+        # ACCOUNT row to narrow. A mechanism whose failure mode is more
+        # open than not having it is worse than absent (independent
+        # review of ADR-0023).
         self.registry.reconcile([
-            RateLimitHold("claude:nicol", HoldScope.PROBE, "probe", reset_at=200.0),
-            RateLimitHold("claude:nicol", HoldScope.ACCOUNT, "shut", reset_at=200.0),
+            RateLimitHold("claude:nicol", HoldScope.PROBE, "probe", reset_at=200.0,
+                          probe_holder="RUN-P"),
+            RateLimitHold("claude:nicol", HoldScope.ACCOUNT, "shut", reset_at=900.0),
         ], now=100.0)
-        self.assertEqual(self.registry.hold_for("claude:nicol").scope, HoldScope.ACCOUNT)
-        self.assertFalse(self.registry.admits("claude:nicol", now=100.0, is_resume=True))
+        self.assertEqual(self.registry.hold_for("claude:nicol").scope, HoldScope.PROBE)
+        # It still admits ONLY its holder, which is what the old ordering
+        # was really protecting.
+        self.assertTrue(self.registry.admits("claude:nicol", now=100.0,
+                                             runner_id="RUN-P"))
+        self.assertFalse(self.registry.admits("claude:nicol", now=100.0))
+        self.assertFalse(self.registry.admits("claude:nicol", now=100.0,
+                                              runner_id="RUN-OTHER"))
+
+    def test_when_the_probe_lease_expires_the_suspended_hold_governs_again(self):
+        # The property the old model could not express at all.
+        rows = [
+            RateLimitHold("claude:nicol", HoldScope.ACCOUNT, "shut", reset_at=900.0),
+            RateLimitHold("claude:nicol", HoldScope.PROBE, "probe", reset_at=200.0,
+                          probe_holder="RUN-DEAD"),
+        ]
+        self.registry.reconcile(rows, now=100.0)
+        self.assertEqual(self.registry.hold_for("claude:nicol").scope, HoldScope.PROBE)
+
+        self.registry.reconcile(rows, now=250.0)      # the probe holder died
+        hold = self.registry.hold_for("claude:nicol")
+        self.assertIsNotNone(hold, "an abandoned probe left the credential wide open")
+        self.assertEqual(hold.scope, HoldScope.ACCOUNT)
+        self.assertFalse(self.registry.admits("claude:nicol", now=250.0,
+                                              runner_id="RUN-DEAD"))
+
+    def test_the_rebuild_does_not_depend_on_the_order_rows_are_read(self):
+        # `reconcile` is a rebuild; an answer that depends on iteration
+        # order is not one. The new scope rule must hold both ways round.
+        rows = [
+            RateLimitHold("claude:nicol", HoldScope.ACCOUNT, "shut", reset_at=900.0),
+            RateLimitHold("claude:nicol", HoldScope.PROBE, "probe", reset_at=200.0,
+                          probe_holder="RUN-P"),
+        ]
+        first = HoldRegistry()
+        first.reconcile(rows, now=100.0)
+        second = HoldRegistry()
+        second.reconcile(list(reversed(rows)), now=100.0)
+        self.assertEqual(first.hold_for("claude:nicol").scope,
+                         second.hold_for("claude:nicol").scope)
 
     def test_expired_holds_are_dropped_on_reconcile(self):
         self.registry.reconcile(

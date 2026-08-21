@@ -229,6 +229,17 @@ class ReplayingCLIRunner:
                     session_id=session_id, permission_mode=permission_mode,
                     model=model, mcp=mcp, extra_args=extra_args,
                     cancellation_token=cancellation_token, heartbeat_fn=heartbeat_fn,
+                    # FORWARDED. This class is record/replay, and RECORD is
+                    # the default mode: on a cassette miss a real child
+                    # runs and really spends a credential. Accepting `env`
+                    # and dropping it here meant the kernel decided one
+                    # identity and the child authenticated as the ambient
+                    # one, while `Rotation` recorded the decision — the
+                    # fiction about billing this whole mechanism exists to
+                    # prevent (independent review). It stays out of the
+                    # cassette KEY, which is the separate and still-true
+                    # concern.
+                    env=env,
                 )
             except Exception as exc:  # noqa: BLE001 - re-raised below, after recording
                 # The call HAPPENED — it may have cost money and it may

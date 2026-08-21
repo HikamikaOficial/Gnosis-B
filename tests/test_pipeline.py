@@ -33,12 +33,14 @@ from gnosis.kernel.policy import (
     RuleOutcome,
     Verdict,
 )
+from gnosis.kernel.replay import InteractionStore, ReplayMode
 from gnosis.kernel.run_store import RunStore
 from gnosis.kernel.scheduler import HoldStore, TaskScheduler
 from gnosis.kernel.verification import CommandVerifier
 from gnosis.kernel.worktree import WorktreeManager
 from gnosis.runner.capture import ExecutionResult
 from gnosis.runner.gated_runner import CredentialHeld, GatedAgentRunner
+from gnosis.runner.replay_runner import ReplayingCLIRunner
 from gnosis.runner.retry import RetryPolicy
 
 _FAST_RETRY = RetryPolicy(max_attempts=1, backoff_base_s=0.01, backoff_factor=2.0, max_backoff_s=0.02)
@@ -876,6 +878,43 @@ class TestRotationReachesTheLaunch(_PipelineTestCase):
         self.assertIn("seat-a", payload)
         self.assertIn("SEAT_A_TOKEN", payload)      # the variable NAME
         self.assertNotIn("aaa", payload)            # never the value
+
+    def test_a_pool_without_a_hold_gate_still_binds(self):
+        # It used to be ignored entirely — no rotation, no binding, no
+        # error — because the check was `holds is not None AND credentials
+        # is not None`. The one guarantee the mechanism sells was given
+        # away by a missing collaborator.
+        agent = _EnvRecordingAgent()
+        runner = GatedAgentRunner(
+            inner=agent, policy=_permissive(), exec_root=self.repo,
+            stage="review", task_id="TASK-1", policy_actor="agent://worker-a",
+            credentials=self._pool(), base_environment=self.BASE,
+        )
+        self._run(runner)
+        self.assertIsNotNone(agent.environments[0], "the pool was ignored")
+        self.assertEqual(agent.environments[0]["CLAUDE_TOKEN"], "aaa")
+
+    def test_a_recording_runner_forwards_the_binding_to_the_real_child(self):
+        # RECORD is the default mode and a cassette miss runs a real
+        # child that really spends a credential. Accepting `env` and
+        # dropping it meant the kernel decided one identity and the child
+        # authenticated as the ambient one.
+        inner = _EnvRecordingAgent()
+        recording = ReplayingCLIRunner(
+            store=InteractionStore(self.root / "cassette.json", ReplayMode.RECORD),
+            inner=inner,
+        )
+        runner = GatedAgentRunner(
+            inner=recording, policy=_permissive(), exec_root=self.repo,
+            stage="review", task_id="TASK-1", policy_actor="agent://worker-a",
+            holds=self._gate(), credentials=self._pool(),
+            base_environment=self.BASE,
+        )
+        self._run(runner, "recorded")
+        self.assertEqual(inner.environments[0]["CLAUDE_TOKEN"], "aaa")
+        # And the secret is not in the cassette key.
+        cassette = (self.root / "cassette.json").read_text(encoding="utf-8")
+        self.assertNotIn("aaa", cassette)
 
     def test_without_a_pool_nothing_changes(self):
         # A runner with no credential configuration behaves exactly as it

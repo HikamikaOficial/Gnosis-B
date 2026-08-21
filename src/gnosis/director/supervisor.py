@@ -39,13 +39,23 @@ L-0024's shape, and it applies to pacing as much as to budgets.
 """
 from __future__ import annotations
 
-import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from ..kernel.budget import BudgetExhausted
+from ..kernel.claims import GrantHeartbeatPump, StaleClaimError
+from ..kernel.lease import StaleLeaseError
+from ..runner.gated_runner import CredentialHeld
 from .work_queue import ClaimedWork, WorkQueue
+
+# Raised by a handler when the work could not START, for reasons that
+# are nobody's fault and that time fixes. Rules 6 and 7: a park is not a
+# failure and never counts against the agent.
+_PARK_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    CredentialHeld, BudgetExhausted,
+)
 
 
 class Disposition(str, Enum):
@@ -58,11 +68,20 @@ class Disposition(str, Enum):
 
 class StopReason(str, Enum):
     QUEUE_EMPTY = "QUEUE_EMPTY"
+    # Nothing claimable, but only because every brief is backing off.
+    ALL_WAITING = "ALL_WAITING"
     MAX_BRIEFS = "MAX_BRIEFS"
     WALL_CLOCK = "WALL_CLOCK"
     CONSECUTIVE_PARKS = "CONSECUTIVE_PARKS"
     HANDLER_RAISED = "HANDLER_RAISED"
     INVALID_OUTPUT = "INVALID_OUTPUT"
+    # The claim was reclaimed while the handler ran. Not a failure of the
+    # work and not this worker's to finish (rule 7).
+    DEPOSED = "DEPOSED"
+    # A transition refused because ownership had moved on. Named rather
+    # than escaping: "every exit names its reason" was false while a
+    # StaleClaimError could discard the whole report (independent review).
+    OWNERSHIP_LOST = "OWNERSHIP_LOST"
 
 
 @dataclass(frozen=True)
@@ -121,6 +140,8 @@ class SupervisionReport:
     parked: tuple[str, ...] = field(default_factory=tuple)
     blocked: tuple[str, ...] = field(default_factory=tuple)
     errors: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+    # (brief_id, not_before) for briefs that exist but are paced.
+    waiting: tuple[tuple[str, float], ...] = field(default_factory=tuple)
 
     @property
     def handled(self) -> int:
@@ -133,6 +154,7 @@ class SupervisionReport:
             "completed": list(self.completed), "parked": list(self.parked),
             "blocked": list(self.blocked),
             "errors": [list(pair) for pair in self.errors],
+            "waiting": [[brief_id, at] for brief_id, at in self.waiting],
         }
 
 
@@ -144,12 +166,24 @@ class WorkerSupervisor:
         queue: WorkQueue,
         backoff: BackoffPolicy | None = None,
         policy: SupervisorPolicy | None = None,
-        clock: Callable[[], float] = time.time,
+        heartbeat_interval_s: float = 20.0,
     ) -> None:
         self.queue = queue
+        self.heartbeat_interval_s = heartbeat_interval_s
         self.backoff = backoff or BackoffPolicy()
         self.policy = policy or SupervisorPolicy()
-        self.clock = clock
+        # ONE clock, and it is the QUEUE's. There used to be a `clock`
+        # parameter here: `not_before` was written with the supervisor's
+        # and read with the queue's, and nothing checked they agree. A
+        # supported wiring — `WorkerSupervisor(queue, clock=time.monotonic)`
+        # over a default queue — wrote uptime-scale deadlines that a
+        # wall-clock read always sees as past, so every parked brief was
+        # re-offered at full speed with nothing recorded. A circuit
+        # breaker a legal wiring silently turns off is not a breaker
+        # (independent review). The durable record belongs to the queue,
+        # so the time base does too; there is no longer a second one to
+        # disagree with.
+        self.clock = queue.clock
 
     def run(self, worker_id: str,
             handler: Callable[[ClaimedWork], Disposition]) -> SupervisionReport:
@@ -158,7 +192,24 @@ class WorkerSupervisor:
         Recovery runs first: a previous worker's stranded record comes
         back before this one starts claiming, which is where ADR-0016's
         boot sweep runs for the same reason.
+
+        **The TTL sweep runs before it**, and that ordering is the whole
+        recovery story rather than a detail. `recover()` asks the claims
+        plane whether a claim is still ACTIVE; nothing ages a dead
+        worker's claim OUT of ACTIVE except `WorkAuthority.sweep()`, and
+        until this call existed nothing in production invoked it. A
+        killed worker's brief therefore stayed ACTIVE for ever, `recover`
+        skipped it on every boot, and it sat in `running/` where no scan
+        looks — the exact ghost rule 4 forbids and the exact ghost
+        `recover` was written to prevent. Every test of that path swept by
+        hand, which is why the suite was green over a mechanism nothing
+        called (independent review).
+
+        The sweep is safe to call from any worker: it re-checks expiry
+        inside the claim store's lock at mutation time and never touches a
+        claim younger than its grace window.
         """
+        self.queue.authority.sweep()
         self.queue.recover()
         started = self.clock()
         completed: list[str] = []
@@ -184,15 +235,46 @@ class WorkerSupervisor:
 
             work = self.queue.claim(worker_id)
             if work is None:
-                return self._report(worker_id, StopReason.QUEUE_EMPTY,
-                                    completed, parked, blocked, errors)
+                # "Nothing to do" and "everything is waiting" are
+                # different facts and an operator acts on them
+                # differently. Reporting both as QUEUE_EMPTY made a fully
+                # backed-off queue read as an idle one (independent
+                # review).
+                waiting = self.queue.waiting()
+                reason = (StopReason.ALL_WAITING if waiting
+                          else StopReason.QUEUE_EMPTY)
+                return self._report(worker_id, reason, completed, parked,
+                                    blocked, errors, waiting=waiting)
 
+            # Keep the lease alive for the WHOLE handler. Without this a
+            # handler slower than the lease TTL deposes itself, and the
+            # deposed worker then goes on to stamp and move a record a
+            # NEW owner is running — the engine learned this from a slow
+            # verifier and the supervisor inherited none of it.
+            pump = GrantHeartbeatPump(
+                self.queue.authority, work.grant,
+                interval_s=self.heartbeat_interval_s,
+            )
+            pump.start()
             try:
                 # `object`, not `Disposition`: the annotation is a promise
                 # the runtime cannot enforce, and this loop is the place
                 # that finds out. Typing it honestly is also what keeps
                 # the check below from reading as dead code.
                 returned: object = handler(work)
+            except _PARK_EXCEPTIONS as park:
+                # RULE 6 AND RULE 7. A shut window and an exhausted
+                # budget are not the brief misbehaving, and blocking on
+                # them sent work to a human that only needed to wait —
+                # the supervisor collapsed the project's whole failure
+                # taxonomy into one `handler_raised:` string (independent
+                # review). These are parks, paced like any other.
+                delay = self.backoff.delay_for(work.attempts)
+                self.queue.release(work, reason=f"park:{type(park).__name__}",
+                                   not_before=self.clock() + delay)
+                parked.append(work.brief_id)
+                consecutive_parks += 1
+                continue
             except Exception as exc:  # noqa: BLE001 - see below
                 # The brief is CLAIMED. A handler that raises must not
                 # leave it owned by a worker that has stopped — that is
@@ -204,6 +286,20 @@ class WorkerSupervisor:
                 blocked.append(work.brief_id)
                 errors.append((work.brief_id, f"{type(exc).__name__}: {exc}"))
                 return self._report(worker_id, StopReason.HANDLER_RAISED,
+                                    completed, parked, blocked, errors)
+            finally:
+                pump.stop()
+
+            if pump.deposed is not None:
+                # This worker lost the claim while the handler ran, so a
+                # NEW owner may already be running this brief. Writing
+                # anything now — a stamp, a move, a resolve — would act on
+                # somebody else's record: the transition methods address
+                # it by brief id and prove no ownership. So this worker
+                # touches nothing and names the exit.
+                errors.append((work.brief_id,
+                               f"deposed mid-handler: {pump.deposed}"))
+                return self._report(worker_id, StopReason.DEPOSED,
                                     completed, parked, blocked, errors)
 
             if not isinstance(returned, Disposition):
@@ -221,27 +317,39 @@ class WorkerSupervisor:
                                     completed, parked, blocked, errors)
 
             disposition = returned
-            if disposition is Disposition.COMPLETED:
-                self.queue.complete(work, outcome="COMPLETED")
-                completed.append(work.brief_id)
-                consecutive_parks = 0
-            elif disposition is Disposition.BLOCK:
-                self.queue.block(work, reason="handler_requested_block")
-                blocked.append(work.brief_id)
-                consecutive_parks = 0
-            else:
-                delay = self.backoff.delay_for(work.attempts)
-                self.queue.release(work, reason="parked",
-                                   not_before=self.clock() + delay)
-                parked.append(work.brief_id)
-                consecutive_parks += 1
+            try:
+                if disposition is Disposition.COMPLETED:
+                    self.queue.complete(work, outcome="COMPLETED")
+                    completed.append(work.brief_id)
+                    consecutive_parks = 0
+                elif disposition is Disposition.BLOCK:
+                    self.queue.block(work, reason="handler_requested_block")
+                    blocked.append(work.brief_id)
+                    consecutive_parks = 0
+                else:
+                    delay = self.backoff.delay_for(work.attempts)
+                    self.queue.release(work, reason="parked",
+                                       not_before=self.clock() + delay)
+                    parked.append(work.brief_id)
+                    consecutive_parks += 1
+            except (StaleClaimError, StaleLeaseError) as ownership:
+                # The claims plane refused the write because ownership had
+                # moved. That is the guard working, not a crash — but
+                # letting it escape discarded every brief handled so far
+                # and named no reason for the exit.
+                errors.append((work.brief_id, f"ownership lost: {ownership}"))
+                return self._report(worker_id, StopReason.OWNERSHIP_LOST,
+                                    completed, parked, blocked, errors)
 
     @staticmethod
     def _report(worker_id: str, reason: StopReason, completed: list[str],
                 parked: list[str], blocked: list[str],
-                errors: list[tuple[str, str]]) -> SupervisionReport:
+                errors: list[tuple[str, str]],
+                waiting: list[tuple[str, float]] | None = None,
+                ) -> SupervisionReport:
         return SupervisionReport(
             worker_id=worker_id, stopped_because=reason,
             completed=tuple(completed), parked=tuple(parked),
             blocked=tuple(blocked), errors=tuple(errors),
+            waiting=tuple(waiting or ()),
         )

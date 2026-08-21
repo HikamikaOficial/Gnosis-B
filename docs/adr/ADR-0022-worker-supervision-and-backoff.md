@@ -3,17 +3,18 @@
 - Status: ACCEPTED
 - Date: 2026-08-21
 - Deciders: Claude Fable 5 (autonomous, per standing mandate)
-- Evidence: `.gnosis/evidence/20260821T135555Z/` (695 passed, mypy strict
-  clean over 54 files, ruff at the 19-finding baseline);
+- Evidence: `.gnosis/evidence/20260821T170951Z/` (755 passed, mypy strict
+  clean over 55 files, ruff at the 19-finding baseline), superseding the
+  pre-review capture `20260821T135555Z/` (695 passed);
   `tests/test_supervisor.py` (17 tests),
   `tests/test_work_queue.py::TestACrashBetweenThePlaneAndTheFile` and
   `::TestAWaitNobodyCanSee`.
-- Independent review: **NOT DONE — Codex refused with a usage-limit
-  error** (reset reported as 2026-09-20). This unit ships self-reviewed,
-  and that is a weaker claim than every unit since ADR-0017. See
-  "Self-review" below for what was found without it, and take the
-  findings as evidence of what an independent pass would likely have
-  added, not as a substitute for one.
+- Independent review: **DONE 2026-08-21, verdict FAIL, 19 findings** —
+  by an independent read-only agent in a clean context, **not by Codex**,
+  whose usage limit stood (reset reported 2026-09-20). Three criticals.
+  Eight findings repaired, seven recorded as still open; see the
+  addendum. A same-family reviewer is a weaker channel than a different
+  model, and the addendum says so rather than implying parity.
 - Builds on: ADR-0019 (the queue and `drain`), ADR-0016 (the boot sweep
   and the hold plane), ADR-0006 (claims and leases).
 
@@ -88,7 +89,8 @@ spinning through it re-learns the same answer.
 
 ## Known limitations (stated, not implied)
 
-- **No independent review.** The first unit since ADR-0016 without one.
+- **The independent review was not Codex.** See the addendum: a
+  same-family reviewer shares blind spots a different model would not.
 - **`wall_clock_s` bounds the loop, not a handler.** Nothing here can
   interrupt a call in progress; one long handler overruns it arbitrarily.
 - **No "max same failure".** `max_consecutive_parks` counts parks
@@ -108,10 +110,12 @@ spinning through it re-learns the same answer.
   proceeds and recovery falls back to claim-status routing — where it was
   before. It can add information, never withhold a move.
 
-## Self-review (no independent verdict available)
+## Self-review (written before any independent verdict was available)
 
 Four defects found by attacking the same categories the review brief
-named. Three were real and are repaired:
+named. Three were real and are repaired. Kept verbatim, because the
+addendum below is the measurement of what this section MISSED — nineteen
+findings against four, three of them critical.
 
 1. *(critical, repaired)* **A block decision was lost to a crash.**
    Reproduced directly: claim, release the claim, crash before the move;
@@ -137,3 +141,89 @@ named. Three were real and are repaired:
 Typing the handler result as `object` rather than `Disposition` is what
 makes the guard reachable to mypy — the annotation is a promise the
 runtime cannot enforce, and this loop is where that is discovered.
+
+## Independent review addendum (2026-08-21, verdict FAIL, 19 findings)
+
+Reviewed by an independent read-only agent in a clean context, **not by
+Codex** — its usage limit stood. A same-family reviewer is a weaker
+channel than a different model and this addendum does not pretend
+otherwise; it is the review this unit would otherwise never have had.
+The reviewer modified nothing (tree fingerprint identical either side).
+
+**Three criticals, all real, all reproduced before repair.**
+
+1. *(critical, repaired)* **`WorkAuthority.sweep()` had no production
+   caller, so the entire crash-recovery story was inoperative.**
+   `recover()` asks the claims plane whether a claim is still ACTIVE;
+   nothing ages a dead worker's claim OUT of ACTIVE except the TTL sweep.
+   A killed worker's brief therefore stayed ACTIVE for ever, `recover`
+   skipped it on every boot, and it sat in `running/` where no scan looks
+   — the exact ghost rule 4 forbids and the exact ghost `recover` exists
+   to prevent. Every test of that path swept by hand, so the suite was
+   green over a mechanism nothing called. `run()` now sweeps before
+   recovering. Verified: `grep -rn "\.sweep(" src/` returned nothing.
+2. *(critical, repaired)* **`_move` invented a record when the origin had
+   vanished, clearing the attempt bound.** The stub `{"brief":
+   {"brief_id": ...}}` had no `attempts`, so the next `claim` read 0 — an
+   automated path clearing the bound the module swears only an operator
+   can clear — and no `title`, so `DirectorBrief.from_dict` raised inside
+   `claim` *after* the grant was taken, poisoning the brief permanently.
+   A vanished record is now recorded in `skipped` and the move abandoned.
+3. *(critical, partially repaired)* **"Recovery runs first" was true;
+   what it recovered was not paced, and two supervisors could race it.**
+   The pacing half is repaired (see 4); the concurrent-`recover()` race
+   is NOT — see Still open.
+
+4. *(major, repaired)* **A deposed worker wrote to the live worker's
+   record.** No `GrantHeartbeatPump` was started, so any handler slower
+   than the lease TTL deposed itself and then stamped and moved a record
+   a NEW owner was running. The pump now covers the whole handler, and a
+   worker that finds itself deposed touches nothing and exits as
+   `DEPOSED`.
+5. *(major, repaired)* **"Every exit names its reason" was false.** A
+   `StaleClaimError`/`StaleLeaseError` from any transition escaped `run()`
+   and discarded the whole report. Named as `OWNERSHIP_LOST`.
+6. *(major, repaired)* **Two clocks.** `not_before` was written with the
+   supervisor's clock and read with the queue's, and nothing checked they
+   agree: `WorkerSupervisor(queue, clock=time.monotonic)` over a default
+   queue wrote deadlines a wall-clock read always sees as past, so every
+   parked brief resumed at full speed with nothing recorded. The
+   parameter is gone; the supervisor takes the queue's clock.
+7. *(major, repaired)* **A rate limit sent work to a human.** The bare
+   `except Exception` blocked ANY raise, so `CredentialHeld` and
+   `BudgetExhausted` — rules 6 and 7, the things the hold plane exists to
+   treat as parks — ended as briefs awaiting an operator. They park, paced.
+8. *(major, repaired)* **`QUEUE_EMPTY` was reported over a queue full of
+   backing-off briefs.** `ALL_WAITING` now exists and the report carries
+   `waiting`. The test that asserted the old behaviour asserted it as
+   correct.
+
+**Still open, and stated rather than quietly carried:**
+
+- **Concurrent `recover()` is not safe.** Two supervisors starting
+  together can both read a stranded record and both write it, leaving one
+  brief simultaneously in `running/` and `pending/`. `recover` holds no
+  lock and never re-checks the claim at mutation time — the opposite of
+  `ClaimStore.reclaim_if`, which this kernel documents as the right shape.
+- **A crash that was not a park resumes unpaced.** Recovery returns the
+  record with no `not_before`, so a crash loop re-launches at full speed,
+  bounded only by `max_attempts`.
+- **`supervisor.queue.requeue(...)` is one attribute hop away.** The line
+  the module draws is a docstring, and the test that "pins" it asserts a
+  `hasattr`. There is no capability or policy gate at that boundary.
+- **`_stamp`'s fallback is not neutral for BLOCK.** If the stamp no-ops,
+  a block reverts to claim-status routing, which targets `pending` — the
+  critical defect this ADR reports as repaired, still reachable by that
+  path.
+- **Default breakers are off.** `max_briefs` and `wall_clock_s` default
+  to `None`, so a default-constructed supervisor is a `while True` bounded
+  only by `max_consecutive_parks` — a counter held in memory, which is the
+  very argument the module uses to justify making `not_before` durable.
+- **`WorkerSupervisor` still has no production caller.** A class that
+  could be a worker process exists; the process does not.
+- **The mutation checks this ADR cites left no artifact.** They were run,
+  and by this project's own bar a claim about a red run with no captured
+  red output is not evidence.
+
+Evidence for the repairs: `.gnosis/evidence/20260821T170951Z/` (755
+passed, mypy clean over 55 files, ruff at the 19 baseline).

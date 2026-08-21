@@ -195,18 +195,48 @@ class GatedAgentRunner:
 
         rotation: Rotation | None = None
         credential_id: str | None = None
-        if self.holds is not None and self.credentials is not None:
+        probe_run_id: str | None = None
+        if self.credentials is not None:
+            # A pool WITHOUT a hold gate used to be ignored entirely — no
+            # rotation, no binding, no error — so the one guarantee this
+            # mechanism sells was given away by a missing collaborator
+            # (independent review). With no gate, nothing is held: every
+            # credential admits, and the binding still happens.
+            gate = self.holds
+
+            def admits(cid: str) -> bool:
+                return True if gate is None else bool(gate.admits(credential=cid))
             # ROTATION. Ask the pool which identity may run now, and let
             # the hold plane answer per credential — "the account is held"
             # and "this key is held" stopped being the same statement.
             rotation = self.credentials.select(
-                lambda cid: bool(self.holds.admits(credential=cid))
-                if self.holds is not None else False,
-                authorised_kinds=self.authorised_kinds,
-            )
+                admits, authorised_kinds=self.authorised_kinds)
+            if rotation is None and gate is not None:
+                # Every allowed credential is held — but one of those
+                # holds may be the kernel's OWN guess, and a guess is
+                # exactly what a probe exists to test. Rotation used to
+                # park before reaching the probe block below, so with a
+                # pool configured the probe caller was dead again: the
+                # very defect ADR-0023 was written to close, one level
+                # deeper (independent review).
+                for candidate_credential in self.credentials.allowed(
+                        self.authorised_kinds):
+                    cid = candidate_credential.credential_id
+                    self._probe_seq += 1
+                    granted = gate.claim_probe(
+                        f"{self.task_id}:{self.stage}:{self._probe_seq}",
+                        credential=cid)
+                    holder = getattr(granted, "probe_holder", None)
+                    if holder is not None and gate.admits(
+                            probe_run_id=holder, credential=cid):
+                        rotation = Rotation(credential=candidate_credential,
+                                            skipped=(("all", "held; probing"),))
+                        probe_run_id = holder
+                        break
             if rotation is None:
-                # Every credential is held, or behind a boundary this
-                # caller has no authority to cross. Both are parks.
+                # Every credential is held with no guess to test, or
+                # behind a boundary this caller has no authority to
+                # cross. Both are parks.
                 raise CredentialHeld(
                     f"no credential admits {self.stage} for task {self.task_id}; "
                     f"tried {list(self.credentials.ids())}"
@@ -222,8 +252,8 @@ class GatedAgentRunner:
             launch_env = self.credentials.launch_environment(
                 rotation.credential, self._base_environment)
 
-        probe_run_id: str | None = None
-        if self.holds is not None and not self.holds.admits(credential=credential_id):
+        if probe_run_id is None and self.holds is not None and not self.holds.admits(
+                credential=credential_id):
             # Held — but if the hold is the kernel's own GUESS about when
             # the window reopens, one launch should test it rather than
             # every parked round resuming together when the guess elapses.
@@ -236,10 +266,12 @@ class GatedAgentRunner:
             # mechanism has already been repaired for once.
             self._probe_seq += 1
             candidate = f"{self.task_id}:{self.stage}:{self._probe_seq}"
-            if (self.holds.claim_probe(candidate, credential=credential_id) is not None
-                    and self.holds.admits(probe_run_id=candidate,
-                                          credential=credential_id)):
-                probe_run_id = candidate
+            granted = self.holds.claim_probe(candidate, credential=credential_id)
+            # The holder is minted by the claim, not asserted by us.
+            holder = getattr(granted, "probe_holder", None)
+            if holder is not None and self.holds.admits(
+                    probe_run_id=holder, credential=credential_id):
+                probe_run_id = holder
             else:
                 # Checked BEFORE the policy question: spending a verdict on
                 # an action that cannot run anyway is noise in the audit

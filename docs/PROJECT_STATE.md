@@ -103,10 +103,10 @@ governs the order of work here: **prefer wiring over documenting**.
   compete) from decisions (which supersede, with a reason). No
   independent review: both channels are unavailable.
 
-Suite: **740 tests, all passing**; mypy strict clean (47 files); ruff at
+Suite: **755 tests, all passing**; mypy strict clean (47 files); ruff at
 the recorded backlog baseline (19 pre-existing findings in untouched
 files, ratcheted down from 20; `.gnosis/state/lint_baseline.json` fails the run if it rises).
-Captured transcript, not prose: `.gnosis/evidence/20260821T154202Z/`.
+Captured transcript, not prose: `.gnosis/evidence/20260821T170951Z/`.
 
 ## Integration milestone (COMPLETE)
 
@@ -247,6 +247,26 @@ units of debt now. Self-review found five defects, two critical: the
 launch could not bind a credential at all, and once it could, the child
 still had every OTHER credential's secret in its environment, so an agent
 could spend the key the kernel had refused to select (L-0035).
+
+## Review debt paid: three FAILs, 47 findings (2026-08-21)
+
+Codex is rate-limited until 2026-09-20, so ADR-0022, ADR-0023 and
+ADR-0024 had shipped self-reviewed. Rather than add a fourth unreviewed
+unit they were reviewed by independent read-only agents in clean
+contexts — a weaker channel than a different model, and each ADR header
+says so.
+
+**All three returned FAIL.** 47 findings against the 14 the self-reviews
+had found; six criticals none of them saw (L-0041). The worst was not in
+the new code at all: `WorkAuthority.sweep()` had **no production caller**,
+so every recovery claim in this repo that depends on a claim ageing out
+of ACTIVE was inert, and the suite was green because every test swept by
+hand (L-0036). The second worst was a probe whose failure mode left the
+credential MORE open than not probing at all (L-0037).
+
+26 findings repaired and verified; 17 recorded as still open in the
+addenda rather than carried silently. Rule 9 verified mechanically: the
+tree fingerprint was identical before and after the reviews.
 
 ## Fixed locations
 

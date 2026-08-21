@@ -18,26 +18,31 @@ cd "C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi"
 uv run --no-project --with pytest --with mypy --with ruff python scripts/capture_evidence.py
 ```
 
-Green baseline first (740 passed, mypy clean, ruff at baseline), then
-**pay down the review debt** rather than adding a sixth unreviewed unit.
-Options, in order of preference: (a) re-run `codex exec --sandbox
-read-only --json` if quota has returned — check with a one-line probe
-first, it is cheap; (b) if it has not, park new kernel milestones and do
-the reviews with a different independent channel when one exists. Rule 10
-says INDEPENDENT BEFORE INTERACTION for critical decisions, and
-ownership, spending and credentials are exactly that.
+Green baseline first (755 passed, mypy clean, ruff at baseline), then
+**the seventeen findings the reviews left open**. They are listed at the
+end of each ADR addendum; the ones that matter most, in order:
 
-**REVIEW DEBT — three units owed.** (ADR-0015 and ADR-0016 are NOT part
-of it: both were reviewed 2026-08-21, verdict FAIL, findings repaired.
-An earlier draft of this list counted them and overstated the debt.)
-- ADR-0022 (worker supervision): claims to attack are "backoff is
-  durable", "every exit names its reason", and the line the supervisor
-  says it does not cross.
-- ADR-0023 (the probe caller): the lead-window mitigation, the abandoned
-  probe holding its lease, and whether any path still stampedes.
-- ADR-0024 (credential rotation): whether the boundary can be crossed
-  without authorisation by ANY path, whether a secret can reach a
-  record, a cassette or a log, and whether the child can still see a
-  credential it was not given.
-Codex reset reported 2026-09-20, re-checked 2026-08-21. Until these are
-reviewed, treat their claims as weaker than the ten units before them.
+1. **Concurrent `recover()` is not safe** (ADR-0022) — two supervisors
+   starting together can leave one brief in `running/` AND `pending/`,
+   ending in a second execution. It needs the `reclaim_if` shape: hold
+   the lock and re-check the claim at mutation time.
+2. **A crash that was not a park resumes unpaced** (ADR-0022).
+3. **`_resolve_probe` is check-then-act** (ADR-0023) — a provider hold
+   placed between its read and its append is erased.
+4. **The credential is absent from the policy action identity**
+   (ADR-0024) — an operator approval for a seat launch is byte-identical
+   to the same launch on a metered key.
+5. **Cassettes and evidence store child streams unredacted** (ADR-0024).
+6. **Rotation provenance is never persisted** (ADR-0024).
+7. **Nothing in `src/` constructs a pool, a scheduler or a pipeline** —
+   no production entry point exists, so several HARD matrix rows are real
+   but inert. This is the largest structural gap and probably the next
+   milestone rather than a repair.
+
+**REVIEW DEBT: PAID, with a weaker channel.** ADR-0022/0023/0024 were
+reviewed 2026-08-21 by independent read-only agents in clean contexts,
+not by Codex (rate-limited, reset reported 2026-09-20). All three FAIL;
+47 findings, 26 repaired, 17 open. When Codex quota returns, re-run all
+three — a same-family reviewer shares blind spots a different model would
+not, and L-0041 now measures the self-review channel at roughly one
+finding in four.

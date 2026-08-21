@@ -456,6 +456,56 @@ class TestACrashBetweenThePlaneAndTheFile(unittest.TestCase):
         self.assertEqual(self.queue.blocked_ids(), [])
 
 
+class TestAVanishedRecordIsNotALicenceToGuess(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.authority = WorkAuthority(
+            ClaimStore(self.root / "c.json"), LeaseStore(self.root / "l.json"),
+            default_ttl_s=300)
+        self.queue = WorkQueue(self.root / "q", self.authority)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_a_move_whose_origin_vanished_does_not_reset_the_attempt_bound(self):
+        # Another worker's recovery moved the record between the plane
+        # call and the move. Inventing a stub here wrote a record with no
+        # `attempts`, so the next claim read 0 — an automated path
+        # clearing the bound the module says only an operator clears.
+        self.queue.enqueue(_brief("BRIEF-1"))
+        for _ in range(3):
+            work = self.queue.claim("worker-a")
+            self.queue.release(work, reason="parked")
+        record = json.loads(
+            (self.root / "q" / "pending" / "BRIEF-1.json").read_text(encoding="utf-8"))
+        self.assertEqual(record["attempts"], 3)
+
+        work = self.queue.claim("worker-a")
+        # A concurrent recovery takes the record away mid-transition.
+        (self.root / "q" / "running" / "BRIEF-1.json").rename(
+            self.root / "q" / "pending" / "BRIEF-1.json")
+        self.queue.release(work, reason="parked")
+
+        survived = json.loads(
+            (self.root / "q" / "pending" / "BRIEF-1.json").read_text(encoding="utf-8"))
+        self.assertEqual(survived["attempts"], 4, "the attempt bound was cleared")
+        self.assertIn("brief", survived)
+        self.assertIn("title", survived["brief"], "the brief payload was destroyed")
+        self.assertTrue(any("vanished" in reason for _, reason in self.queue.skipped))
+
+    def test_a_brief_whose_payload_was_stubbed_is_not_claimable_at_all(self):
+        # The other half of the same defect: a stub record has no title,
+        # so `DirectorBrief.from_dict` raised inside `claim` AFTER the
+        # grant was taken — poisoning the brief for every future worker.
+        self.queue.enqueue(_brief("BRIEF-1"))
+        work = self.queue.claim("worker-a")
+        (self.root / "q" / "running" / "BRIEF-1.json").unlink()
+        self.queue.release(work, reason="parked")
+        self.assertEqual(self.queue.pending_ids(), [])
+        self.assertIsNone(self.queue.claim("worker-b"))
+
+
 class TestAWaitNobodyCanSee(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

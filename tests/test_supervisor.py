@@ -18,8 +18,10 @@ from gnosis.director.supervisor import (
     WorkerSupervisor,
 )
 from gnosis.director.work_queue import WorkQueue
+from gnosis.kernel.budget import BudgetExhausted
 from gnosis.kernel.claims import ClaimStore, WorkAuthority
 from gnosis.kernel.lease import LeaseStore
+from gnosis.runner.gated_runner import CredentialHeld
 
 
 def _brief(brief_id: str) -> DirectorBrief:
@@ -44,11 +46,21 @@ class _SupervisorTestCase(unittest.TestCase):
         self.tmp.cleanup()
 
     def _supervisor(self, backoff=None, policy=None) -> WorkerSupervisor:
-        return WorkerSupervisor(self.queue, backoff=backoff, policy=policy,
-                                clock=lambda: self.now[0])
+        # No clock parameter: the supervisor takes the QUEUE's, so the
+        # two time bases cannot disagree.
+        return WorkerSupervisor(self.queue, backoff=backoff, policy=policy)
 
 
 class TestPacing(_SupervisorTestCase):
+    def test_the_supervisor_cannot_be_given_a_clock_that_disagrees(self):
+        # The wiring that silently disabled backoff: a monotonic
+        # supervisor clock over a wall-clock queue wrote deadlines the
+        # queue always reads as past.
+        supervisor = self._supervisor()
+        self.assertIs(supervisor.clock, self.queue.clock)
+        with self.assertRaises(TypeError):
+            WorkerSupervisor(self.queue, clock=lambda: 0.0)
+
     def test_a_parked_brief_is_not_offered_again_immediately(self):
         # `drain` re-offered instantly; max_attempts stopped the loop and
         # nothing paced it.
@@ -58,7 +70,12 @@ class TestPacing(_SupervisorTestCase):
         report = supervisor.run("worker-a", lambda work: Disposition.PARK)
 
         self.assertEqual(report.parked, ("BRIEF-1",))
-        self.assertEqual(report.stopped_because, StopReason.QUEUE_EMPTY)
+        # ALL_WAITING, not QUEUE_EMPTY: the queue is not empty, everything
+        # in it is paced. Reporting both as "empty" made a fully
+        # backed-off queue read as an idle one, and an operator acts on
+        # those differently (independent review).
+        self.assertEqual(report.stopped_because, StopReason.ALL_WAITING)
+        self.assertEqual([b for b, _ in report.waiting], ["BRIEF-1"])
         # Still pending, but not yet claimable.
         self.assertEqual(self.queue.pending_ids(), ["BRIEF-1"])
         self.assertIsNone(self.queue.claim("worker-b"))
@@ -179,6 +196,33 @@ class TestWhatASupervisorMayNotDecide(_SupervisorTestCase):
         self.assertEqual(self.queue.blocked_ids(), ["BRIEF-1"])
         self.assertEqual(self.queue.pending_ids(), [])
         self.assertIn("RuntimeError", report.errors[0][1])
+
+    def test_a_shut_window_parks_the_brief_it_does_not_send_it_to_a_human(self):
+        # Rules 6 and 7. The bare `except Exception` blocked ANY raise,
+        # so a rate limit — the thing the whole hold plane exists to
+        # treat as a park — ended as a brief awaiting an operator.
+        self.queue.enqueue(_brief("BRIEF-1"))
+
+        def held(work):
+            raise CredentialHeld("window is shut")
+
+        report = self._supervisor(BackoffPolicy(base_s=30.0)).run("worker-a", held)
+
+        self.assertEqual(report.blocked, ())
+        self.assertEqual(report.parked, ("BRIEF-1",))
+        self.assertEqual(self.queue.blocked_ids(), [])
+        self.assertEqual(self.queue.pending_ids(), ["BRIEF-1"])
+        self.assertIsNone(self.queue.claim("worker-b"), "the park was not paced")
+
+    def test_an_exhausted_budget_parks_too(self):
+        self.queue.enqueue(_brief("BRIEF-1"))
+
+        def spent(work):
+            raise BudgetExhausted("max_agent_launches", 3, 3)
+
+        report = self._supervisor(BackoffPolicy(base_s=30.0)).run("worker-a", spent)
+        self.assertEqual(report.parked, ("BRIEF-1",))
+        self.assertEqual(self.queue.blocked_ids(), [])
 
     def test_a_raising_handler_never_leaves_the_brief_claimed(self):
         # The stranding ADR-0019's review found, arriving through a

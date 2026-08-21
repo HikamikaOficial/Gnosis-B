@@ -91,11 +91,25 @@ def main() -> int:
         if proc.returncode != 0:
             failed = True
 
+    # `all_passed` used to be `not failed`, where `failed` forgave ruff for
+    # exiting non-zero as long as it stayed at baseline. A one-line summary
+    # that reads `true` while a gate exited 1 is where a reader stops, and
+    # the reconciliation two levels down is not where they look
+    # (independent review). The verdict is now split: what actually
+    # succeeded, and what is a known, bounded backlog.
+    non_zero = [r["name"] for r in results if r["exit_code"] != 0]
     summary = {
         "captured_at": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
         "results": results,
-        "all_passed": not failed,
+        "all_passed": not failed and not non_zero,
+        "gates_clean": not failed,
+        "non_zero_exits": non_zero,
+        "verdict": (
+            "all gates clean" if not failed and not non_zero
+            else "within baseline; see non_zero_exits" if not failed
+            else "FAILED"
+        ),
     }
     (out_dir / "SUMMARY.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")

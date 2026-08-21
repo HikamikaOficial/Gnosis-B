@@ -291,3 +291,51 @@ Format:
 - Lesson: ask who the rule is ABOUT. A rule about spending is about the party that can spend, and a gate the kernel obeys while the agent retains the capability is a gate against the wrong party — an agent does not have to defeat the check, only to ignore it. Least privilege (rule 13) is what closes it: the child receives the identity it was given and nothing else, so the boundary holds even against a child that never consults it.
 - Operational consequence: `CredentialPool.launch_environment` strips every pool source variable before binding the chosen credential.
 - Revalidation condition: standing rule; no expiry.
+
+## L-0036 — A mechanism nobody calls can be one level BELOW the one you checked
+- Status: VERIFIED
+- Evidence: ADR-0022 addendum finding 1. `WorkQueue.recover()` had production callers, was tested, and was cited in two ADRs as the crash-recovery story. It asks the claims plane whether a claim is still ACTIVE — and `WorkAuthority.sweep()`, the only thing that ages a dead worker's claim OUT of ACTIVE, had no caller anywhere in `src/`. Every test of the path swept by hand, so the suite was green over a mechanism nothing invoked. A killed worker's brief stayed ACTIVE for ever and sat in `running/` where no scan looks: the exact ghost rule 4 forbids.
+- Scope: any recovery, expiry, GC or reconciliation story that depends on a second mechanism changing state in the background.
+- Lesson: checking that YOUR mechanism has a caller is not enough — check that everything it depends on to change state does too. The tell is a test that sets up the precondition by hand: if the suite has to call `sweep()` itself for `recover()` to do anything, then in production nothing calls `sweep()`. Treat "the test arranges the precondition" as the question "who arranges it in production?", and answer it with a grep rather than an assumption.
+- Operational consequence: `WorkerSupervisor.run()` sweeps before recovering; the ordering is documented as the recovery story rather than a detail.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0037 — A safety mechanism whose failure mode is MORE open than its absence is worse than absent
+- Status: VERIFIED
+- Evidence: ADR-0023 addendum finding 1. The probe narrowed an estimated ACCOUNT hold to a one-run PROBE lease, and the `narrow` row DESTROYED the row it replaced. When the probing run died, the lease expired into nothing: no hold, every queued run admitted, and no second probe possible because `probe_is_due` needs an ACCOUNT hold to narrow. Without the probe the credential would have stayed shut until its window ended.
+- Scope: any mechanism that takes custody of protective state — a lease over a lock, a narrowing over a hold, a transaction over a guard.
+- Lesson: ask what the state is when the mechanism FAILS, not only when it succeeds, and compare it against not having the mechanism at all. If the answer is "more permissive", the design is inverted regardless of how well the happy path reads. Custody must be suspension, not replacement: keep the thing you covered so it governs again when you let go. The ADR had this as a Known limitation — described optimistically as "two launches may overlap" — so the gap was not unknown, it was understated, and an understated gap survives review as easily as a hidden one.
+- Operational consequence: a `narrow` row suspends; `HoldRegistry.reconcile` lets a live PROBE govern and the suspended hold govern again on expiry.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0038 — An identity is only unforgeable if it is unguessable
+- Status: VERIFIED
+- Evidence: ADR-0023 addendum finding 5. Probe admission rested entirely on matching `probe_holder`, and the holder was the task id — or `task:stage:1`. Any process holding the task id could assert it, and asserting it WAS the admission. The ADR argued "a claim any caller could make was the original defect; an exact identity is not that", which is true only while the identity cannot be constructed by the caller.
+- Scope: any capability, lease, token or admission keyed on a string the holder is told to present.
+- Lesson: an exact-match check converts a guessable name into a bearer token. Either the name must be unguessable, or admission must require proving you won the allocation. Deriving the identity from data the caller already has (a task id, a stage, a counter) fails both. Minting a secret inside the allocation and returning it keeps attribution — prefix with the caller's name — while making the win the only way to hold it.
+- Operational consequence: `claim_probe` mints `f"{run_id}:{secrets.token_hex(8)}"` and returns it; callers use the returned holder, never the name they passed.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0039 — A wrapper that duck-types an interface will silently drop what you add to it
+- Status: VERIFIED
+- Evidence: ADR-0024 addendum finding 1. `env` was threaded through `CLIRunner`, `ClaudeCLIRunner`, `TaskEngine.execute_task` and `_execute_guarded`, and `ReplayingCLIRunner` — which duck-types the same `run()` — accepted the parameter and did not pass it on. RECORD is its default mode, so a cassette miss ran a real child that spent a real credential as the ambient identity while the audit trail recorded the credential the kernel had chosen. mypy cannot see it: the wrapper's signature is compatible, it just forgets.
+- Scope: any parameter added to an interface with more than one implementation, especially security state (an identity, a token, a sandbox flag, a timeout).
+- Lesson: adding a parameter to a protocol is not the change — forwarding it in every implementation is. Enumerate the implementations by grepping for the method name, not the class, and add a test that asserts each one forwards. A wrapper that accepts and drops is worse than one that raises, because the caller's decision is recorded as having taken effect.
+- Operational consequence: `ReplayingCLIRunner.live()` forwards `env`; a pipeline test asserts a recording runner reaches the child with the binding and keeps the secret out of the cassette.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0040 — Enforce a rule against the party the rule is about
+- Status: VERIFIED
+- Evidence: ADR-0024 addendum finding 5, extending L-0035. `CredentialPool.select` refused to cross into a metered key without authorisation, and `launch_environment` stripped the pool's declared source variables — but an operator's AMBIENT `ANTHROPIC_API_KEY`, declared by no credential, stayed in the environment of a child launched on a subscription seat. The agent did not need to defeat the check; it could ignore it and read the key.
+- Scope: any policy whose subject is an agent, a child process or a user rather than the code that decides.
+- Lesson: after building the decision, ask what CAPABILITY the subject retains. A decision plane that the subject can route around is documentation. And a deny-list is not deny-by-default: closing the names you thought of leaves the ones you did not, so the honest move is to close what you can, say it is a list rather than a boundary, and record the level accordingly.
+- Operational consequence: `SENSITIVE_ENVIRONMENT_VARIABLES` is stripped from every bound launch; `credentials/ambient_isolation` is declared SANDBOX_APPROX, not HARD.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0041 — Self-review finds about a quarter of what an independent pass finds
+- Status: VERIFIED
+- Evidence: measured on three consecutive units. Self-review claimed 3, 6 and 5 defects (14 total). Independent review of the same three units found 19, 13 and 15 (47), including six criticals none of the self-reviews saw — and two of the criticals were MISDESCRIPTIONS inside the self-reviews' own output, where the gap had been noticed and stated optimistically. Consistent with L-0016, which measured 3 found against 8 missed on ADR-0015.
+- Scope: any decision about whether to ship a unit without an independent verdict.
+- Lesson: self-review is worth doing and is not a substitute; the ratio is roughly one in four and the miss is concentrated in exactly the claims the author is most confident about. When the usual reviewer is unavailable, a same-family agent in a clean context still found six criticals — a weaker channel is not the same as no channel, and shipping unreviewed should be the last option rather than the first fallback. Record which channel reviewed, because the strength of the claim depends on it.
+- Operational consequence: ADR-0022/0023/0024 carry addenda naming the channel and separating repaired findings from still-open ones.
+- Revalidation condition: re-measure when a Codex review runs against a unit that also had a same-family review.

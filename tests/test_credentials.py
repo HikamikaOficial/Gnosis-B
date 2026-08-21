@@ -63,6 +63,16 @@ class TestTheBoundary(unittest.TestCase):
         self.assertEqual(chosen.credential.credential_id, "seat-a")
         self.assertEqual(consulted, ["seat-a"])
 
+    def test_a_metered_primary_does_not_authorise_every_metered_key(self):
+        # `allowed = {primary.kind}` meant a metered-primary pool rotated
+        # across every metered key with no authorisation: an exhausted key
+        # became a second one and the spend doubled.
+        pool = CredentialPool([_metered("metered-a"), _metered("metered-b")])
+        self.assertIsNone(pool.select(admits=lambda cid: cid != "metered-a"))
+        crossed = pool.select(admits=lambda cid: cid != "metered-a",
+                              authorised_kinds=frozenset({CredentialKind.METERED}))
+        self.assertEqual(crossed.credential.credential_id, "metered-b")
+
     def test_rotation_within_one_kind_needs_no_authorisation(self):
         pool = CredentialPool([_seat("seat-a"), _seat("seat-b")])
         rotation = pool.select(admits=lambda cid: cid == "seat-b")
@@ -134,6 +144,54 @@ class TestTheChildSeesOneIdentity(unittest.TestCase):
         pool = self._pool()
         env = pool.launch_environment(pool.get("seat-a"), self.BASE)
         self.assertNotIn("SEAT_A_TOKEN", env)
+
+    def test_an_empty_source_variable_is_missing_not_bound(self):
+        # Every CLI treats an empty key as unset and falls back to its
+        # config file or keychain, so binding one IS the ambient fallback
+        # — reported as a successful rotation. `set VAR=` produces it.
+        credential = _seat("x", env_from={"K": "EMPTY"})
+        with self.assertRaises(CredentialUnavailable):
+            credential.environment({"EMPTY": "", "PATH": "/x"})
+
+    def test_clearing_a_variable_never_unbinds_the_credential_using_it(self):
+        # "Clear the stale one, then bind mine" is the idiom the helper
+        # above teaches. On the launch path the clear used to run AFTER
+        # the bind, silently unbinding the chosen credential while
+        # `rotations` recorded a successful rotation.
+        pool = CredentialPool([Credential(
+            "metered", CredentialKind.METERED,
+            env_from={"ANTHROPIC_API_KEY": "METERED_TOKEN"},
+            env_clear=("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"))])
+        base = {"PATH": "/x", "METERED_TOKEN": "mmm",
+                "ANTHROPIC_API_KEY": "stale", "CLAUDE_CODE_OAUTH_TOKEN": "old"}
+        env = pool.launch_environment(pool.get("metered"), base)
+        self.assertEqual(env["ANTHROPIC_API_KEY"], "mmm")
+        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", env)
+        # And the two methods agree, which they did not before.
+        self.assertEqual(pool.get("metered").environment(base)["ANTHROPIC_API_KEY"],
+                         env["ANTHROPIC_API_KEY"])
+
+    def test_an_ambient_provider_key_does_not_reach_the_child(self):
+        # THE finding. The strip used to remove only the pool's OWN source
+        # variables, so an operator's live ANTHROPIC_API_KEY — declared by
+        # no credential — sat in the environment of a child launched on a
+        # subscription seat, which could simply spend it. The boundary was
+        # enforced against the kernel, not against the agent.
+        pool = self._pool()
+        base = dict(self.BASE)
+        base["ANTHROPIC_API_KEY"] = "ambient-metered-key"
+        base["AWS_SECRET_ACCESS_KEY"] = "ambient-aws"
+        env = pool.launch_environment(pool.get("seat-a"), base)
+        self.assertEqual(env["CLAUDE_TOKEN"], "aaa")
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
+        self.assertNotIn("AWS_SECRET_ACCESS_KEY", env)
+
+    def test_a_metered_credential_can_still_bind_the_name_it_needs(self):
+        # The strip must not defeat the very credential being bound.
+        pool = self._pool()
+        env = pool.launch_environment(pool.get("metered"),
+                                      {**self.BASE, "ANTHROPIC_API_KEY": "stale"})
+        self.assertEqual(env["ANTHROPIC_API_KEY"], "mmm")
 
     def test_a_missing_source_still_refuses(self):
         pool = CredentialPool([_seat("x", env_from={"K": "ABSENT"})])
