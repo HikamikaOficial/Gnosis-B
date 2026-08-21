@@ -227,3 +227,19 @@ Format:
 - Lesson: when a claim is a conjunction, ask what invalidates each half separately. A review is evidence about a specific tree, so it expires when the tree changes; a test run can be repeated, so it does not. Treating the conjunction as one durable fact keeps the weaker half alive past its evidence.
 - Operational consequence: `review_still_applies` on every planned landing; the coordinator refuses a stale-review landing by default, and the pipeline routes landings through it.
 - Revalidation condition: standing rule; no expiry.
+
+## L-0028 — A safety check whose default is "off" is a hole with documentation
+- Status: VERIFIED
+- Evidence: ADR-0021 Codex finding 1. Re-review was gated by `require_rereview: bool = False` on `WorkIntegrator.integrate`, so the public API's default landed an expired review in silence. Every direct caller was one forgotten argument away from the exact failure the milestone existed to close, and the coordinator's correctness depended on it never forgetting.
+- Scope: any protective condition expressed as a caller-supplied flag.
+- Lesson: if the component can DERIVE the condition, it must — a flag makes the safe behaviour opt-in and distributes the obligation to every call site, where it will eventually be missed. The integrator knew the task's fork point and the target's head all along; asking the caller was a design choice, not a necessity. Callers should only be able to WAIVE, explicitly, which is a decision that leaves a trace.
+- Operational consequence: `integrate` computes staleness itself; the parameter is `waive_stale_review` and defaults to False.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0029 — Mutating shared state to carry per-call context crosses identities
+- Status: VERIFIED
+- Evidence: ADR-0021, found by self-review. The pipeline set `integrator.re_reviewer` once, guarded by `is None`. The reviewer closure captures `task_id` for its policy snapshot and its evidence directory — so after the first task, every later re-review would have been gated and recorded under the FIRST task's name.
+- Scope: any per-call collaborator assigned onto a longer-lived object.
+- Lesson: the assignment looks like configuration and behaves like a cache of the first caller. When the thing being assigned closes over per-call identity, sharing it silently reattributes work — and attribution is what a governance record is FOR, so the failure is invisible in behaviour and total in the audit trail.
+- Operational consequence: the reviewer is passed per call (`integrate(..., re_reviewer=...)`), and the coordinator holds a FACTORY keyed by task rather than an instance.
+- Revalidation condition: standing rule; no expiry.

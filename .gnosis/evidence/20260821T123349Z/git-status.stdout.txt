@@ -1,0 +1,9 @@
+ M .claude/agent-memory/evidence-reviewer/MEMORY.md
+ M src/gnosis/director/pipeline.py
+ M src/gnosis/kernel/convergence.py
+ M src/gnosis/kernel/integration.py
+ M src/gnosis/kernel/ordering.py
+ M tests/test_integration.py
+?? .claude/agent-memory/evidence-reviewer/learning_adr_evidence_lines_unverified.md
+?? .claude/agent-memory/evidence-reviewer/learning_replay_fingerprint_self_reference.md
+?? .gnosis/evidence/20260821T123349Z/

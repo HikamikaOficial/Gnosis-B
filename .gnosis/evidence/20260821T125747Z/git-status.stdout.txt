@@ -1,0 +1,15 @@
+ M .claude/agent-memory/evidence-reviewer/MEMORY.md
+ M src/gnosis/director/pipeline.py
+ M src/gnosis/kernel/convergence.py
+ M src/gnosis/kernel/integration.py
+ M src/gnosis/kernel/ordering.py
+ M src/gnosis/kernel/policy.py
+ M tests/test_integration.py
+ M tests/test_ordering.py
+ M tests/test_policy.py
+?? .claude/agent-memory/evidence-reviewer/learning_adr_evidence_lines_unverified.md
+?? .claude/agent-memory/evidence-reviewer/learning_replay_fingerprint_self_reference.md
+?? .gnosis/evidence/20260821T123349Z/
+?? .gnosis/evidence/20260821T125121Z/
+?? .gnosis/evidence/20260821T125747Z/
+?? .gnosis/lab/kernel-reviews/codex-review-2026-08-21-rereview.jsonl

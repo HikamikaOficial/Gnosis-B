@@ -49,14 +49,23 @@ from __future__ import annotations
 import shutil
 import subprocess
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .convergence import ConvergenceOutcome, ConvergenceResult
+from .convergence import (
+    ConvergenceOutcome,
+    ConvergencePolicy,
+    ConvergenceResult,
+    GatedFinding,
+    ReviewReport,
+    ReviewVerdict,
+    classify_findings,
+)
 from .file_lock import FileLock, lock_path_for
-from .git_evidence import capture_git_evidence
+from .git_evidence import capture_git_evidence, tamper_fingerprint
 from .policy import (
     ActionSnapshot,
     ApprovalStore,
@@ -85,6 +94,10 @@ class IntegrationOutcome(str, Enum):
     # The task converged against a tree the target has since left behind:
     # its verification can be re-run, its independent REVIEW cannot.
     REVIEW_STALE = "REVIEW_STALE"
+    # A re-review ran against the merged tree and did not pass.
+    REVIEW_FAILED = "REVIEW_FAILED"
+    # The re-reviewer changed the tree it was judging (rule 9).
+    REVIEWER_MODIFIED_SUBJECT = "REVIEWER_MODIFIED_SUBJECT"
     # Attempted, and the target did not move.
     MERGE_CONFLICT = "MERGE_CONFLICT"
     VERIFICATION_FAILED = "VERIFICATION_FAILED"
@@ -107,6 +120,11 @@ class IntegrationResult:
     conflicts: tuple[str, ...] = ()
     changed_paths: tuple[str, ...] = ()
     verification: VerificationResult | None = None
+    # The independent verdict against the MERGED tree, when one was
+    # required. This is what makes a stale review recoverable as
+    # evidence rather than only waivable as a decision (ADR-0021).
+    rereview: ReviewReport | None = None
+    rereview_gated: tuple[GatedFinding, ...] = ()
     detail: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -122,6 +140,12 @@ class IntegrationResult:
             "conflicts": list(self.conflicts),
             "changed_paths": list(self.changed_paths),
             "verification": self.verification.to_dict() if self.verification else None,
+            "rereview": ({"verdict": self.rereview.verdict.value,
+                          "reviewer": self.rereview.reviewer,
+                          "findings": [f.to_dict() for f in self.rereview.findings],
+                          "notes": self.rereview.notes}
+                         if self.rereview else None),
+            "rereview_gated": [g.to_dict() for g in self.rereview_gated],
             "detail": self.detail,
         }
 
@@ -159,6 +183,8 @@ class WorkIntegrator:
         policy: PolicyEngine | None = None,
         approvals: ApprovalStore | None = None,
         policy_actor: str = "agent://unattributed",
+        re_reviewer: Callable[[Path], ReviewReport] | None = None,
+        convergence_policy: ConvergencePolicy | None = None,
     ) -> None:
         self.source_repo = Path(source_repo)
         self.worktrees = worktrees
@@ -188,6 +214,15 @@ class WorkIntegrator:
         self.policy = policy
         self.approvals = approvals
         self.policy_actor = policy_actor
+        # Injected as a callable for the same reason `verify_fn` is: the
+        # kernel declares what evidence it needs and never learns which
+        # provider produced it. Nothing under `kernel/` imports
+        # `adapters/`.
+        self.re_reviewer = re_reviewer
+        # The SAME blocking rule convergence uses. A finding that blocks
+        # convergence but not landing would be a contradiction an
+        # operator could only discover by experiment.
+        self.convergence_policy = convergence_policy or ConvergencePolicy(max_rounds=1)
 
     def _current_branch(self) -> str | None:
         proc = _git(self.source_repo, ["rev-parse", "--abbrev-ref", "HEAD"])
@@ -199,7 +234,10 @@ class WorkIntegrator:
 
     # -- the decision ------------------------------------------------------
 
-    def integrate(self, task_id: str, convergence: ConvergenceResult | None) -> IntegrationResult:
+    def integrate(self, task_id: str, convergence: ConvergenceResult | None,
+                  waive_stale_review: bool = False,
+                  re_reviewer: Callable[[Path], ReviewReport] | None = None,
+                  ) -> IntegrationResult:
         branch = self.worktrees.planned_branch(task_id)
 
         if convergence is None or convergence.outcome is not ConvergenceOutcome.CONVERGED:
@@ -212,8 +250,40 @@ class WorkIntegrator:
                 reason=f"not_converged:{outcome}",
             )
 
+        reviewer = re_reviewer or self.re_reviewer
+
+        # STALENESS IS DERIVED HERE, not asserted by the caller. The first
+        # version took `require_rereview` as a parameter defaulting to
+        # False, so the public API's default landed an expired review in
+        # silence and every direct caller was one forgotten argument away
+        # from the exact hole this milestone exists to close (independent
+        # review). The integrator knows the task's fork point and the
+        # target's head; it can answer the question itself.
+        stale = self._review_is_stale(task_id)
+        if stale and not waive_stale_review and reviewer is None:
+            # Evidence is required and cannot be produced. Refusing is the
+            # only honest answer.
+            return IntegrationResult(
+                IntegrationOutcome.REVIEW_STALE, task_id, branch,
+                reason="rereview_required_but_no_reviewer_configured",
+            )
+        require_rereview = stale and not waive_stale_review
+
         with FileLock(lock_path_for(self._lock_path()), timeout_s=self.lock_timeout_s):
-            return self._integrate_locked(task_id, branch)
+            return self._integrate_locked(task_id, branch, require_rereview, reviewer)
+
+    def _review_is_stale(self, task_id: str) -> bool:
+        """Did the target move after this task forked from it?
+
+        If so, the independent review it converged with judged a tree
+        that no longer exists. Read-only, and cheap enough to ask on
+        every landing rather than trusting a flag.
+        """
+        base_sha, _ = self.preview(task_id)
+        if base_sha is None:
+            return False
+        evidence = capture_git_evidence(self.source_repo)
+        return bool(evidence.head_sha) and evidence.head_sha != base_sha
 
     def _lock_path(self) -> Path:
         """Serialize integrations on the SOURCE REPO, not per task and not
@@ -235,7 +305,10 @@ class WorkIntegrator:
         self.integration_root.mkdir(parents=True, exist_ok=True)
         return self.integration_root / "integration.lock"
 
-    def _integrate_locked(self, task_id: str, branch: str) -> IntegrationResult:
+    def _integrate_locked(self, task_id: str, branch: str,
+                          require_rereview: bool = False,
+                          reviewer: Callable[[Path], ReviewReport] | None = None,
+                          ) -> IntegrationResult:
         evidence = capture_git_evidence(self.source_repo)
         if not evidence.is_repo or evidence.head_sha is None:
             return IntegrationResult(
@@ -318,13 +391,15 @@ class WorkIntegrator:
         staging = self.integration_root / f"merge-{task_id}-{uuid.uuid4().hex[:8]}"
         try:
             return self._merge_and_verify(
-                task_id, branch, base_sha, checkpoint_ref, changed, staging)
+                task_id, branch, base_sha, checkpoint_ref, changed, staging,
+                require_rereview, reviewer)
         finally:
             self._discard(staging)
 
     def _merge_and_verify(
         self, task_id: str, branch: str, base_sha: str, checkpoint_ref: str,
-        changed: tuple[str, ...], staging: Path,
+        changed: tuple[str, ...], staging: Path, require_rereview: bool = False,
+        reviewer: Callable[[Path], ReviewReport] | None = None,
     ) -> IntegrationResult:
         add = _git(self.source_repo, ["worktree", "add", "--detach", str(staging), base_sha])
         if add.returncode != 0:
@@ -367,6 +442,45 @@ class WorkIntegrator:
                 changed_paths=changed, verification=verification,
             )
 
+        # The other half of convergence, re-established against the tree
+        # that will actually land. ADR-0020 found that integration re-ran
+        # the VERIFICATION on the merged tree and re-ran nothing of the
+        # independent review — so after a base move, half the guarantee
+        # was rebuilt and half was assumed. This is that half.
+        rereview: ReviewReport | None = None
+        gated: tuple[GatedFinding, ...] = ()
+        if require_rereview and reviewer is not None:
+            before = tamper_fingerprint(staging)
+            rereview = reviewer(staging)
+            after = tamper_fingerprint(staging)
+            if after != before:
+                # Rule 9, at the moment it matters most: a reviewer that
+                # edited the tree it was judging has not produced
+                # evidence about anything. What LANDS is the captured
+                # merged_sha, so the edit cannot reach the branch — but
+                # the verdict is worthless and saying so is the point.
+                return IntegrationResult(
+                    IntegrationOutcome.REVIEWER_MODIFIED_SUBJECT, task_id, branch,
+                    reason="rereviewer_modified_the_merged_tree",
+                    base_sha=base_sha, merged_sha=merged_sha,
+                    checkpoint_ref=checkpoint_ref, changed_paths=changed,
+                    verification=verification,
+                )
+
+            blocking, gated_list = classify_findings(
+                rereview, self.convergence_policy, round_index=0)
+            gated = tuple(gated_list)
+            if rereview.verdict is not ReviewVerdict.PASS or blocking:
+                return IntegrationResult(
+                    IntegrationOutcome.REVIEW_FAILED, task_id, branch,
+                    reason=f"rereview:{rereview.verdict.value}",
+                    base_sha=base_sha, merged_sha=merged_sha,
+                    checkpoint_ref=checkpoint_ref, changed_paths=changed,
+                    verification=verification, rereview=rereview,
+                    rereview_gated=gated,
+                    detail={"blocking": [f.to_dict() for f in blocking]},
+                )
+
         # Only now does the shared branch move, and only by fast-forward
         # to a commit that has already been verified: there is no moment
         # at which an observer can see a broken target.
@@ -399,7 +513,7 @@ class WorkIntegrator:
             IntegrationOutcome.INTEGRATED, task_id, branch,
             reason="integrated", base_sha=base_sha, merged_sha=merged_sha,
             checkpoint_ref=checkpoint_ref, changed_paths=changed,
-            verification=verification,
+            verification=verification, rereview=rereview, rereview_gated=gated,
         )
 
     def _gate(self, task_id: str, branch: str, base_sha: str,

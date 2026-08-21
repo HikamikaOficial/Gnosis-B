@@ -38,6 +38,7 @@ same inputs, same plan, recomputable later from recorded evidence.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -246,8 +247,17 @@ class LandingCoordinator:
     """
 
     def __init__(self, integrator: Any,
-                 stale_review_authorised: set[str] | None = None) -> None:
+                 stale_review_authorised: set[str] | None = None,
+                 re_reviewer_for: Callable[[str], Any] | None = None) -> None:
         self.integrator = integrator
+        # A FACTORY, not a reviewer: the reviewer's policy identity and
+        # its evidence directory are per task, so one shared instance
+        # would judge every task under the first one's name.
+        self.re_reviewer_for = re_reviewer_for
+        # Whether a stale review can be REPLACED with a fresh verdict
+        # rather than only waived.
+        self.can_rereview = (re_reviewer_for is not None
+                             or getattr(integrator, "re_reviewer", None) is not None)
         # PER TASK, not a global switch. A boolean made every stale entry
         # eligible at once and carried no record of who decided what — so
         # the only way to land one deliberately re-reviewed task was to
@@ -307,13 +317,30 @@ class LandingCoordinator:
             if landed:
                 attempts.append(LandingAttempt(planned, AttemptStatus.NOT_ATTEMPTED))
                 continue
+            stale = not planned.review_still_applies
             authorised = planned.task.task_id in self.stale_review_authorised
-            if not planned.review_still_applies and not authorised:
+            if stale and not authorised and not self.can_rereview:
+                # No verdict available and no authority: the only honest
+                # answer is to refuse.
                 attempts.append(
                     LandingAttempt(planned, AttemptStatus.SKIPPED_STALE_REVIEW))
                 continue
+            # A stale review is RECOVERABLE now: the integrator can run an
+            # independent reviewer against the merged tree, which is the
+            # tree that actually lands (ADR-0021). Operator authority
+            # remains as the escape hatch for a repo that has decided a
+            # re-verified merge is enough, but it is no longer the only
+            # way past — which is what made it pressure toward being the
+            # default.
+            task_id = planned.task.task_id
             outcome = self.integrator.integrate(
-                planned.task.task_id, convergence_for.get(planned.task.task_id))
+                task_id, convergence_for.get(task_id),
+                # Staleness is the integrator's to determine; this only
+                # carries the operator's WAIVER for a specific task.
+                waive_stale_review=authorised,
+                re_reviewer=(self.re_reviewer_for(task_id)
+                             if self.re_reviewer_for is not None else None),
+            )
             landed = bool(getattr(outcome, "integrated", False))
             attempts.append(LandingAttempt(
                 planned,

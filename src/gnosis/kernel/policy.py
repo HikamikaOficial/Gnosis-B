@@ -803,7 +803,11 @@ GNOSIS_ENFORCEMENT = EnforcementMatrix([
             "the review agent runs with edit tools withheld (a permission "
             "promise, not a sandbox), and the adapter fingerprints the tree "
             "either side and refuses a reviewer that moved it — detection "
-            "after the fact, not prevention (ADR-0015, rule 9)"
+            "after the fact, not prevention. It covers the tree being "
+            "judged and that repository's own machinery; it does NOT "
+            "constrain writes to the SOURCE checkout, to a sibling task's "
+            "worktree, or anywhere else the process can reach "
+            "(ADR-0015, ADR-0021, rule 9)"
         ),
     ),
     EnforcementClaim(
@@ -831,6 +835,18 @@ GNOSIS_ENFORCEMENT = EnforcementMatrix([
             "moving the shared branch is gated at its own intervention "
             "point, `before_integration` — but opt-in, like every other "
             "gate here, until a default rule set exists (ADR-0018, rule 13)"
+        ),
+    ),
+    EnforcementClaim(
+        "integration", "rereview_provenance", EnforcementLevel.IGNORED,
+        note=(
+            "a re-review is an injected callable returning a ReviewReport, "
+            "exactly like convergence's review_fn. The kernel cannot tell a "
+            "verdict produced by launching an independent agent from one a "
+            "caller fabricated, cached or self-authored. Provenance comes "
+            "from HOW the caller builds it — the pipeline builds it from "
+            "CliReviewer behind the gate — and the kernel does not check "
+            "that (ADR-0021, Codex review)"
         ),
     ),
     EnforcementClaim(

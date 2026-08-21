@@ -1,0 +1,51 @@
+........................................................................ [ 10%]
+........................................................................ [ 21%]
+........................................................................ [ 32%]
+........................................................................ [ 42%]
+........................................................................ [ 53%]
+..........................F............................................. [ 64%]
+........................................................................ [ 75%]
+........................................................................ [ 85%]
+........................................................................ [ 96%]
+........................                                                 [100%]
+================================== FAILURES ===================================
+_______ TestCoordination.test_ordering_cannot_save_a_semantic_conflict ________
+
+self = <tests.test_ordering.TestCoordination testMethod=test_ordering_cannot_save_a_semantic_conflict>
+
+    def test_ordering_cannot_save_a_semantic_conflict(self):
+        """The limitation, pinned.
+    
+        ADR-0018's headline failure is two tasks with DISJOINT paths whose
+        merge is textually clean and semantically broken. The planner sees
+        no overlap, orders them happily, and post-merge verification stays
+        the only thing that decides. A future change must not quietly
+        claim that ordering prevents this.
+        """
+        self._work("TASK-A", {
+            "lib.py": "def salute():\n    return 'hi'\n",
+            "app.py": "from lib import salute\n\n\ndef main():\n    return salute()\n",
+        })
+        self._work("TASK-B", {
+            "extra.py": "from lib import greet\n\n\ndef shout():\n    return greet()\n",
+        })
+    
+        plan = self.coordinator.plan(self._head(), ["TASK-A", "TASK-B"])
+        # No overlap is reported, because there is none.
+        self.assertEqual(plan.landings[1].shared_paths, ())
+        self.assertNotEqual(plan.landings[1].reason, LandingReason.PATH_OVERLAP)
+    
+        # A lands. B, re-reviewed or not, is caught only by the merge.
+        permissive = LandingCoordinator(
+            self.integrator, stale_review_authorised={"TASK-A", "TASK-B"})
+        results = permissive.land(plan, {"TASK-A": _CONVERGED, "TASK-B": _CONVERGED})
+        self.assertEqual(results[0].status, AttemptStatus.LANDED)
+    
+        second = self.integrator.integrate("TASK-B", _CONVERGED)
+>       self.assertEqual(second.outcome, IntegrationOutcome.VERIFICATION_FAILED)
+E       AssertionError: <IntegrationOutcome.REVIEW_STALE: 'REVIEW_STALE'> != <IntegrationOutcome.VERIFICATION_FAILED: 'VERIFICATION_FAILED'>
+
+tests\test_ordering.py:319: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_ordering.py::TestCoordination::test_ordering_cannot_save_a_semantic_conflict
+1 failed, 671 passed in 362.69s (0:06:02)

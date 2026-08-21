@@ -315,7 +315,12 @@ class TestCoordination(unittest.TestCase):
         results = permissive.land(plan, {"TASK-A": _CONVERGED, "TASK-B": _CONVERGED})
         self.assertEqual(results[0].status, AttemptStatus.LANDED)
 
-        second = self.integrator.integrate("TASK-B", _CONVERGED)
+        # Waived deliberately: B's review IS stale now that A has landed,
+        # and that gate fires first. What this test isolates is the thing
+        # ordering cannot do — only the merge and its verification catch a
+        # semantic conflict between disjoint paths.
+        second = self.integrator.integrate("TASK-B", _CONVERGED,
+                                           waive_stale_review=True)
         self.assertEqual(second.outcome, IntegrationOutcome.VERIFICATION_FAILED)
         self.assertEqual(second.conflicts, ())
 

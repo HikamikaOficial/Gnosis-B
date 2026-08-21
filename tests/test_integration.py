@@ -112,7 +112,13 @@ class TestSemanticIntegration(_IntegrationTestCase):
         first = self.integrator.integrate("TASK-A", _CONVERGED)
         self.assertEqual(first.outcome, IntegrationOutcome.INTEGRATED, first.reason)
         before = self._head()
-        second = self.integrator.integrate("TASK-B", _CONVERGED)
+        # Waived deliberately: this test isolates what the MERGE and the
+        # post-merge verification do. B's review is genuinely stale now
+        # that A has landed, and the stale-review gate fires first — which
+        # `test_a_stale_review_is_caught_before_the_merge_is_attempted`
+        # asserts separately.
+        second = self.integrator.integrate("TASK-B", _CONVERGED,
+                                           waive_stale_review=True)
 
         # Git had no complaint...
         self.assertEqual(second.conflicts, ())
@@ -129,12 +135,28 @@ class TestSemanticIntegration(_IntegrationTestCase):
             self.integrator.integrate("TASK-A", _CONVERGED).outcome,
             IntegrationOutcome.INTEGRATED)
 
-        result = self.integrator.integrate("TASK-B", _CONVERGED)
+        result = self.integrator.integrate("TASK-B", _CONVERGED,
+                                           waive_stale_review=True)
 
         self.assertEqual(result.outcome, IntegrationOutcome.MERGE_CONFLICT)
         self.assertIn("lib.py", result.conflicts)
         # "merge failed" is not actionable; the paths are.
         self.assertTrue(result.conflicts)
+
+    def test_a_stale_review_is_caught_before_the_merge_is_attempted(self):
+        # Staleness is DERIVED by the integrator, not asserted by the
+        # caller: the first version took `require_rereview` as a parameter
+        # defaulting to False, so the public API's default landed an
+        # expired review in silence (independent review).
+        self._work("TASK-A", {"a.py": "A = 1" + chr(10)})
+        self._work("TASK-B", {"b.py": "B = 2" + chr(10)})
+        self.assertTrue(self.integrator.integrate("TASK-A", _CONVERGED).integrated)
+
+        before = self._head()
+        result = self.integrator.integrate("TASK-B", _CONVERGED)
+        self.assertEqual(result.outcome, IntegrationOutcome.REVIEW_STALE)
+        self.assertIsNone(result.merged_sha)          # no merge was attempted
+        self.assertEqual(self._head(), before)
 
     def test_a_failed_merge_leaves_no_staging_worktree_behind(self):
         self._work("TASK-A", {"lib.py": "def greet():\n    return 'A'\n"})
@@ -405,6 +427,154 @@ class TestSerialisation(_IntegrationTestCase):
         self.assertEqual(second.base_sha, landed_a)
         self.assertTrue((self.repo / "new_a.py").exists())
         self.assertTrue((self.repo / "new_b.py").exists())
+
+
+class TestRereviewIsEvidence(_IntegrationTestCase):
+    """L-0027: a review expires when its tree moves. Until now the only
+    way past was an operator authorising a task id — a DECISION, not a
+    verdict. A re-review against the merged tree is the verdict."""
+
+    def _reviewer(self, verdict="PASS", findings=(), on_review=None):
+        from gnosis.kernel.convergence import ReviewReport, ReviewVerdict
+        seen = []
+
+        def review(tree):
+            seen.append(Path(tree))
+            if on_review is not None:
+                on_review(Path(tree))
+            return ReviewReport(verdict=ReviewVerdict(verdict),
+                                findings=tuple(findings), reviewer="rev-2")
+        review.seen = seen
+        return review
+
+    def _integrator(self, re_reviewer=None):
+        return WorkIntegrator(
+            source_repo=self.repo, worktrees=self.worktrees,
+            verifier=self._verifier(),
+            integration_root=self.root / "integration",
+            re_reviewer=re_reviewer,
+        )
+
+    def _stale_task(self, task_id="TASK-A"):
+        """Fork a task, then move the branch: its review now describes a
+        tree that no longer exists."""
+        self._work(task_id, {"a.py": "A = 1" + chr(10)})
+        (self.repo / "moved.py").write_text("M = 1" + chr(10), encoding="utf-8")
+        self._git("add", "-A")
+        self._git("commit", "-m", "the branch moved on")
+
+    def test_a_passing_rereview_lets_stale_work_land(self):
+        reviewer = self._reviewer("PASS")
+        integrator = self._integrator(reviewer)
+        self._stale_task()
+        before = self._head()
+
+        result = integrator.integrate("TASK-A", _CONVERGED)
+
+        self.assertTrue(result.integrated, result.reason)
+        self.assertIsNotNone(result.rereview)
+        self.assertEqual(result.rereview.reviewer, "rev-2")
+        self.assertNotEqual(self._head(), before)
+
+    def test_the_rereview_judges_the_merged_tree_not_the_task_worktree(self):
+        # The question a re-review answers is "is this correct in the tree
+        # that will land", and the task worktree is not that tree.
+        reviewer = self._reviewer("PASS")
+        integrator = self._integrator(reviewer)
+        self._stale_task()
+        integrator.integrate("TASK-A", _CONVERGED)
+
+        judged = reviewer.seen[0]
+        self.assertNotEqual(judged, self.repo)
+        self.assertNotEqual(judged, Path(self.worktrees.load_handle("TASK-A").path))
+        self.assertIn("merge-", judged.name)
+
+    def test_a_failing_rereview_stops_the_landing(self):
+        reviewer = self._reviewer("FAIL")
+        integrator = self._integrator(reviewer)
+        self._stale_task()
+        before = self._head()
+
+        result = integrator.integrate("TASK-A", _CONVERGED)
+
+        self.assertEqual(result.outcome, IntegrationOutcome.REVIEW_FAILED)
+        self.assertEqual(self._head(), before)
+        self.assertIsNotNone(result.rereview)
+
+    def test_a_blocking_finding_stops_the_landing_even_on_a_pass(self):
+        # The SAME blocking rule convergence uses. A finding that blocked
+        # convergence but not landing would be a contradiction an operator
+        # could only discover by experiment.
+        from gnosis.kernel.convergence import Finding, Severity
+        reviewer = self._reviewer("PASS", findings=[
+            Finding(Severity.CRITICAL, "correctness", "still broken", "rev-2"),
+        ])
+        integrator = self._integrator(reviewer)
+        self._stale_task()
+        before = self._head()
+
+        result = integrator.integrate("TASK-A", _CONVERGED)
+        self.assertEqual(result.outcome, IntegrationOutcome.REVIEW_FAILED)
+        self.assertEqual(self._head(), before)
+
+    def test_a_non_blocking_finding_is_gated_not_lost(self):
+        from gnosis.kernel.convergence import Finding, Severity
+        reviewer = self._reviewer("PASS", findings=[
+            Finding(Severity.INFO, "style", "naming", "rev-2"),
+        ])
+        integrator = self._integrator(reviewer)
+        self._stale_task()
+
+        result = integrator.integrate("TASK-A", _CONVERGED)
+        self.assertTrue(result.integrated, result.reason)
+        self.assertEqual(len(result.rereview_gated), 1)
+        self.assertIn("below blocking set", result.rereview_gated[0].gate_reason)
+
+    def test_a_rereviewer_that_edits_the_merged_tree_is_refused(self):
+        # Rule 9 at the moment it matters most. What LANDS is the captured
+        # merged_sha so the edit cannot reach the branch, but the verdict
+        # is worthless and saying so is the point.
+        def tamper(tree):
+            (tree / "a.py").write_text("tampered by the reviewer" + chr(10),
+                                       encoding="utf-8")
+
+        reviewer = self._reviewer("PASS", on_review=tamper)
+        integrator = self._integrator(reviewer)
+        self._stale_task()
+        before = self._head()
+
+        result = integrator.integrate("TASK-A", _CONVERGED)
+        self.assertEqual(result.outcome,
+                         IntegrationOutcome.REVIEWER_MODIFIED_SUBJECT)
+        self.assertEqual(self._head(), before)
+
+    def test_a_stale_review_with_no_reviewer_refuses(self):
+        integrator = self._integrator(None)
+        self._stale_task()
+        before = self._head()
+        result = integrator.integrate("TASK-A", _CONVERGED)
+        self.assertEqual(result.outcome, IntegrationOutcome.REVIEW_STALE)
+        self.assertIn("no_reviewer_configured", result.reason)
+        self.assertEqual(self._head(), before)
+
+    def test_an_operator_can_still_waive_it_deliberately(self):
+        integrator = self._integrator(None)
+        self._stale_task()
+        result = integrator.integrate("TASK-A", _CONVERGED, waive_stale_review=True)
+        self.assertTrue(result.integrated, result.reason)
+        self.assertIsNone(result.rereview)
+
+    def test_a_fresh_review_is_not_re_reviewed(self):
+        # Re-review is for evidence that expired, not a second opinion on
+        # everything: running it always would double the cost of every
+        # landing for no added evidence.
+        reviewer = self._reviewer("PASS")
+        integrator = self._integrator(reviewer)
+        self._work("TASK-A", {"a.py": "A = 1" + chr(10)})
+        result = integrator.integrate("TASK-A", _CONVERGED)
+        self.assertTrue(result.integrated, result.reason)
+        self.assertEqual(reviewer.seen, [])
+        self.assertIsNone(result.rereview)
 
 
 if __name__ == "__main__":

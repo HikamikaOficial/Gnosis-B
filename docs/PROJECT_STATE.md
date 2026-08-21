@@ -1,6 +1,6 @@
 # GNOSIS Project State
 
-**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING)
+**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
 **Last update:** 2026-08-20
@@ -103,10 +103,10 @@ governs the order of work here: **prefer wiring over documenting**.
   compete) from decisions (which supersede, with a reason). No
   independent review: both channels are unavailable.
 
-Suite: **662 tests, all passing**; mypy strict clean (47 files); ruff at
+Suite: **672 tests, all passing**; mypy strict clean (47 files); ruff at
 the recorded backlog baseline (19 pre-existing findings in untouched
 files, ratcheted down from 20; `.gnosis/state/lint_baseline.json` fails the run if it rises).
-Captured transcript, not prose: `.gnosis/evidence/20260821T024656Z/`.
+Captured transcript, not prose: `.gnosis/evidence/20260821T125747Z/`.
 
 ## Integration milestone (COMPLETE)
 
@@ -175,6 +175,22 @@ sharpest: `preview` returned the target's head as a task's base, so
 module's own data path, and every test passed because they fed the
 planner synthetic bases (L-0026). The pipeline also bypassed the
 coordinator entirely, and a plan could be honoured after its head moved.
+
+## Re-review as evidence (ADR-0021)
+
+L-0027 said a review expires when its tree moves, and left only a
+waiver. Now the integrator DERIVES staleness (fork point vs target head)
+and runs an independent reviewer against the MERGED tree before the
+fast-forward, using the same blocking rule convergence uses. Both halves
+of convergence are re-established against the tree that lands.
+
+**Codex review: FAIL, 5 findings, all repaired or recorded** - two
+critical. `require_rereview` was a caller flag defaulting to False, so
+the public API landed expired reviews silently (L-0028); and the
+re-review was neither budgeted nor its refusals caught, while a comment
+claimed otherwise. Self-review separately caught the pipeline assigning
+the reviewer onto the shared integrator, which would have recorded every
+later task's re-review under the first task's name (L-0029).
 
 ## Fixed locations
 

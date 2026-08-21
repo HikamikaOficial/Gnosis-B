@@ -71,6 +71,9 @@ from .brief_record import BriefRecordState, BriefRecordStore
 from .inbox import DirectorInbox
 
 REVIEW_STAGE = "convergence_review"
+# A re-review is its own stage: an operator approving a convergence
+# review has not approved re-judging a merged tree.
+REREVIEW_STAGE = "integration_rereview"
 FIX_STAGE = "convergence_fix"
 
 
@@ -367,7 +370,32 @@ class GovernedPipeline:
                 next_step="The implementation stands; resume review when the window reopens.",
             )
 
-        integration = self._integrate(task_id, convergence)
+        try:
+            integration = self._integrate(task_id, convergence, ledger)
+        except CredentialHeld as held:
+            # A re-review is a launch, so it can be parked like any other.
+            # Escaping `_integrate` would have stranded the brief after
+            # convergence with no report (independent review).
+            return self._finish(
+                brief, task_id, ReportStatus.PARTIAL, "rate_limited:rereview",
+                schedule=schedule, convergence=convergence,
+                brief_state=BriefRecordState.PARKED, problems=(str(held),),
+                next_step="The work converged; re-review and land when the window reopens.",
+            )
+        except LaunchRefused as refused:
+            return self._finish(
+                brief, task_id, ReportStatus.ESCALATION_REQUIRED,
+                refused.decision.reason, schedule=schedule, convergence=convergence,
+                problems=(f"Policy refused the re-review launch: {refused.decision.reason}",),
+                next_step="Approve the exact action id, or waive the stale review, then resubmit.",
+            )
+        except BudgetExhausted as spent:
+            self.budget_store.record(brief.brief_id, ledger)
+            return self._finish(
+                brief, task_id, ReportStatus.PARTIAL, f"budget:{spent.kind}",
+                schedule=schedule, convergence=convergence, problems=(str(spent),),
+                next_step="Raise the brief's budget, or waive the stale review, then resubmit.",
+            )
         status = _status_for(convergence)
         if integration is not None and not integration.integrated:
             # Converged work that will not land is not COMPLETED. A merge
@@ -480,8 +508,8 @@ class GovernedPipeline:
             encoding="utf-8")
         return result
 
-    def _integrate(self, task_id: str,
-                   convergence: ConvergenceResult) -> IntegrationResult | None:
+    def _integrate(self, task_id: str, convergence: ConvergenceResult,
+                   ledger: BudgetLedger | None = None) -> IntegrationResult | None:
         """Land through the coordinator, so the review-validity gate is real.
 
         Calling `integrator.integrate` directly bypassed
@@ -502,9 +530,18 @@ class GovernedPipeline:
         if head is None:
             return self.integrator.integrate(task_id, convergence)
 
+        # The reviewer is built PER TASK and passed per call, never
+        # assigned onto the shared integrator. The closure captures
+        # `task_id` for its policy identity and its evidence directory, so
+        # an integrator that kept the first one would have gated and
+        # recorded every later task's re-review under the FIRST task's
+        # name (self-review, before the verdict). Mutating shared state
+        # to carry per-call context is how that happens.
+
         coordinator = LandingCoordinator(
             self.integrator,
             stale_review_authorised=self.stale_review_authorised,
+            re_reviewer_for=lambda tid: self._rereviewer_for(tid, ledger),
         )
         plan = coordinator.plan(head, [task_id])
         attempts = coordinator.land(plan, {task_id: convergence})
@@ -520,6 +557,37 @@ class GovernedPipeline:
             base_sha=attempt.planned.task.base_sha,
             changed_paths=attempt.planned.task.changed_paths,
         )
+
+    def _rereviewer_for(self, task_id: str,
+                        ledger: BudgetLedger | None = None) -> Callable[[Path], Any]:
+        """An independent reviewer that judges whatever tree it is handed.
+
+        Deliberately built per task and pointed at the STAGING tree the
+        integrator supplies, not at the task worktree: the question a
+        re-review answers is "is this correct in the tree that will
+        land", and the task worktree is not that tree.
+        """
+        def review(tree: Path) -> Any:
+            runner = GatedAgentRunner(
+                inner=self.review_runner, policy=self.policy, exec_root=tree,
+                stage=REREVIEW_STAGE, task_id=task_id, approvals=self.approvals,
+                policy_actor=self.policy_actor, holds=self.scheduler,
+                # A re-review is an agent launch like any other: gated,
+                # held AND budgeted. The first version passed no ledger, so
+                # a brief with an exhausted budget could still spend one
+                # more launch here — while a comment claimed it was
+                # budgeted (independent review).
+                budget=ledger,
+            )
+            reviewer = CliReviewer(
+                runner, tree,
+                self.inbox.layout.outbox / f"{task_id}-rereview",
+                objective=f"Re-review {task_id} against the merged tree",
+                reviewer_id=self.reviewer_id, focus=self.focus,
+            )
+            return reviewer(0)
+
+        return review
 
     # -- reporting --------------------------------------------------------
 

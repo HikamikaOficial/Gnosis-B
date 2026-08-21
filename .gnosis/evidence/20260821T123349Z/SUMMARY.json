@@ -1,0 +1,73 @@
+{
+  "all_passed": true,
+  "captured_at": "2026-08-21T12:39:58.871977+00:00",
+  "python": "3.12.14",
+  "results": [
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "tests/",
+        "-q"
+      ],
+      "duration_s": 368.56,
+      "exit_code": 0,
+      "name": "pytest",
+      "tail": "670 passed in 367.97s (0:06:07)"
+    },
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "mypy",
+        "src/gnosis"
+      ],
+      "duration_s": 0.42,
+      "exit_code": 0,
+      "name": "mypy",
+      "tail": "Success: no issues found in 53 source files"
+    },
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "ruff",
+        "check",
+        "src/gnosis",
+        "tests",
+        "--no-cache",
+        "--output-format=concise"
+      ],
+      "duration_s": 0.19,
+      "exit_code": 1,
+      "lint_baseline": 19,
+      "lint_findings": 19,
+      "name": "ruff",
+      "tail": "No fixes available (6 hidden fixes can be enabled with the `--unsafe-fixes` option).",
+      "verdict": "known backlog, not above baseline"
+    },
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "duration_s": 0.05,
+      "exit_code": 0,
+      "name": "git-head",
+      "tail": "42494d6c77f624baf86dca2c53629405be2c7295"
+    },
+    {
+      "argv": [
+        "git",
+        "status",
+        "--porcelain"
+      ],
+      "duration_s": 0.08,
+      "exit_code": 0,
+      "name": "git-status",
+      "tail": "?? .gnosis/evidence/20260821T123349Z/"
+    }
+  ]
+}

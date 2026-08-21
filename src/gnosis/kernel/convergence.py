@@ -197,6 +197,43 @@ class ConvergencePolicy:
             raise ValueError("min_blocking_confidence must be within [0, 1]")
 
 
+def classify_findings(review: ReviewReport | None, policy: ConvergencePolicy,
+                      round_index: int) -> tuple[list[Finding], list[GatedFinding]]:
+    """Split a review's findings into blocking and gated, by ONE rule.
+
+    Extracted from the loop so that a re-review performed at integration
+    time (ADR-0021) applies exactly the same severity set and confidence
+    floor. Two copies of "what blocks" would drift on the first change to
+    either, and a finding that blocks convergence but not landing — or
+    the reverse — is a contradiction an operator would have to discover
+    by experiment.
+
+    Nothing is discarded: everything held back is returned as a
+    `GatedFinding` with the reason it was held, which is the nothing-lost
+    rule (ADR-0008).
+    """
+    blocking: list[Finding] = []
+    gated: list[GatedFinding] = []
+    if review is None:
+        return blocking, gated
+    for finding in review.findings:
+        if finding.severity not in policy.blocking_severities:
+            gated.append(GatedFinding(
+                finding, f"severity {finding.severity.value} below blocking set",
+                round_index,
+            ))
+        elif finding.confidence < policy.min_blocking_confidence:
+            gated.append(GatedFinding(
+                finding,
+                f"confidence {finding.confidence} below floor "
+                f"{policy.min_blocking_confidence}",
+                round_index,
+            ))
+        else:
+            blocking.append(finding)
+    return blocking, gated
+
+
 def git_fingerprint(repo_path: Path) -> str | None:
     """Repo-state fingerprint for stalemate detection: HEAD + working-tree
     status + diff stat, hashed with the kernel's canonical contract.
@@ -291,23 +328,8 @@ class ConvergenceLoop:
                 unchanged = 0
                 have_prev = False
 
-            blocking: list[Finding] = []
-            gated_this_round: list[GatedFinding] = []
+            blocking, gated_this_round = classify_findings(review, self.policy, index)
             if review is not None:
-                for finding in review.findings:
-                    if finding.severity not in self.policy.blocking_severities:
-                        gated_this_round.append(GatedFinding(
-                            finding, f"severity {finding.severity.value} below blocking set", index,
-                        ))
-                    elif finding.confidence < self.policy.min_blocking_confidence:
-                        gated_this_round.append(GatedFinding(
-                            finding,
-                            f"confidence {finding.confidence} below floor "
-                            f"{self.policy.min_blocking_confidence}",
-                            index,
-                        ))
-                    else:
-                        blocking.append(finding)
                 ledger.extend(gated_this_round)
 
             clean = (
