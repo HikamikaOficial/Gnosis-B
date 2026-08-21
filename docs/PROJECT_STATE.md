@@ -1,6 +1,6 @@
 # GNOSIS Project State
 
-**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH
+**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET)
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
 **Last update:** 2026-08-20
@@ -103,10 +103,10 @@ governs the order of work here: **prefer wiring over documenting**.
   compete) from decisions (which supersede, with a reason). No
   independent review: both channels are unavailable.
 
-Suite: **615 tests, all passing**; mypy strict clean (47 files); ruff at
+Suite: **643 tests, all passing**; mypy strict clean (47 files); ruff at
 the recorded backlog baseline (19 pre-existing findings in untouched
 files, ratcheted down from 20; `.gnosis/state/lint_baseline.json` fails the run if it rises).
-Captured transcript, not prose: `.gnosis/evidence/20260821T013040Z/`.
+Captured transcript, not prose: `.gnosis/evidence/20260821T020757Z/`.
 
 ## Integration milestone (COMPLETE)
 
@@ -143,6 +143,23 @@ branch had landed work), and the policy snapshot was taken before
 The matrix's `post_merge_verification = HARD` was itself false and is
 now two true claims: `verified_before_landing = HARD` (ordering) and
 `semantic_correctness = IGNORED` (meaning). See L-0021, L-0022.
+
+## Multi-worker plane (queue + budget)
+
+`WorkQueue` (ADR-0019) is durable pending work whose OWNERSHIP is
+delegated to the claims plane: every worker scans the same directory and
+`WorkAuthority.acquire`'s CAS lets exactly one through. Proven by 6 real
+threads racing on 24 briefs. `Budget` is the circuit breaker rule 8 named
+and nothing implemented — wall clock and agent launches, durable per
+brief.
+
+**Codex review: FAIL, 7 findings, all repaired** - two critical. A crash
+after the file move stranded a brief forever (found by self-review
+first); and the FIX for it was itself wrong in one case, returning
+already-completed work to `pending` to be re-executed. Also: a stale
+grant could hand out work the worker no longer owned, and the budget was
+per INVOCATION rather than per brief, so a park/resume cycle launched
+agents without limit while each run looked bounded. See L-0023.
 
 ## Fixed locations
 

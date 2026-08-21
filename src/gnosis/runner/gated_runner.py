@@ -26,6 +26,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
+from ..kernel.budget import BudgetLedger
 from ..kernel.engine import DEFAULT_PERMISSION_MODE, agent_launch_snapshot
 from ..kernel.failures import (
     DEFAULT_CHAIN,
@@ -106,6 +107,7 @@ class GatedAgentRunner:
         worktree_branch: str | None = None,
         on_decision: Callable[[str, PolicyDecision], None] | None = None,
         failure_chain: FailureClassifierChain | None = None,
+        budget: BudgetLedger | None = None,
     ) -> None:
         self.inner = inner
         self.policy = policy
@@ -120,6 +122,10 @@ class GatedAgentRunner:
         # launch is evidence too, not just a refused one.
         self.on_decision = on_decision
         self.failure_chain = failure_chain or DEFAULT_CHAIN
+        # Consulted at the same moment as the policy gate, for the same
+        # reason: it is the last point at which refusing still costs
+        # nothing.
+        self.budget = budget
         self.classification: FailureClassification | None = None
         self.decisions: list[tuple[str, PolicyDecision]] = []
 
@@ -146,6 +152,13 @@ class GatedAgentRunner:
         extra_args: Sequence[str] | None = None,
         **kwargs: Any,
     ) -> ExecutionResult:
+        if self.budget is not None:
+            # BEFORE the hold question and before the verdict: a brief
+            # that has spent its budget must not consume a policy
+            # evaluation or a credential check either, and `check` raises
+            # BudgetExhausted, which is nobody's failure.
+            self.budget.check()
+
         if self.holds is not None and not self.holds.admits():
             # Checked BEFORE the policy question: spending a verdict on an
             # action that cannot run anyway is noise in the audit trail,
@@ -173,6 +186,11 @@ class GatedAgentRunner:
             # mitigation it cannot apply is worse than stopping.
             raise LaunchRefused(decision)
 
+        if self.budget is not None:
+            # Counted before the child starts. A launch that crashes still
+            # consumed the thing being bounded, and counting on the way
+            # out would let a crash-looping brief spend forever.
+            self.budget.spend_launch()
         result: ExecutionResult = self.inner.run(
             prompt=prompt, cwd=cwd, stdout_path=stdout_path,
             stderr_path=stderr_path, timeout_s=timeout_s,

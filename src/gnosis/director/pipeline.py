@@ -45,6 +45,7 @@ from typing import Any
 from ..adapters.cli_review import CliFixer, CliReviewer
 from ..contracts.director_brief import DirectorBrief
 from ..contracts.engineer_report import EngineerReport, ReportStatus
+from ..kernel.budget import Budget, BudgetExhausted, BudgetLedger, BudgetStore
 from ..kernel.convergence import (
     ConvergenceLoop,
     ConvergenceOutcome,
@@ -127,6 +128,7 @@ class GovernedPipeline:
         reviewer_id: str = "claude-cli",
         focus: Sequence[str] | None = None,
         integrator: WorkIntegrator | None = None,
+        budget: Budget | None = None,
     ) -> None:
         self.inbox = DirectorInbox(director_root)
         self.records = BriefRecordStore(director_root / "state" / "briefs")
@@ -171,6 +173,18 @@ class GovernedPipeline:
         # COMPLETED, with its reviewed work sitting on `gnosis/<task_id>`
         # and the next step naming what to do about it.
         self.integrator = integrator
+        # Every loop here is individually bounded and none of that bounds
+        # a BRIEF: three implementation attempts, then three convergence
+        # rounds each launching a reviewer and a fixer, is a dozen agent
+        # launches nobody authorised as a total. Rule 8 names wall-time
+        # and budget as circuit breakers; this is where they live.
+        self.budget = budget
+        # DURABLE, keyed by brief. An in-memory ledger tracked one
+        # INVOCATION, so a parked brief that was released and re-claimed
+        # started from zero and could launch agents forever while every
+        # individual run looked bounded (independent review). Rule 4: the
+        # state that matters survives the process.
+        self.budget_store = BudgetStore(director_root / "state" / "budget")
 
     # -- the whole path ---------------------------------------------------
 
@@ -200,7 +214,14 @@ class GovernedPipeline:
         self.records.create(brief.brief_id, task_id, BriefRecordState.ASSIGNED)
         self.records.update(brief.brief_id, state=BriefRecordState.IN_PROGRESS)
 
+        ledger = self.budget_store.ledger_for(brief.brief_id, self.budget)
         try:
+            # Checked BEFORE the implementation too. The implementation's
+            # launches can only be charged after the fact (the pipeline
+            # does not own the engine's runner), so this is what stops a
+            # brief that has already spent everything from starting yet
+            # another implementation phase.
+            ledger.check()
             schedule = self._implement(brief, task_id)
         except Exception as exc:  # noqa: BLE001 - a consumed brief must never strand
             return self._finish(brief, task_id, ReportStatus.BLOCKED,
@@ -218,6 +239,19 @@ class GovernedPipeline:
             )
 
         implementation = schedule.execution
+        if implementation is not None:
+            # The implementation's launches are charged to the ledger too,
+            # or the budget would bound only half a brief. They are
+            # charged AFTER the fact — unlike a convergence launch, which
+            # is refused before it costs anything — because the pipeline
+            # does not own the engine's runner and cannot gate it. That is
+            # sound only because the engine has its own hard bound
+            # (`RetryPolicy.max_attempts`), so this phase cannot run away;
+            # what the budget then bounds exactly is everything after it.
+            for _ in implementation.run_ids:
+                ledger.spend_launch()
+            self.budget_store.record(brief.brief_id, ledger)
+
         if implementation is None or implementation.execution_result is None:
             # No child ever ran (refused, crashed, or exhausted before
             # launching). Converging on nothing would be theatre.
@@ -233,7 +267,8 @@ class GovernedPipeline:
             # worktree is gone, and outside the try that escaped
             # `run_brief` and stranded the consumed brief — reintroducing
             # the exact defect the guard exists to prevent.
-            convergence = self._converge(brief, task_id, self._exec_root(task_id))
+            convergence = self._converge(
+                brief, task_id, self._exec_root(task_id), ledger)
         except CredentialHeld as held:
             return self._finish(
                 brief, task_id, ReportStatus.PARTIAL, "rate_limited:convergence",
@@ -247,6 +282,16 @@ class GovernedPipeline:
                 refused.decision.reason, schedule=schedule,
                 problems=(f"Policy refused a convergence launch: {refused.decision.reason}",),
                 next_step="Approve the exact action id, or change it, then resubmit.",
+            )
+        except BudgetExhausted as spent:
+            self.budget_store.record(brief.brief_id, ledger)
+            # Nobody did anything wrong: the work cost more than it was
+            # authorised to cost. PARTIAL with the implementation intact,
+            # never a FAIL that reads as the agent's fault.
+            return self._finish(
+                brief, task_id, ReportStatus.PARTIAL, f"budget:{spent.kind}",
+                schedule=schedule, problems=(str(spent),),
+                next_step="Raise the brief's budget, or split the work, then resubmit.",
             )
         except Exception as exc:  # noqa: BLE001 - see below
             # ADR-0008 deliberately lets `fix_fn` exceptions propagate:
@@ -271,6 +316,28 @@ class GovernedPipeline:
         # reviewer crashed" demand different answers, and reporting a
         # governance refusal as an ordinary exhausted loop would hide it.
         # This is what the typed `evidence_failures` are for.
+        # THIRD typed condition needing an explicit mapping here, which
+        # is the pattern rather than an accident: `ConvergenceLoop`
+        # catches everything `review_fn` raises, so any condition an
+        # adapter expresses as an exception arrives as an untyped evidence
+        # failure unless this end names it. Budget exhaustion is not a
+        # convergence outcome — it is a park.
+        # Not named `spent`: that name is bound by `except BudgetExhausted
+        # as spent` above, and Python deletes it when the block exits. The
+        # second time this collision has bitten in this file.
+        # Whatever convergence spent is now the brief's total, whichever
+        # way this ends.
+        self.budget_store.record(brief.brief_id, ledger)
+
+        budget_failure = _first_failure_of(convergence, "BudgetExhausted")
+        if budget_failure is not None:
+            return self._finish(
+                brief, task_id, ReportStatus.PARTIAL, "budget:convergence",
+                schedule=schedule, convergence=convergence,
+                problems=(budget_failure.message,),
+                next_step="Raise the brief's budget, or split the work, then resubmit.",
+            )
+
         refusal = _first_failure_of(convergence, "LaunchRefused")
         if refusal is not None:
             return self._finish(
@@ -356,7 +423,7 @@ class GovernedPipeline:
         return path
 
     def _converge(self, brief: DirectorBrief, task_id: str,
-                  exec_root: Path) -> ConvergenceResult:
+                  exec_root: Path, ledger: BudgetLedger) -> ConvergenceResult:
         evidence_dir = self.inbox.layout.outbox / f"{task_id}-convergence"
         objective = brief.title
 
@@ -376,6 +443,7 @@ class GovernedPipeline:
                 inner=self.review_runner, policy=self.policy, exec_root=exec_root,
                 stage=stage, task_id=task_id, approvals=self.approvals,
                 policy_actor=self.policy_actor, holds=self.scheduler,
+                budget=ledger,
                 worktree_branch=(
                     self.worktrees.planned_branch(task_id) if self.worktrees else None
                 ),

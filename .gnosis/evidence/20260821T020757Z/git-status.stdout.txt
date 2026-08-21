@@ -1,0 +1,14 @@
+ M .claude/agent-memory/evidence-reviewer/MEMORY.md
+ M src/gnosis/director/pipeline.py
+ M src/gnosis/runner/gated_runner.py
+ M tests/test_pipeline.py
+?? .claude/agent-memory/evidence-reviewer/learning_adr_evidence_lines_unverified.md
+?? .claude/agent-memory/evidence-reviewer/learning_replay_fingerprint_self_reference.md
+?? .gnosis/evidence/20260821T015016Z/
+?? .gnosis/evidence/20260821T015535Z/
+?? .gnosis/evidence/20260821T020757Z/
+?? .gnosis/lab/kernel-reviews/codex-review-2026-08-21-work-queue.jsonl
+?? docs/adr/ADR-0019-multi-worker-plane.md
+?? src/gnosis/director/work_queue.py
+?? src/gnosis/kernel/budget.py
+?? tests/test_work_queue.py

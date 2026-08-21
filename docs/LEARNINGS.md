@@ -187,3 +187,27 @@ Format:
 - Lesson: an approval binds an identity, and the identity has to be of the thing that will actually happen. Ordering is part of the security property, not an implementation detail: "gate, then finalise" authorises a draft. The fix was moving the gate after the commit, which is safe precisely because that commit writes only to the task's own branch and is inert if the gate then refuses.
 - Operational consequence: the integration gate runs after `autosave`, on the final change set, and a test asserts the snapshot contains the previously-uncommitted paths.
 - Revalidation condition: standing rule; no expiry.
+
+## L-0023 — Delegating a guarantee still leaves you the state you kept beside it
+- Status: VERIFIED
+- Evidence: ADR-0019, findings 1 and 2. `WorkQueue` deliberately delegated OWNERSHIP to the claims plane, which is correct and was the right call. But it kept its own file state (`pending/`, `running/`) alongside, and the lease TTL reclaims a claim without touching files — so a killed worker's brief sat in `running/` with ownership free and the record unreachable, which is the ghost rule 4 forbids. The repair then had to read the claim's OUTCOME, not just its liveness: routing a RESOLVED record back to `pending` would have re-executed finished work.
+- Scope: any component that delegates an invariant to another subsystem while keeping derived or parallel state of its own.
+- Lesson: delegation moves the decision, not the consequences. The delegated authority answers its own question correctly and knows nothing about the state you kept; the reconciliation between them is yours, and it needs the authority's full answer (status/outcome), not just a boolean "is it still held".
+- Operational consequence: `WorkQueue.recover()` reconciles file state against claim status on every worker start (`drain` calls it), and routes by status — RESOLVED to `done/`, anything else to `pending/`.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0024 — A budget that resets on resumption is a budget in name only
+- Status: VERIFIED
+- Evidence: ADR-0019 finding 4. `BudgetLedger` was constructed fresh inside each `run_brief`, so a parked brief that was released and re-claimed started from zero launches. Repeating park/resume launched agents without limit while every individual invocation looked correctly bounded — and the module docstring said "tracks one brief's spend" when it tracked one invocation.
+- Scope: any circuit breaker whose counter lives in memory while the thing it bounds can be resumed.
+- Lesson: the unit a limit is expressed in must match the unit it is stored in. "Per brief" written in the docstring and "per invocation" in the constructor is not a naming slip — it is the whole mechanism, and the resumable path is exactly where it fails while looking healthy.
+- Operational consequence: `BudgetStore` keeps the running total durably, keyed by brief id, and `ledger_for` seeds a resumed run with what the brief already spent.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0025 — Bound the loop where the loop is, not where the cost is
+- Status: VERIFIED
+- Evidence: ADR-0019 finding 6. `drain` re-offers a released brief immediately, and the ADR claimed `Budget` was the bound on that. It is not: parking launches nothing and spends nothing, so a caller that parks every time spins forever with a perfectly healthy budget.
+- Scope: any retry/re-offer loop justified by a limit that counts something the loop does not consume.
+- Lesson: check what the loop actually spends. A limit on money does not bound a loop that is free; rule 8 lists max attempts SEPARATELY from wall-time and budget for exactly this reason, and the separation is not redundancy.
+- Operational consequence: `WorkQueue` carries `max_attempts`, durable on the record, and an exhausted brief is reported in `skipped` rather than silently passed over forever.
+- Revalidation condition: standing rule; no expiry.

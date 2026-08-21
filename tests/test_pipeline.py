@@ -247,6 +247,43 @@ class TestTheWholePath(_PipelineTestCase):
         self.assertIn("no run", outcome.report.run_id)
 
 
+class TestABriefIsBounded(_PipelineTestCase):
+    """Every loop is bounded individually; nothing bounded a BRIEF."""
+
+    def test_a_launch_budget_stops_convergence_and_parks_the_brief(self):
+        from gnosis.kernel.budget import Budget
+        # The implementation's one attempt is charged to the ledger, so
+        # the budget allows nothing more and the first review round is
+        # refused before it costs anything.
+        agent = _Agent(review_answers=(_FAIL_REVIEW,))
+        pipeline = self._pipeline(agent, budget=Budget(max_agent_launches=1))
+        outcome = pipeline.run_brief(self._brief())
+
+        self.assertEqual(agent.reviews, 0)
+        self.assertEqual(outcome.status, ReportStatus.PARTIAL)
+        self.assertTrue(outcome.reason_code.startswith("budget:"))
+        # Nobody did anything wrong, so this is not the agent's failure.
+        self.assertNotEqual(
+            pipeline.records.get("BRIEF-1").state, BriefRecordState.FAILED.value)
+
+    def test_an_ample_budget_changes_nothing(self):
+        from gnosis.kernel.budget import Budget
+        agent = _Agent()
+        outcome = self._pipeline(
+            agent, budget=Budget(max_agent_launches=50)).run_brief(self._brief())
+        self.assertEqual(outcome.status, ReportStatus.COMPLETED)
+
+    def test_the_budget_refuses_before_the_launch_not_after(self):
+        # Refusing after the money is gone is not a budget.
+        from gnosis.kernel.budget import Budget
+        agent = _Agent(review_answers=(_FAIL_REVIEW, _PASS_REVIEW))
+        pipeline = self._pipeline(agent, budget=Budget(max_agent_launches=2))
+        pipeline.run_brief(self._brief())
+        # One review got through; the fix round did not.
+        self.assertEqual(agent.reviews, 1)
+        self.assertEqual(agent.fixes, 0)
+
+
 class TestLandingTheWork(_PipelineTestCase):
     """A converged brief may land — and only then, and only if the MERGED
     tree verifies."""

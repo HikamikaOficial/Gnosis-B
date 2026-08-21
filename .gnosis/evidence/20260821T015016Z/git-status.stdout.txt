@@ -1,0 +1,10 @@
+ M .claude/agent-memory/evidence-reviewer/MEMORY.md
+ M src/gnosis/director/pipeline.py
+ M src/gnosis/runner/gated_runner.py
+ M tests/test_pipeline.py
+?? .claude/agent-memory/evidence-reviewer/learning_adr_evidence_lines_unverified.md
+?? .claude/agent-memory/evidence-reviewer/learning_replay_fingerprint_self_reference.md
+?? .gnosis/evidence/20260821T015016Z/
+?? src/gnosis/director/work_queue.py
+?? src/gnosis/kernel/budget.py
+?? tests/test_work_queue.py
