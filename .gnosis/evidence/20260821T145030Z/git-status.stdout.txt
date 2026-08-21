@@ -1,0 +1,6 @@
+ M src/gnosis/kernel/failures.py
+ M src/gnosis/kernel/scheduler.py
+ M src/gnosis/runner/gated_runner.py
+ M tests/test_pipeline.py
+ M tests/test_scheduler.py
+?? .gnosis/evidence/20260821T145030Z/

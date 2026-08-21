@@ -76,14 +76,26 @@ class CredentialHeld(RuntimeError):
 class HoldGate(Protocol):
     """The slice of the scheduler this needs.
 
-    Two halves, because a gate that only asks is half a gate: `admits`
-    before the launch, `observe` after it, so a rate limit hit by a
+    Three parts, because a gate that only asks is half a gate: `admits`
+    before the launch, `observe` after it — so a rate limit hit by a
     REVIEW or FIX round reaches the hold plane the same way one hit by
-    the implementation does."""
+    the implementation does — and `claim_probe`, so that a hold the
+    kernel ESTIMATED can be tested by one launch instead of expiring
+    into every parked round resuming at once.
+
+    `claim_probe` is on this protocol and not only on `TaskScheduler.
+    submit` because this is the path that actually launches agents in the
+    pipeline. A probe caller wired only into `submit` would leave the
+    reviewer, the fixer and the re-reviewer going through a gate that
+    never probes — the same mechanism-nobody-calls it was meant to fix,
+    one level up."""
 
     def admits(self, *, is_resume: bool = ..., probe_run_id: str | None = ...) -> bool: ...
 
-    def observe(self, classification: FailureClassification | None) -> Any: ...
+    def observe(self, classification: FailureClassification | None,
+                probe_run_id: str | None = ...) -> Any: ...
+
+    def claim_probe(self, run_id: str) -> Any: ...
 
 
 class GatedAgentRunner:
@@ -128,6 +140,8 @@ class GatedAgentRunner:
         self.budget = budget
         self.classification: FailureClassification | None = None
         self.decisions: list[tuple[str, PolicyDecision]] = []
+        # Per-launch, so two rounds of the same stage cannot share a probe.
+        self._probe_seq = 0
 
     @property
     def binary(self) -> str:
@@ -159,13 +173,30 @@ class GatedAgentRunner:
             # BudgetExhausted, which is nobody's failure.
             self.budget.check()
 
+        probe_run_id: str | None = None
         if self.holds is not None and not self.holds.admits():
-            # Checked BEFORE the policy question: spending a verdict on an
-            # action that cannot run anyway is noise in the audit trail,
-            # and a park is not a policy event.
-            raise CredentialHeld(
-                f"credential is held; {self.stage} for task {self.task_id} is parked"
-            )
+            # Held — but if the hold is the kernel's own GUESS about when
+            # the window reopens, one launch should test it rather than
+            # every parked round resuming together when the guess elapses.
+            # The claim has exactly one winner; everyone else parks.
+            #
+            # The identity is per LAUNCH, not per task or per stage: a
+            # convergence loop runs the same stage for the same task
+            # repeatedly, and a reused id would let a later round ride an
+            # earlier round's probe. A shared identity is the defect this
+            # mechanism has already been repaired for once.
+            self._probe_seq += 1
+            candidate = f"{self.task_id}:{self.stage}:{self._probe_seq}"
+            if (self.holds.claim_probe(candidate) is not None
+                    and self.holds.admits(probe_run_id=candidate)):
+                probe_run_id = candidate
+            else:
+                # Checked BEFORE the policy question: spending a verdict on
+                # an action that cannot run anyway is noise in the audit
+                # trail, and a park is not a policy event.
+                raise CredentialHeld(
+                    f"credential is held; {self.stage} for task {self.task_id} is parked"
+                )
 
         snapshot = agent_launch_snapshot(
             stage=self.stage, task_id=self.task_id, prompt=prompt,
@@ -211,7 +242,12 @@ class GatedAgentRunner:
             stderr_text=_tail(stderr_path), stdout_text=_tail(stdout_path),
         ))
         if self.holds is not None:
-            self.holds.observe(self.classification)
+            # The probe id goes with it: a launch that did NOT hit the
+            # limit is the answer the probe was asking for, and without
+            # it the narrowing stands until its own deadline while the
+            # window is demonstrably open — every other round still
+            # parked on a question that has been answered.
+            self.holds.observe(self.classification, probe_run_id=probe_run_id)
         if self.classification.is_park:
             # Park the round rather than handing the caller a "review"
             # that is really a provider refusal.

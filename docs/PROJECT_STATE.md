@@ -1,6 +1,6 @@
 # GNOSIS Project State
 
-**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION
+**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION; THE PROBE HAS A CALLER
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
 **Last update:** 2026-08-20
@@ -103,10 +103,10 @@ governs the order of work here: **prefer wiring over documenting**.
   compete) from decisions (which supersede, with a reason). No
   independent review: both channels are unavailable.
 
-Suite: **695 tests, all passing**; mypy strict clean (47 files); ruff at
+Suite: **711 tests, all passing**; mypy strict clean (47 files); ruff at
 the recorded backlog baseline (19 pre-existing findings in untouched
 files, ratcheted down from 20; `.gnosis/state/lint_baseline.json` fails the run if it rises).
-Captured transcript, not prose: `.gnosis/evidence/20260821T135555Z/`.
+Captured transcript, not prose: `.gnosis/evidence/20260821T145030Z/`.
 
 ## Integration milestone (COMPLETE)
 
@@ -208,6 +208,25 @@ four defects, three repaired: a crash between the claims-plane call and
 the file move ERASED a block decision and dropped a park's backoff
 (L-0030), and a handler returning `None` was silently treated as a park
 (L-0031). The first two are mutation-checked.
+
+## The probe has a caller (ADR-0023)
+
+ADR-0016 built `probe()` and invoked it from nowhere. Reproduced first:
+an ACCOUNT hold on a window the kernel GUESSED admits nobody while it
+stands and every queued resume one second after it elapses — and the
+evidence that it was a guess vanishes with the hold, so the moment a
+caller would want to probe there is nothing left to probe. So the probe
+is claimed BEFORE the guess elapses, by exactly one caller (a
+compare-and-set under one lock), with its own TTL rather than the window
+it replaces, and a clean launch supersedes the hold.
+
+**Shipped WITHOUT an independent review** — Codex still refuses on a
+usage limit, re-checked at the start of this unit. Two units of review
+debt now. Self-review found six defects; the one that mattered was that
+the new caller went into `submit()`, which the pipeline never uses —
+fixing "nothing calls it" with a caller nothing reaches (L-0033). A
+concurrency test also passed with its guard mutated away, because the
+race it was named after never occurred (L-0032).
 
 ## Fixed locations
 

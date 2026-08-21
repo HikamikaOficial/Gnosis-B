@@ -31,6 +31,7 @@ from gnosis.kernel.scheduler import HoldStore, TaskScheduler
 from gnosis.kernel.verification import CommandVerifier
 from gnosis.kernel.worktree import WorktreeManager
 from gnosis.runner.capture import ExecutionResult
+from gnosis.runner.gated_runner import CredentialHeld, GatedAgentRunner
 from gnosis.runner.retry import RetryPolicy
 
 _FAST_RETRY = RetryPolicy(max_attempts=1, backoff_base_s=0.01, backoff_factor=2.0, max_backoff_s=0.02)
@@ -627,6 +628,93 @@ class TestNothingIsLost(_PipelineTestCase):
                                  approvals=approvals).run_brief(self._brief())
         self.assertEqual(blocked.status, ReportStatus.ESCALATION_REQUIRED)
         self.assertEqual(agent.reviews, 0)
+
+
+class TestTheProbeReachesThePathThatLaunches(_PipelineTestCase):
+    """`submit()` is not how the pipeline launches agents. A probe caller
+    wired only there would leave the reviewer, the fixer and the
+    re-reviewer going through a gate that never probes — the same
+    mechanism-nobody-calls defect it was written to fix, one level up."""
+
+    def _gate(self):
+        engine = TaskEngine(run_store=self.run_store, cli_runner=_Agent(),
+                            retry_policy=_FAST_RETRY)
+        return TaskScheduler(
+            engine=engine, run_store=self.run_store, holds=self.holds,
+            credential="claude://default", clock=lambda: self.now,
+        )
+
+    def _runner(self, gate, stage="review", task_id="TASK-1"):
+        return GatedAgentRunner(
+            inner=_Agent(), policy=_permissive(), exec_root=self.repo,
+            stage=stage, task_id=task_id, policy_actor="agent://worker-a",
+            holds=gate,
+        )
+
+    def _estimated_hold(self):
+        self.holds.place(RateLimitHold(
+            credential="claude://default", scope=HoldScope.ACCOUNT,
+            reason_code="rate_limited:prose", reset_at=self.now + 900,
+            placed_at=self.now, window_estimated=True,
+        ))
+
+    def _run(self, runner, name):
+        return runner.run(
+            prompt="review it", cwd=self.repo,
+            stdout_path=self.root / f"{name}.out", stderr_path=self.root / f"{name}.err",
+            timeout_s=30,
+        )
+
+    def test_a_gated_launch_probes_a_guessed_window_instead_of_parking_forever(self):
+        self._estimated_hold()
+        self.now += 900 - 30
+        gate = self._gate()
+        self._run(self._runner(gate), "probe")          # does not raise
+        self.assertEqual(gate.live_holds(), [],
+                         "a clean probe did not reopen the credential")
+
+    def test_only_one_gated_launch_gets_through_the_guess(self):
+        self._estimated_hold()
+        self.now += 900 - 30
+        gate = self._gate()
+        first = self._runner(gate, task_id="TASK-1")
+        second = self._runner(gate, task_id="TASK-2")
+        # The first claims the probe and holds it until it answers; a
+        # second launch arriving meanwhile is parked, not admitted.
+        self.assertIsNotNone(gate.claim_probe("SOMEONE-ELSE"))
+        with self.assertRaises(CredentialHeld):
+            self._run(second, "second")
+        del first
+
+    def test_a_provider_window_still_parks_the_round(self):
+        # Not a guess: nothing to probe, and a park is a park.
+        self.holds.place(RateLimitHold(
+            credential="claude://default", scope=HoldScope.ACCOUNT,
+            reason_code="rate_limited:usage", reset_at=self.now + 900,
+            placed_at=self.now, window_estimated=False,
+        ))
+        self.now += 900 - 30
+        with self.assertRaises(CredentialHeld):
+            self._run(self._runner(self._gate()), "parked")
+
+    def test_two_rounds_of_one_stage_never_share_a_probe(self):
+        # A convergence loop runs the same stage for the same task
+        # repeatedly. A reused identity would let a later round ride an
+        # earlier round's probe, which is the defect this mechanism has
+        # already been repaired for once.
+        self._estimated_hold()
+        self.now += 900 - 30
+        gate = self._gate()
+        runner = self._runner(gate)
+        self._run(runner, "round-1")
+        self._estimated_hold()
+        self.now += 900 - 30
+        self._run(runner, "round-2")
+        rows = [json.loads(line) for line
+                in self.holds.path.read_text(encoding="utf-8").splitlines()]
+        holders = [r["hold"]["probe_holder"] for r in rows if r.get("row") == "narrow"]
+        self.assertEqual(len(holders), 2)
+        self.assertEqual(len(set(holders)), 2, f"a probe identity was reused: {holders}")
 
 
 if __name__ == "__main__":

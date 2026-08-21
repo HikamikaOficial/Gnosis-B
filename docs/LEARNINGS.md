@@ -259,3 +259,19 @@ Format:
 - Lesson: the dangerous default is the one that resembles healthy behaviour. A malformed output is not a quiet vote for the last option — its outcome is as unknown as an exception and deserves the same treatment. Two corollaries: check with `isinstance`, not equality, when the enum is a `str` enum (the string "PARK" compares equal to a member); and type the incoming value as `object`, because annotating it as the promised type makes the guard read as dead code and invites its deletion.
 - Operational consequence: `StopReason.INVALID_OUTPUT`; a non-`Disposition` blocks the brief.
 - Revalidation condition: standing rule; no expiry.
+
+## L-0032 — A green test over an interleaving that never happened is worse than no test
+- Status: VERIFIED
+- Evidence: ADR-0023 self-review finding 5. A threaded test asserted that six racing schedulers produce exactly one probe. It passed — and it still passed with the single-winner guard mutated away, because `probe_is_due` refused the second caller long before the contested append. The race the test was named after never occurred in any run.
+- Scope: any concurrency test; any test of a guard that sits behind an earlier, cheaper check.
+- Lesson: threads plus a barrier do not create contention, they create the OPPORTUNITY for it. If an earlier check can short-circuit the callers, they never reach the step under test and the assertion passes for the wrong reason. Drive the contended step directly: let every caller pass the earlier check BEFORE the barrier, then race only on the step whose property is claimed. And prove it by mutation — a concurrency test that survives deleting the mechanism it tests is documentation, not evidence.
+- Operational consequence: `test_racing_claims_produce_exactly_one_probe` plus a deterministic `test_a_caller_past_the_due_check_is_still_refused_by_the_claim`; both fail when the guard is removed.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0033 — Fixing "nothing calls it" by adding a caller nothing reaches
+- Status: VERIFIED
+- Evidence: ADR-0023 self-review finding 1. `probe()` had no caller, so one was wired into `TaskScheduler.submit()` — which nothing in the pipeline uses. Agents are launched through `GatedAgentRunner`, which gates on `admits()` directly. The repair would have been the original defect wearing the repair's clothes: a second mechanism, correct in isolation, sitting on a path no production caller takes.
+- Scope: any "wire this up" task; any protocol with more than one implementation of the calling side.
+- Lesson: before adding a caller, find out who consumes the thing TODAY — grep the interface, not the implementation. A gate has as many entry points as there are callers of its protocol, and adding capability to one of them fixes exactly that one. The test that closes it must live where the real path is, not where the mechanism is.
+- Operational consequence: `claim_probe` is on the `HoldGate` protocol; the gated runner claims a probe per LAUNCH, not per task or stage.
+- Revalidation condition: standing rule; no expiry.

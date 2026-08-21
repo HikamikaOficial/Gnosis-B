@@ -575,14 +575,20 @@ class HoldRegistry:
         match `probe_holder`); an ACCOUNT hold admits nothing. A PROBE
         hold with no named holder admits nobody: an unattributable probe
         is not a probe.
+
+        `is_resume` is accepted and deliberately NOT required here. Once
+        the holder is matched by identity the flag adds no restriction —
+        the run named in the durable row is the one the kernel chose to
+        admit — while requiring it means a caller that forgets the flag
+        denies the probe its own passage. A claim any caller could make
+        was the original defect; an exact identity is not that.
         """
         hold = self._holds.get(credential)
         if hold is None or hold.expired(now):
             return True
         if hold.scope is HoldScope.PROBE:
             return bool(
-                is_resume and runner_id is not None
-                and hold.probe_holder is not None
+                runner_id is not None and hold.probe_holder is not None
                 and runner_id == hold.probe_holder
             )
         return False

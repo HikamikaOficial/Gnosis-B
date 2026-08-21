@@ -37,6 +37,7 @@ from typing import Any
 from ..runner.liveness import ProcessFingerprint, is_alive
 from .engine import TaskEngine, TaskExecutionOutcome
 from .failures import (
+    UNKNOWN_WINDOW_FALLBACK_S,
     Disposition,
     FailureClass,
     FailureClassification,
@@ -123,6 +124,35 @@ class HoldStore:
         }])
         return replacement
 
+    def narrow_if_unclaimed(self, credential: str, at: float, reason: str,
+                            replacement: RateLimitHold) -> RateLimitHold | None:
+        """Narrow, but only if nobody else already did — one winner.
+
+        A check-then-append is not a claim. Two schedulers finding the
+        probe due at the same instant both appended, the later row won the
+        rebuild, and the loser could already have passed its own
+        admission check and launched: two runs testing a window that may
+        still be shut, which is the stampede in miniature. The read and
+        the append happen under ONE lock here, which is the same
+        compare-and-set shape the claims plane uses and for the same
+        reason — a decision with exactly one winner cannot be assembled
+        from two unsynchronised steps.
+        """
+        with FileLock(lock_path_for(self.path), timeout_s=self._lock_timeout_s):
+            snapshot = self._read_unlocked()
+            if snapshot.damaged:
+                # Deny in the shut direction, as everywhere else.
+                return None
+            live = HoldRegistry().reconcile(snapshot.holds, at)
+            for hold in live:
+                if hold.credential == credential and hold.scope is HoldScope.PROBE:
+                    return None
+            self._write_unlocked([{
+                "row": "narrow", "credential": credential, "at": at,
+                "reason": reason, "hold": replacement.to_dict(),
+            }])
+        return replacement
+
     def supersede(self, credential: str, at: float, reason: str) -> None:
         """Draw a line: earlier rows for this credential no longer apply.
 
@@ -142,10 +172,13 @@ class HoldStore:
                        "at": at, "reason": reason}])
 
     def _append(self, payloads: list[dict[str, Any]]) -> None:
-        with (
-            FileLock(lock_path_for(self.path), timeout_s=self._lock_timeout_s),
-            self.path.open("a", encoding="utf-8") as fh,
-        ):
+        with FileLock(lock_path_for(self.path), timeout_s=self._lock_timeout_s):
+            self._write_unlocked(payloads)
+
+    def _write_unlocked(self, payloads: list[dict[str, Any]]) -> None:
+        """Caller holds the lock. Split out so that a read and an append
+        can share one, which is what makes a claim a claim."""
+        with self.path.open("a", encoding="utf-8") as fh:
             for payload in payloads:
                 fh.write(json.dumps(payload, sort_keys=True) + "\n")
             fh.flush()
@@ -174,7 +207,16 @@ class HoldStore:
 
         with FileLock(lock_path_for(self.path), timeout_s=self._lock_timeout_s):
             text = self.path.read_text(encoding="utf-8")
+        return self._parse(text)
 
+    def _read_unlocked(self) -> HoldSnapshot:
+        """Caller holds the lock. See `narrow_if_unclaimed`."""
+        if not self.path.exists():
+            return HoldSnapshot(holds=(), damaged=())
+        return self._parse(self.path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _parse(text: str) -> HoldSnapshot:
         holds: list[RateLimitHold] = []
         damaged: list[str] = []
         for number, line in enumerate(text.splitlines(), start=1):
@@ -201,6 +243,38 @@ class HoldStore:
     def records(self) -> list[RateLimitHold]:
         """Live holds only. Prefer `read()`, which also reports damage."""
         return list(self.read().holds)
+
+
+@dataclass(frozen=True)
+class ProbePolicy:
+    """When one run goes first, and how long it has to answer.
+
+    A probe is claimed BEFORE the estimated window elapses, not after.
+    Once an estimated `reset_at` passes, the hold is gone from the live
+    state and with it the evidence that the window was ever a guess —
+    every queued resume is admitted at once, which is the stampede the
+    probe mechanism exists to prevent. Reaching back `lead_s` is what
+    makes the decision possible while there is still something to decide.
+    """
+
+    # How far before an estimated reset one run is let through.
+    lead_s: float = 60.0
+    # How long that run holds the credential. A probe is a LEASE, not a
+    # window: the probing run can die, and a narrowing that outlived its
+    # holder would pin the credential to a process that no longer exists.
+    ttl_s: float = 120.0
+    # An unknown window never expires by itself, so a probe is the only
+    # way out of one. Waiting this long first keeps that from firing the
+    # instant such a hold is placed.
+    unknown_window_wait_s: float = UNKNOWN_WINDOW_FALLBACK_S
+
+    def __post_init__(self) -> None:
+        for name in ("lead_s", "ttl_s", "unknown_window_wait_s"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(f"{name} must be a number, got {value!r}")
+            if value <= 0:
+                raise ValueError(f"{name} must be positive, got {value!r}")
 
 
 @dataclass(frozen=True)
@@ -242,6 +316,11 @@ class TaskScheduler:
         # durable hold look permanently unexpired.
         clock: Callable[[], float] = time.time,
         stale_after_s: float = 120.0,
+        probe_policy: ProbePolicy | None = None,
+        # Default ON. It is strictly LESS permissive than the behaviour it
+        # replaces — today an estimated window elapsing admits everyone —
+        # so deny-by-default argues for it, not against it.
+        probe_when_due: bool = True,
     ) -> None:
         self.engine = engine
         self.run_store = run_store
@@ -250,6 +329,8 @@ class TaskScheduler:
         self.scheduler_id = scheduler_id
         self.clock = clock
         self.stale_after_s = stale_after_s
+        self.probe_policy = probe_policy or ProbePolicy()
+        self.probe_when_due = probe_when_due
         self.registry = HoldRegistry()
 
     # -- the hold plane ---------------------------------------------------
@@ -288,10 +369,27 @@ class TaskScheduler:
         """
         task_id = str(task_kwargs.get("task_id", "<unknown>"))
         if not self.admits(is_resume=is_resume, probe_run_id=probe_run_id):
-            held = self.registry.hold_for(self.credential)
-            return ScheduleOutcome(
-                task_id=task_id, launched=False, reason_code=PARK_REASON, hold=held,
-            )
+            # THE AUTOMATIC CALLER. `probe()` existed and nothing invoked
+            # it, so the kernel's own guessed windows still ended in a
+            # stampede — a mechanism nothing calls is a parallel fiction.
+            # This is the moment it is needed: a submission is being
+            # parked on a hold the kernel ESTIMATED, and rather than every
+            # queued run being released together when that guess elapses,
+            # one goes first and the rest keep waiting.
+            #
+            # The holder is the TASK being admitted, not the scheduler:
+            # a shared identity was the original defect, and this one is
+            # unique to the unit of work asking.
+            if self.probe_when_due and probe_run_id is None:
+                claimed = self.claim_probe(task_id)
+                if claimed is not None:
+                    probe_run_id = task_id
+            if not self.admits(is_resume=is_resume, probe_run_id=probe_run_id):
+                held = self.registry.hold_for(self.credential)
+                return ScheduleOutcome(
+                    task_id=task_id, launched=False, reason_code=PARK_REASON,
+                    hold=held,
+                )
 
         # Re-check immediately before the launch. Another scheduler can
         # place a hold between the decision and the child, and this shrinks
@@ -306,7 +404,7 @@ class TaskScheduler:
             )
 
         outcome = self.engine.execute_task(**task_kwargs)
-        hold = self.observe(outcome.classification)
+        hold = self.observe(outcome.classification, probe_run_id=probe_run_id)
         return ScheduleOutcome(
             task_id=task_id, launched=True,
             reason_code=(outcome.classification.reason_code
@@ -314,7 +412,8 @@ class TaskScheduler:
             execution=outcome, hold=hold,
         )
 
-    def observe(self, classification: FailureClassification | None) -> RateLimitHold | None:
+    def observe(self, classification: FailureClassification | None,
+                probe_run_id: str | None = None) -> RateLimitHold | None:
         """Record what one launch's classification implies for the window.
 
         Public because the implementation is not the only thing that
@@ -328,6 +427,13 @@ class TaskScheduler:
             # Every other failure is about the work, not the window.
             # Holding a credential because a test failed would take the
             # whole system down for a bug.
+            #
+            # But a launch that did NOT hit the limit is the answer the
+            # probe was asking for, and nothing used to read it: the
+            # narrowing stood until its own deadline while the window was
+            # demonstrably open, so a successful probe kept every other
+            # run parked. Reopening is a recorded decision, not a silence.
+            self._resolve_probe(probe_run_id)
             return None
         hold = hold_from_classification(
             classification, self.credential, self.clock(), scope=HoldScope.ACCOUNT,
@@ -336,17 +442,41 @@ class TaskScheduler:
             return None
         return self.holds.place(hold)
 
-    def probe(self, run_id: str) -> RateLimitHold:
+    def _resolve_probe(self, probe_run_id: str | None) -> None:
+        """A probe that came back clean reopens the credential."""
+        if probe_run_id is None:
+            return
+        self.live_holds()
+        hold = self.registry.hold_for(self.credential)
+        if (hold is None or hold.scope is not HoldScope.PROBE
+                or hold.probe_holder != probe_run_id):
+            # Not this run's probe to end — including the case where a
+            # later hold already superseded it.
+            return
+        self.holds.supersede(self.credential, self.clock(),
+                             reason=f"probe_succeeded:{probe_run_id}")
+        self.live_holds()
+
+    def probe(self, run_id: str, ttl_s: float | None = None) -> RateLimitHold:
         """Narrow an ACCOUNT hold to a single probing run.
 
         The named run is the ONLY one admitted while this stands. An
         unattributed probe would admit every queued resume at once, which
         is the stampede a probe exists to prevent (ADR-0012).
+
+        The replacement gets its OWN deadline and never inherits the
+        window it replaces. Inheriting was wrong in both directions: a
+        `reset_at` already in the past made the probe hold expire the
+        instant it was written — admitting everyone, the exact stampede —
+        and a `None` made it a hold that never expires, pinning the
+        credential to a run that may already be dead. A probe is a lease
+        on the credential, and a lease that cannot expire is not one.
         """
         self.live_holds()
         current = self.registry.hold_for(self.credential)
         reason = current.reason_code if current else "rate_limited:probe"
-        reset_at = current.reset_at if current else None
+        reset_at = self.clock() + (
+            ttl_s if ttl_s is not None else self.probe_policy.ttl_s)
         # Narrowing is a DECISION, not an observation: without drawing the
         # line first, the broader ACCOUNT hold simply outranks this row and
         # the probe never takes effect. Both rows go down in ONE append, so
@@ -357,7 +487,57 @@ class TaskScheduler:
                 credential=self.credential, scope=HoldScope.PROBE,
                 reason_code=reason, reset_at=reset_at, placed_at=self.clock(),
                 probe_holder=run_id,
-                window_estimated=current.window_estimated if current else False,
+                # Estimated by construction: this deadline is the kernel's
+                # lease on one run, never a window a provider supplied.
+                window_estimated=True,
+            ),
+        )
+
+    def probe_is_due(self) -> RateLimitHold | None:
+        """The hold one run should now be let through to test, if any.
+
+        Due when the kernel is about to act on its OWN guess: an estimated
+        window within `lead_s` of elapsing, or an unknown window that has
+        stood for `unknown_window_wait_s`. A window the PROVIDER supplied
+        is never probed — it is not a guess, and spending a launch to
+        contradict it buys nothing. A live PROBE hold is never re-probed:
+        somebody is already answering the question.
+        """
+        self.live_holds()
+        hold = self.registry.hold_for(self.credential)
+        if hold is None or hold.scope is not HoldScope.ACCOUNT:
+            return None
+        if not hold.window_estimated and hold.reset_at is not None:
+            return None
+        now = self.clock()
+        if hold.reset_at is None:
+            # A hold that never expires needs a probe or it is an outage.
+            due_at = hold.placed_at + self.probe_policy.unknown_window_wait_s
+        else:
+            due_at = hold.reset_at - self.probe_policy.lead_s
+        return hold if now >= due_at else None
+
+    def claim_probe(self, run_id: str) -> RateLimitHold | None:
+        """Take the probe for `run_id`, or None if it is not ours to take.
+
+        Exactly one winner, because the read and the append happen under
+        one lock. A check-then-append was not enough: two schedulers
+        finding the probe due at the same instant both narrowed, the later
+        row won the rebuild, and the loser could already have passed its
+        own admission check and launched — two runs testing a window that
+        may still be shut.
+        """
+        current = self.probe_is_due()
+        if current is None:
+            return None
+        now = self.clock()
+        return self.holds.narrow_if_unclaimed(
+            self.credential, now, reason=f"probe:{run_id}",
+            replacement=RateLimitHold(
+                credential=self.credential, scope=HoldScope.PROBE,
+                reason_code=current.reason_code, placed_at=now,
+                reset_at=now + self.probe_policy.ttl_s, probe_holder=run_id,
+                window_estimated=True,
             ),
         )
 

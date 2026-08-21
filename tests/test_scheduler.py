@@ -8,6 +8,7 @@ and a restart actually sees it.
 import json
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -25,6 +26,7 @@ from gnosis.kernel.run_store import RunStore
 from gnosis.kernel.scheduler import (
     PARK_REASON,
     HoldStore,
+    ProbePolicy,
     TaskScheduler,
     holds_summary,
 )
@@ -419,6 +421,222 @@ class TestOperatorView(_SchedulerTestCase):
         ])
         self.assertEqual([row["window_source"] for row in summary],
                          ["estimated", "provider"])
+
+
+class TestTheProbeHasACaller(_SchedulerTestCase):
+    """ADR-0016 built `probe()` and nothing invoked it, so the kernel's own
+    GUESSED windows still ended in the stampede the probe exists to
+    prevent: at the estimated reset the hold simply vanished and every
+    queued run was admitted together."""
+
+    def _estimated_hold(self, window_s=900.0):
+        self.holds.place(RateLimitHold(
+            credential="claude://default", scope=HoldScope.ACCOUNT,
+            reason_code="rate_limited:prose", reset_at=self.now + window_s,
+            placed_at=self.now, window_estimated=True,
+        ))
+
+    def _rate_limiting_runner(self):
+        return _Runner(exit_code=1, structured={
+            "error": {"type": "rate_limit_error"},
+            "rate_limited": True,
+        })
+
+    def test_when_the_guess_was_wrong_only_one_run_pays_for_it(self):
+        # Five runs are waiting; the kernel's estimate is about to elapse;
+        # the window is in fact still shut. One launch discovers that and
+        # the other four never leave the queue — and, because the failed
+        # probe re-holds the account, the guess is CORRECTED before it
+        # would have expired and released everybody.
+        #
+        # Sequentially this is not yet a stampede prevented: the first
+        # launch would have re-held the credential anyway. The stampede is
+        # the concurrent case, and `test_racing_claims_produce_exactly_one
+        # _probe` is the test that shows it.
+        self._estimated_hold()
+        self.now += 900 - 30          # inside the probe lead
+        runner = self._rate_limiting_runner()
+        scheduler = self._scheduler(runner)
+
+        outcomes = [self._submit(scheduler, task_id=f"TASK-{i}") for i in range(5)]
+
+        self.assertEqual(runner.calls, 1, "more than one run tested the window")
+        self.assertEqual(sum(1 for o in outcomes if o.launched), 1)
+        self.assertEqual(sum(1 for o in outcomes if o.parked), 4)
+        # And the failed probe left an ACCOUNT hold, not a probe nobody owns.
+        held = self._scheduler().live_holds()
+        self.assertEqual(len(held), 1)
+        self.assertIs(held[0].scope, HoldScope.ACCOUNT)
+
+    def test_when_the_guess_was_right_the_probe_reopens_it_for_everyone(self):
+        # A successful probe is the answer the question was asked for, and
+        # nothing used to read it: the narrowing stood until its own
+        # deadline while the window was demonstrably open.
+        self._estimated_hold()
+        self.now += 900 - 30
+        runner = _Runner()
+        scheduler = self._scheduler(runner)
+
+        outcomes = [self._submit(scheduler, task_id=f"TASK-{i}") for i in range(5)]
+
+        self.assertEqual(sum(1 for o in outcomes if o.launched), 5)
+        self.assertEqual(self._scheduler().live_holds(), [])
+
+    def test_a_window_the_provider_supplied_is_never_probed(self):
+        # It is not a guess. Spending a launch to contradict it buys
+        # nothing, and the launch would be charged to somebody.
+        self.holds.place(RateLimitHold(
+            credential="claude://default", scope=HoldScope.ACCOUNT,
+            reason_code="rate_limited:usage", reset_at=self.now + 900,
+            placed_at=self.now, window_estimated=False,
+        ))
+        self.now += 900 - 30
+        runner = _Runner()
+        scheduler = self._scheduler(runner)
+        self.assertIsNone(scheduler.probe_is_due())
+        self.assertTrue(self._submit(scheduler).parked)
+        self.assertEqual(runner.calls, 0)
+
+    def test_an_unknown_window_becomes_probeable_instead_of_permanent(self):
+        # A hold with no window never expires by itself — the "loaded gun"
+        # an earlier review named. A probe is the only way out of one.
+        self.holds.place(RateLimitHold(
+            credential="claude://default", scope=HoldScope.ACCOUNT,
+            reason_code="rate_limited:prose", reset_at=None,
+            placed_at=self.now, window_estimated=True,
+        ))
+        scheduler = self._scheduler()
+        self.assertIsNone(scheduler.probe_is_due(), "probed the instant it was placed")
+        self.now += 901
+        self.assertIsNotNone(scheduler.probe_is_due())
+
+    def test_a_probe_never_inherits_the_window_it_replaces(self):
+        # Inheriting was wrong both ways: a past `reset_at` expired the
+        # probe hold the instant it was written (admitting everyone), and
+        # a `None` pinned the credential to a run that may be dead.
+        self.holds.place(RateLimitHold(
+            credential="claude://default", scope=HoldScope.ACCOUNT,
+            reason_code="rate_limited:prose", reset_at=None,
+            placed_at=self.now, window_estimated=True,
+        ))
+        scheduler = self._scheduler(probe_policy=ProbePolicy(ttl_s=120.0))
+        placed = scheduler.probe("RUN-PROBE")
+        self.assertEqual(placed.reset_at, self.now + 120.0)
+        self.assertTrue(scheduler.admits(probe_run_id="RUN-PROBE"))
+
+    def test_an_abandoned_probe_does_not_pin_the_credential_forever(self):
+        # The probing run dies without answering. A narrowing that
+        # outlives its holder is a lease that cannot expire.
+        self._estimated_hold()
+        self.now += 900 - 30
+        scheduler = self._scheduler(probe_policy=ProbePolicy(ttl_s=120.0))
+        self.assertIsNotNone(scheduler.claim_probe("RUN-DEAD"))
+        self.assertFalse(scheduler.admits(probe_run_id="RUN-OTHER"))
+
+        self.now += 121
+        self.assertTrue(self._scheduler().admits(probe_run_id="RUN-OTHER"))
+
+    def _contested_claim(self, run_id):
+        """The claim step alone, as a caller reaches it having ALREADY
+        passed the due check — which is the only state where the race is
+        real."""
+        now = self.now
+        return self.holds.narrow_if_unclaimed(
+            "claude://default", now, reason=f"probe:{run_id}",
+            replacement=RateLimitHold(
+                credential="claude://default", scope=HoldScope.PROBE,
+                reason_code="rate_limited:prose", placed_at=now,
+                reset_at=now + 120.0, probe_holder=run_id, window_estimated=True,
+            ),
+        )
+
+    def test_a_caller_past_the_due_check_is_still_refused_by_the_claim(self):
+        # Deterministic version of the race. Both schedulers see the probe
+        # due; one appends; the other is now holding a stale answer and
+        # only the compare-and-set can stop it. Without that guard it
+        # narrows too, its row wins the rebuild, and TWO runs believe they
+        # are the probe.
+        self._estimated_hold()
+        self.now += 900 - 30
+        first, second = self._scheduler(), self._scheduler()
+        self.assertIsNotNone(first.probe_is_due())
+        self.assertIsNotNone(second.probe_is_due())
+
+        self.assertIsNotNone(first.claim_probe("RUN-A"))
+        self.assertIsNone(self._contested_claim("RUN-B"))
+
+        fresh = self._scheduler()
+        self.assertTrue(fresh.admits(probe_run_id="RUN-A"))
+        self.assertFalse(fresh.admits(probe_run_id="RUN-B"))
+
+    def test_racing_claims_produce_exactly_one_probe(self):
+        # The same contention with real threads on real files. Every
+        # thread has passed the due check before the barrier, so they all
+        # reach the contested append together.
+        self._estimated_hold()
+        self.now += 900 - 30
+        for index in range(6):
+            self.assertIsNotNone(self._scheduler().probe_is_due(), index)
+
+        winners: list = []
+        lock = threading.Lock()
+        barrier = threading.Barrier(6)
+
+        def claim(index):
+            barrier.wait()
+            got = self._contested_claim(f"RUN-{index}")
+            if got is not None:
+                with lock:
+                    winners.append(got)
+
+        threads = [threading.Thread(target=claim, args=(i,)) for i in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+        self.assertFalse([t for t in threads if t.is_alive()], "a claim hung")
+        self.assertEqual(len(winners), 1, f"{len(winners)} callers all probed")
+        fresh = self._scheduler()
+        admitted = [i for i in range(6) if fresh.admits(probe_run_id=f"RUN-{i}")]
+        self.assertEqual(len(admitted), 1)
+
+    def test_a_second_probe_is_not_claimed_while_one_is_answering(self):
+        self._estimated_hold()
+        self.now += 900 - 30
+        scheduler = self._scheduler()
+        self.assertIsNotNone(scheduler.claim_probe("RUN-FIRST"))
+        self.assertIsNone(scheduler.claim_probe("RUN-SECOND"))
+
+    def test_the_probe_holder_is_the_task_not_the_scheduler(self):
+        # A shared identity was the original defect: any submission from
+        # any scheduler with that id rode the probe.
+        self._estimated_hold()
+        self.now += 900 - 30
+        scheduler = self._scheduler(self._rate_limiting_runner(),
+                                    scheduler_id="scheduler-A")
+        self._submit(scheduler, task_id="TASK-PROBE")
+        rows = [json.loads(line) for line
+                in self.holds.path.read_text(encoding="utf-8").splitlines()]
+        narrowed = [r for r in rows if r.get("row") == "narrow"]
+        self.assertEqual(len(narrowed), 1)
+        self.assertEqual(narrowed[0]["hold"]["probe_holder"], "TASK-PROBE")
+
+    def test_probing_can_be_switched_off_without_reopening_the_window(self):
+        # Off means MORE conservative, never less: everyone keeps waiting.
+        self._estimated_hold()
+        self.now += 900 - 30
+        runner = _Runner()
+        scheduler = self._scheduler(runner, probe_when_due=False)
+        self.assertTrue(self._submit(scheduler).parked)
+        self.assertEqual(runner.calls, 0)
+
+    def test_a_shrinking_or_absent_probe_policy_is_refused(self):
+        for kwargs in ({"lead_s": 0}, {"ttl_s": -1}, {"unknown_window_wait_s": 0}):
+            with self.subTest(**kwargs), self.assertRaises(ValueError):
+                ProbePolicy(**kwargs)
+        with self.assertRaises(TypeError):
+            ProbePolicy(ttl_s=True)
 
 
 if __name__ == "__main__":
