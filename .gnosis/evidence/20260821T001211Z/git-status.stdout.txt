@@ -1,0 +1,10 @@
+ M .claude/agent-memory/evidence-reviewer/MEMORY.md
+ M docs/adr/ADR-0016-scheduler-hold-plane.md
+ M src/gnosis/kernel/failures.py
+ M src/gnosis/kernel/scheduler.py
+ M tests/test_scheduler.py
+?? .claude/agent-memory/evidence-reviewer/learning_adr_evidence_lines_unverified.md
+?? .claude/agent-memory/evidence-reviewer/learning_replay_fingerprint_self_reference.md
+?? .gnosis/evidence/20260821T000837Z/
+?? .gnosis/evidence/20260821T001211Z/
+?? .gnosis/lab/kernel-reviews/codex-review-2026-08-21-scheduler.jsonl

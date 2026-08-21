@@ -26,6 +26,7 @@ pump, a concurrent scheduler and a restart all land in the same state.
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -54,6 +55,38 @@ from .state_machine import RunState
 PARK_REASON = "rate_limited:credential_on_hold"
 
 
+def _require_supersede_fields(payload: dict[str, Any]) -> str:
+    """A control row that reopens a credential must be complete.
+
+    `at` and `reason` were optional, so a half-specified row still erased
+    every hold on a credential (Codex review). An incomplete decision is
+    damage, and damage denies."""
+    credential = payload.get("credential")
+    if not isinstance(credential, str) or not credential:
+        # ValueError throughout: a malformed durable row is corrupt data,
+        # not a caller type error, and `read()` catches ValueError to
+        # report damage (which denies).
+        raise ValueError("supersede without a credential")
+    reason = payload.get("reason")
+    if not isinstance(reason, str) or not reason:
+        raise ValueError("supersede without a reason")
+    at = payload.get("at")
+    if isinstance(at, bool) or not isinstance(at, (int, float)):
+        raise ValueError("supersede without a timestamp")  # noqa: TRY004
+    return credential
+
+
+@dataclass(frozen=True)
+class HoldSnapshot:
+    """What the durable log says, and what it could not say.
+
+    `damaged` is load-bearing: a hold plane that cannot read its own
+    records must not report "no holds"."""
+
+    holds: tuple[RateLimitHold, ...]
+    damaged: tuple[str, ...]
+
+
 class HoldStore:
     """Append-only durable holds. One JSONL file, one lock.
 
@@ -69,8 +102,26 @@ class HoldStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def place(self, hold: RateLimitHold) -> RateLimitHold:
-        self._append({"row": "hold", **hold.to_dict()})
+        self._append([{"row": "hold", **hold.to_dict()}])
         return hold
+
+    def narrow(self, credential: str, at: float, reason: str,
+               replacement: RateLimitHold) -> RateLimitHold:
+        """Supersede and replace as ONE row.
+
+        Two rows in one append is not enough: a crash can flush the first
+        line and not the second, leaving a supersede with nothing
+        replacing it — a credential wide open, durably. One row makes a
+        torn write unparseable instead, which `read()` reports as damage
+        and the scheduler denies on. The atomic unit here is the LINE, so
+        an atomic transition has to be a line (Codex review, caught by a
+        test that walked every prefix of the log).
+        """
+        self._append([{
+            "row": "narrow", "credential": credential, "at": at,
+            "reason": reason, "hold": replacement.to_dict(),
+        }])
+        return replacement
 
     def supersede(self, credential: str, at: float, reason: str) -> None:
         """Draw a line: earlier rows for this credential no longer apply.
@@ -87,41 +138,69 @@ class HoldStore:
         reason, which is the property that matters: a window is never
         reopened silently, only by a recorded act.
         """
-        self._append({"row": "supersede", "credential": credential,
-                      "at": at, "reason": reason})
+        self._append([{"row": "supersede", "credential": credential,
+                       "at": at, "reason": reason}])
 
-    def _append(self, payload: dict[str, Any]) -> None:
+    def _append(self, payloads: list[dict[str, Any]]) -> None:
         with (
             FileLock(lock_path_for(self.path), timeout_s=self._lock_timeout_s),
             self.path.open("a", encoding="utf-8") as fh,
         ):
-            fh.write(json.dumps(payload, sort_keys=True) + "\n")
+            for payload in payloads:
+                fh.write(json.dumps(payload, sort_keys=True) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
 
-    def records(self) -> list[RateLimitHold]:
-        """Live hold rows: everything after the last supersede per credential.
+    def read(self) -> HoldSnapshot:
+        """Live holds, plus whether anything was unreadable.
 
-        A row half-written by a killed process is skipped rather than
-        raising: the rest of the file is still true, and refusing to read
-        any holds because of one bad line would open every window at
-        once — the failure mode with the worst blast radius here.
+        **Damage is not "no hold".** The first version skipped unreadable
+        rows and returned the rest, reasoning that refusing everything
+        would open every window at once. That was backwards: skipping the
+        row ALSO opens the window it described, and if the damaged row was
+        the only hold on a credential, a truncated line silently admitted
+        work against a shut one (Codex review). A safety mechanism has to
+        fail in the shut direction, so damage is reported and the caller
+        denies.
+
+        Reading happens under the writer's lock: without it a reader can
+        observe a half-written row and treat a hold that IS being placed
+        as absent.
         """
         if not self.path.exists():
-            return []
+            # Never written to. Distinct from damaged: there is nothing to
+            # fail closed about.
+            return HoldSnapshot(holds=(), damaged=())
+
+        with FileLock(lock_path_for(self.path), timeout_s=self._lock_timeout_s):
+            text = self.path.read_text(encoding="utf-8")
+
         holds: list[RateLimitHold] = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
+        damaged: list[str] = []
+        for number, line in enumerate(text.splitlines(), start=1):
             line = line.strip()
             if not line:
                 continue
             try:
                 payload = json.loads(line)
+                if payload.get("row") == "narrow":
+                    # Supersede and replace, indivisibly.
+                    credential = _require_supersede_fields(payload)
+                    holds = [h for h in holds if h.credential != credential]
+                    holds.append(RateLimitHold.from_dict(payload["hold"]))
+                    continue
                 if payload.get("row") == "supersede":
-                    credential = payload["credential"]
+                    credential = _require_supersede_fields(payload)
                     holds = [h for h in holds if h.credential != credential]
                     continue
                 holds.append(RateLimitHold.from_dict(payload))
-            except (json.JSONDecodeError, KeyError, ValueError, TypeError):
-                continue
-        return holds
+            except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
+                damaged.append(f"line {number}: {type(exc).__name__}: {exc}")
+        return HoldSnapshot(holds=tuple(holds), damaged=tuple(damaged))
+
+    def records(self) -> list[RateLimitHold]:
+        """Live holds only. Prefer `read()`, which also reports damage."""
+        return list(self.read().holds)
 
 
 @dataclass(frozen=True)
@@ -177,16 +256,30 @@ class TaskScheduler:
 
     def live_holds(self) -> list[RateLimitHold]:
         """Rebuild from durable rows. Idempotent by construction."""
-        return self.registry.reconcile(self.holds.records(), self.clock())
+        return self.registry.reconcile(self.holds.read().holds, self.clock())
 
-    def admits(self, *, is_resume: bool = False) -> bool:
-        self.live_holds()
+    def admits(self, *, is_resume: bool = False, probe_run_id: str | None = None) -> bool:
+        """May work start on this credential right now?
+
+        `probe_run_id` names the RUN being admitted, not the process
+        asking. Passing the scheduler's own id meant a PROBE hold admitted
+        any submission from any scheduler sharing that id — the stampede a
+        probe exists to prevent, hidden by a test whose scheduler id and
+        probe id happened to be the same string (Codex review).
+        """
+        snapshot = self.holds.read()
+        if snapshot.damaged:
+            # Unreadable rows are not "no holds". Deny until an operator
+            # looks: a safety mechanism fails in the shut direction.
+            return False
+        self.registry.reconcile(snapshot.holds, self.clock())
         return self.registry.admits(
             self.credential, self.clock(), is_resume=is_resume,
-            runner_id=self.scheduler_id,
+            runner_id=probe_run_id,
         )
 
-    def submit(self, *, is_resume: bool = False, **task_kwargs: Any) -> ScheduleOutcome:
+    def submit(self, *, is_resume: bool = False, probe_run_id: str | None = None,
+               **task_kwargs: Any) -> ScheduleOutcome:
         """Run one task, unless the credential is held.
 
         A refusal here is a PARK, not a failure: the work is untouched and
@@ -194,10 +287,22 @@ class TaskScheduler:
         somebody else's traffic closed.
         """
         task_id = str(task_kwargs.get("task_id", "<unknown>"))
-        if not self.admits(is_resume=is_resume):
+        if not self.admits(is_resume=is_resume, probe_run_id=probe_run_id):
             held = self.registry.hold_for(self.credential)
             return ScheduleOutcome(
                 task_id=task_id, launched=False, reason_code=PARK_REASON, hold=held,
+            )
+
+        # Re-check immediately before the launch. Another scheduler can
+        # place a hold between the decision and the child, and this shrinks
+        # that window from "however long setup takes" to microseconds — the
+        # same pattern the engine's ownership guard uses. It does NOT close
+        # the window: a check-then-act without a reservation cannot, and
+        # the ADR says so rather than implying otherwise.
+        if not self.admits(is_resume=is_resume, probe_run_id=probe_run_id):
+            return ScheduleOutcome(
+                task_id=task_id, launched=False, reason_code=PARK_REASON,
+                hold=self.registry.hold_for(self.credential),
             )
 
         outcome = self.engine.execute_task(**task_kwargs)
@@ -238,15 +343,18 @@ class TaskScheduler:
         reason = current.reason_code if current else "rate_limited:probe"
         reset_at = current.reset_at if current else None
         # Narrowing is a DECISION, not an observation: without drawing the
-        # line first, the broader ACCOUNT hold simply outranks this row
-        # and the probe never takes effect.
-        self.holds.supersede(
-            self.credential, self.clock(), reason=f"probe:{run_id}")
-        return self.holds.place(RateLimitHold(
-            credential=self.credential, scope=HoldScope.PROBE, reason_code=reason,
-            reset_at=reset_at, placed_at=self.clock(), probe_holder=run_id,
-            window_estimated=current.window_estimated if current else False,
-        ))
+        # line first, the broader ACCOUNT hold simply outranks this row and
+        # the probe never takes effect. Both rows go down in ONE append, so
+        # a crash between them cannot leave the credential wide open.
+        return self.holds.narrow(
+            self.credential, self.clock(), reason=f"probe:{run_id}",
+            replacement=RateLimitHold(
+                credential=self.credential, scope=HoldScope.PROBE,
+                reason_code=reason, reset_at=reset_at, placed_at=self.clock(),
+                probe_holder=run_id,
+                window_estimated=current.window_estimated if current else False,
+            ),
+        )
 
     # -- recovery ---------------------------------------------------------
 
@@ -296,14 +404,30 @@ class TaskScheduler:
         demonstrably alive. Claiming a dead process is alive would strand
         the run forever; the opposite merely re-adopts work.
         """
-        beat = self.run_store.read_heartbeat(run_id)
-        if not beat:
+        try:
+            beat = self.run_store.read_heartbeat(run_id)
+        except Exception:  # noqa: BLE001 - one bad file must not end the sweep
+            # `read_heartbeat` json.loads an arbitrary file. A single
+            # truncated heartbeat aborted the ENTIRE boot sweep, leaving
+            # every later run with no disposition — the ghost the sweep
+            # exists to prevent, caused by the sweep (Codex review).
+            return None, None
+        if not isinstance(beat, dict) or not beat:
             return None, None
         alive: bool | None = None
-        try:
-            alive = is_alive(ProcessFingerprint.from_dict(beat))
-        except (TypeError, ValueError, KeyError):
+        if beat.get("start_time") is None:
+            # `is_alive` answers "a process with this PID exists", which on
+            # a recycled PID is a different process wearing a dead run's
+            # identity. Without a start time there is nothing to tell them
+            # apart, so the honest answer is "unknown" — which the sweep
+            # treats as not demonstrably alive and re-adopts, rather than
+            # stranding the run forever on a coincidence.
             alive = None
+        else:
+            try:
+                alive = is_alive(ProcessFingerprint.from_dict(beat))
+            except (TypeError, ValueError, KeyError):
+                alive = None
         stale_s: float | None = None
         recorded = beat.get("ts")
         if isinstance(recorded, str):
@@ -314,7 +438,13 @@ class TaskScheduler:
             if written is not None:
                 if written.tzinfo is None:
                     written = written.replace(tzinfo=UTC)
-                stale_s = max(0.0, (datetime.now(UTC) - written).total_seconds())
+                age = (datetime.now(UTC) - written).total_seconds()
+                # A heartbeat from the FUTURE is clock skew or a bad
+                # record, not freshness. Clamping it to zero made a dead
+                # run look like it had just checked in and stranded it;
+                # reporting it as unknown lets the sweep re-adopt, which
+                # only costs re-running work (Codex review).
+                stale_s = age if age >= 0 else None
         return alive, stale_s
 
 

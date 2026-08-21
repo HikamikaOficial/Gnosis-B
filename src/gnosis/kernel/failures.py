@@ -483,12 +483,44 @@ class RateLimitHold:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> RateLimitHold:
+        """Rebuild a hold from a durable row, validating as it goes.
+
+        This is the RECOVERY BOUNDARY, and it used to accept whatever the
+        file held. `hold_from_classification` rejects non-finite and
+        boolean windows on the way in, but nothing re-checked them on the
+        way out — so a damaged or hostile row carrying `Infinity` produced
+        a hold that never expires, and one carrying `NaN` both never
+        expired and made `reconcile` order-dependent, since every
+        comparison against NaN is false (Codex review). A validating
+        constructor turns both into a rejected row, which the store
+        reports as damage and the scheduler denies on.
+        """
+        reset_at = data.get("reset_at")
+        if reset_at is not None:
+            if isinstance(reset_at, bool) or not isinstance(reset_at, (int, float)):
+                raise ValueError(f"reset_at must be a number or null, got {reset_at!r}")
+            reset_at = float(reset_at)
+            if not math.isfinite(reset_at):
+                raise ValueError(f"reset_at must be finite, got {reset_at!r}")
+        placed_at = data.get("placed_at", 0.0)
+        if isinstance(placed_at, bool) or not isinstance(placed_at, (int, float)):
+            raise ValueError(f"placed_at must be a number, got {placed_at!r}")  # noqa: TRY004
+        placed_at = float(placed_at)
+        if not math.isfinite(placed_at):
+            raise ValueError("placed_at must be finite")
+        credential = data["credential"]
+        if not isinstance(credential, str) or not credential:
+            # ValueError, not TypeError, throughout this constructor: it
+            # validates a DURABLE ROW, where a wrong type is corrupt data
+            # rather than a caller mistake — and the store's damage
+            # handling catches ValueError to deny.
+            raise ValueError("a hold must name a credential")
         return cls(
-            credential=data["credential"], scope=HoldScope(data["scope"]),
-            reason_code=data["reason_code"], reset_at=data.get("reset_at"),
-            placed_at=data.get("placed_at", 0.0),
+            credential=credential, scope=HoldScope(data["scope"]),
+            reason_code=data["reason_code"], reset_at=reset_at,
+            placed_at=placed_at,
             probe_holder=data.get("probe_holder"),
-            window_estimated=data.get("window_estimated", False),
+            window_estimated=bool(data.get("window_estimated", False)),
         )
 
     def restrictiveness(self) -> tuple[int, float]:

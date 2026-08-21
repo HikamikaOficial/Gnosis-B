@@ -147,3 +147,11 @@ Format:
 - Lesson: a placeholder makes the failure *invisible to the comparison*, which is worse than the read failing loudly — the check keeps reporting "unchanged" for exactly the input it cannot see. Either read it properly or make the placeholder itself unstable/fatal.
 - Operational consequence: `-z` porcelain removes the quoting entirely; where a read can still fail, the recorded value must carry something that changes (or the probe must fail closed, as `probe_failed` does).
 - Revalidation condition: standing rule; no expiry.
+
+## L-0018 — Fail-open is a direction, and it repeats across a whole module
+- Status: VERIFIED
+- Evidence: ADR-0016 Codex review. Five separate critical findings in one small module, all the same shape: a damaged row read as "no hold"; an under-specified supersede row erasing every hold; a two-row probe transition leaving a durable gap; a PROBE admitting by scheduler id rather than run id; readers not taking the writer's lock. Each was written independently, weeks apart in reasoning, and every one leaned the same way.
+- Scope: any module implementing a restriction (holds, gates, quotas, locks).
+- Lesson: fail-open is not a bug you fix one at a time — it is an author's default under uncertainty. Every branch that answers "I am not sure" gets resolved toward *proceed*, because proceeding is what the surrounding code is for. The countermeasure is to enumerate the "I am not sure" branches deliberately and check each one's direction, rather than to review them for correctness individually.
+- Operational consequence: for restriction mechanisms, tests assert the DENY direction on every degraded input — missing file, torn line, hostile value, partial write — and `test_a_probe_never_leaves_the_credential_open_between_two_rows` walks every byte-prefix of the durable log.
+- Revalidation condition: standing rule; no expiry.

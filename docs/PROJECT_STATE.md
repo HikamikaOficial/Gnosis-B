@@ -103,10 +103,10 @@ governs the order of work here: **prefer wiring over documenting**.
   compete) from decisions (which supersede, with a reason). No
   independent review: both channels are unavailable.
 
-Suite: **559 tests, all passing**; mypy strict clean (47 files); ruff at
+Suite: **566 tests, all passing**; mypy strict clean (47 files); ruff at
 the recorded backlog baseline (19 pre-existing findings in untouched
 files, ratcheted down from 20; `.gnosis/state/lint_baseline.json` fails the run if it rises).
-Captured transcript, not prose: `.gnosis/evidence/20260820T235355Z/`.
+Captured transcript, not prose: `.gnosis/evidence/20260821T001211Z/`.
 
 ## Fixed locations
 
