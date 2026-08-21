@@ -247,6 +247,91 @@ class TestTheWholePath(_PipelineTestCase):
         self.assertIn("no run", outcome.report.run_id)
 
 
+class TestLandingTheWork(_PipelineTestCase):
+    """A converged brief may land — and only then, and only if the MERGED
+    tree verifies."""
+
+    def _integrator(self, verifier=None):
+        from gnosis.kernel.integration import WorkIntegrator
+        return WorkIntegrator(
+            source_repo=self.repo, worktrees=self.worktrees,
+            verifier=verifier or self._verifier(),
+            integration_root=self.root / "integration",
+        )
+
+    def _head(self) -> str:
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.repo,
+                              capture_output=True, text=True, check=True).stdout.strip()
+
+    def test_without_an_integrator_the_work_stays_on_its_branch(self):
+        # Landing moves the branch everyone builds on: prepared by
+        # default, executed only when an operator wires it.
+        before = self._head()
+        outcome = self._pipeline(_Agent()).run_brief(self._brief())
+        self.assertEqual(outcome.status, ReportStatus.COMPLETED)
+        self.assertIsNone(outcome.integration)
+        self.assertEqual(self._head(), before)
+        # COMPLETED means "done and independently verified", not "it
+        # landed" — and the report says which, rather than leaving a
+        # reader to infer it from silence (Codex review).
+        self.assertTrue(any("integration: NOT ATTEMPTED" in line
+                            for line in outcome.report.verification))
+        self.assertIn("task branch", outcome.report.recommended_next_step)
+
+    def test_a_converged_brief_lands_and_the_report_says_so(self):
+        class _Writing(_Agent):
+            def run(self, prompt, cwd, stdout_path, stderr_path, timeout_s=1800.0, **kw):
+                if "INDEPENDENT reviewer" not in prompt and "fixing defects" not in prompt:
+                    (Path(cwd) / "landed.py").write_text("VALUE = 1\n", encoding="utf-8")
+                return super().run(prompt, cwd, stdout_path, stderr_path, timeout_s, **kw)
+
+        before = self._head()
+        pipeline = self._pipeline(_Agent(), implementer=_Writing(),
+                                  integrator=self._integrator())
+        outcome = pipeline.run_brief(self._brief())
+
+        self.assertEqual(outcome.status, ReportStatus.COMPLETED, outcome.reason_code)
+        self.assertTrue(outcome.integration.integrated, outcome.integration.reason)
+        self.assertNotEqual(self._head(), before)
+        self.assertTrue((self.repo / "landed.py").exists())
+        self.assertTrue(any("integration: INTEGRATED" in line
+                            for line in outcome.report.verification))
+
+    def test_work_that_breaks_the_merged_tree_escalates_instead_of_landing(self):
+        # Converged, reviewed, and it still must not land: the report
+        # would otherwise describe an intention rather than an outcome.
+        class _Writing(_Agent):
+            def run(self, prompt, cwd, stdout_path, stderr_path, timeout_s=1800.0, **kw):
+                if "INDEPENDENT reviewer" not in prompt and "fixing defects" not in prompt:
+                    (Path(cwd) / "broken.py").write_text("syntax ( error\n", encoding="utf-8")
+                return super().run(prompt, cwd, stdout_path, stderr_path, timeout_s, **kw)
+
+        # A verifier that compiles every file in the tree.
+        strict = CommandVerifier("compile-all", [
+            sys.executable, "-c",
+            ("import pathlib, py_compile; "
+             "[py_compile.compile(str(p), doraise=True) "
+             " for p in pathlib.Path('.').glob('*.py')]"),
+        ])
+        before = self._head()
+        pipeline = self._pipeline(_Agent(), implementer=_Writing(),
+                                  integrator=self._integrator(verifier=strict))
+        outcome = pipeline.run_brief(self._brief())
+
+        self.assertEqual(outcome.integration.outcome.value, "VERIFICATION_FAILED")
+        self.assertEqual(outcome.status, ReportStatus.ESCALATION_REQUIRED)
+        self.assertEqual(self._head(), before, "the shared branch must not have moved")
+
+    def test_unconverged_work_is_never_offered_for_integration(self):
+        agent = _Agent(review_answers=(_FAIL_REVIEW, _FAIL_REVIEW),
+                       fix_answer='{"claims_done": false}')
+        before = self._head()
+        outcome = self._pipeline(agent, integrator=self._integrator()).run_brief(
+            self._brief())
+        self.assertNotEqual(outcome.status, ReportStatus.COMPLETED)
+        self.assertEqual(self._head(), before)
+
+
 class TestTheGateCoversEveryLaunch(_PipelineTestCase):
     """A gate with partial coverage is worse than an absent one: it reads
     as governed. Convergence launches MORE agents than the task does."""

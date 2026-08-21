@@ -807,6 +807,33 @@ GNOSIS_ENFORCEMENT = EnforcementMatrix([
         ),
     ),
     EnforcementClaim(
+        "integration", "verified_before_landing", EnforcementLevel.HARD,
+        note=(
+            "ORDERING is mechanically enforced: the target advances only "
+            "by fast-forward to a commit whose merged tree already ran the "
+            "configured verifier and passed, from a base re-read under the "
+            "lock immediately before the advance (ADR-0018)"
+        ),
+    ),
+    EnforcementClaim(
+        "integration", "semantic_correctness", EnforcementLevel.IGNORED,
+        note=(
+            "what 'verified' MEANS is the operator's verifier, not the "
+            "kernel's judgement. A command that exits zero without looking "
+            "at the merged files lets a broken tree land; the kernel "
+            "cannot tell. Rule 16 is answered by the ordering claim above, "
+            "not by this one (ADR-0018, Codex review)"
+        ),
+    ),
+    EnforcementClaim(
+        "integration", "shared_branch_gate", EnforcementLevel.PROMPT_ONLY,
+        note=(
+            "moving the shared branch is gated at its own intervention "
+            "point, `before_integration` — but opt-in, like every other "
+            "gate here, until a default rule set exists (ADR-0018, rule 13)"
+        ),
+    ),
+    EnforcementClaim(
         "convergence", "reviewer_independence", EnforcementLevel.SANDBOX_APPROX,
         note=(
             "the pipeline refuses the SAME runner object for implementing "

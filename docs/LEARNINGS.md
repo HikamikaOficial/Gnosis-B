@@ -171,3 +171,19 @@ Format:
 - Lesson: the shortcut in the fixture WAS the missing requirement, written down in test form. Sharing a double across two roles quietly asserts the roles are interchangeable; if a rule says they are not, the fixture has already contradicted it. This is the same shape as L-0013 (a double that cannot exhibit the failure), one level up: there the double was too simple, here it was too shared.
 - Operational consequence: fixtures give separate doubles to roles a rule distinguishes, and the constructor refuses the shared case so a future fixture cannot reintroduce it silently.
 - Revalidation condition: standing rule; no expiry.
+
+## L-0021 — Name the thing you are about to write to
+- Status: VERIFIED
+- Evidence: ADR-0018 Codex finding 1. `WorkIntegrator` merged into whatever ref the source repo had checked out — an operator's feature branch, or a detached HEAD — and reported INTEGRATED either way. Every test passed because every test left the repo on its default branch.
+- Scope: any component that writes to a resource it locates implicitly (current branch, current directory, default database, active profile).
+- Lesson: "the current X" is an input the caller did not supply and cannot see in the call. It reads as a sensible default and behaves as an unbounded one — the write lands wherever ambient state points, and the success report is indistinguishable from the correct case. Naming the target turns a silent mis-write into a refusal.
+- Operational consequence: `target_branch` is fixed at construction, must be a real branch, and must still be the checked-out one at merge time; anything else is `WRONG_TARGET` before a single write.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0022 — A gate must see the final state, not the state at the time it was asked
+- Status: VERIFIED
+- Evidence: ADR-0018 Codex finding 2. The `before_integration` policy snapshot was built from the committed branch diff, and `autosave` then committed the agent's uncommitted files before the merge — so a rule allowing `safe.py` could authorise an action that also landed `restricted.py`.
+- Scope: any authorization computed before a step that can still change what is being authorized.
+- Lesson: an approval binds an identity, and the identity has to be of the thing that will actually happen. Ordering is part of the security property, not an implementation detail: "gate, then finalise" authorises a draft. The fix was moving the gate after the commit, which is safe precisely because that commit writes only to the task's own branch and is inert if the gate then refuses.
+- Operational consequence: the integration gate runs after `autosave`, on the final change set, and a test asserts the snapshot contains the previously-uncommitted paths.
+- Revalidation condition: standing rule; no expiry.

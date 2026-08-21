@@ -1,0 +1,73 @@
+{
+  "all_passed": false,
+  "captured_at": "2026-08-21T01:16:39.609633+00:00",
+  "python": "3.12.14",
+  "results": [
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "tests/",
+        "-q"
+      ],
+      "duration_s": 244.91,
+      "exit_code": 0,
+      "name": "pytest",
+      "tail": "607 passed in 244.37s (0:04:04)"
+    },
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "mypy",
+        "src/gnosis"
+      ],
+      "duration_s": 0.39,
+      "exit_code": 0,
+      "name": "mypy",
+      "tail": "Success: no issues found in 50 source files"
+    },
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "ruff",
+        "check",
+        "src/gnosis",
+        "tests",
+        "--no-cache",
+        "--output-format=concise"
+      ],
+      "duration_s": 0.17,
+      "exit_code": 1,
+      "lint_baseline": 19,
+      "lint_findings": 23,
+      "name": "ruff",
+      "tail": "[*] 2 fixable with the `--fix` option (8 hidden fixes can be enabled with the `--unsafe-fixes` option).",
+      "verdict": "NEW LINT DEBT: 23 > baseline 19"
+    },
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "duration_s": 0.03,
+      "exit_code": 0,
+      "name": "git-head",
+      "tail": "bb5aae29d227f8ff2339a21b61c66e47a2e98270"
+    },
+    {
+      "argv": [
+        "git",
+        "status",
+        "--porcelain"
+      ],
+      "duration_s": 0.05,
+      "exit_code": 0,
+      "name": "git-status",
+      "tail": "?? tests/test_integration.py"
+    }
+  ]
+}

@@ -55,6 +55,7 @@ from ..kernel.convergence import (
 )
 from ..kernel.engine import TaskExecutionOutcome
 from ..kernel.ids import new_task_id
+from ..kernel.integration import IntegrationResult, WorkIntegrator
 from ..kernel.policy import ApprovalStore, PolicyDecision, PolicyEngine
 from ..kernel.scheduler import ScheduleOutcome, TaskScheduler
 from ..kernel.verification import VerificationResult, Verifier
@@ -87,6 +88,7 @@ class PipelineOutcome:
     report: EngineerReport
     schedule: ScheduleOutcome | None = None
     convergence: ConvergenceResult | None = None
+    integration: IntegrationResult | None = None
 
     @property
     def implementation(self) -> TaskExecutionOutcome | None:
@@ -102,6 +104,7 @@ class PipelineOutcome:
             "status": self.status.value, "reason_code": self.reason_code,
             "parked": self.parked,
             "convergence": self.convergence.to_dict() if self.convergence else None,
+            "integration": self.integration.to_dict() if self.integration else None,
         }
 
 
@@ -123,6 +126,7 @@ class GovernedPipeline:
         prompt_builder: Callable[[DirectorBrief], str] | None = None,
         reviewer_id: str = "claude-cli",
         focus: Sequence[str] | None = None,
+        integrator: WorkIntegrator | None = None,
     ) -> None:
         self.inbox = DirectorInbox(director_root)
         self.records = BriefRecordStore(director_root / "state" / "briefs")
@@ -160,6 +164,13 @@ class GovernedPipeline:
         self.prompt_builder = prompt_builder or _default_prompt_builder
         self.reviewer_id = reviewer_id
         self.focus = tuple(focus or ())
+        # Opt-in, deliberately. Landing work moves the branch everyone
+        # else builds on, and the constitution says irreversible-ish acts
+        # on shared state are PREPARED but not executed without higher
+        # authority. Without an integrator a converged brief still reports
+        # COMPLETED, with its reviewed work sitting on `gnosis/<task_id>`
+        # and the next step naming what to do about it.
+        self.integrator = integrator
 
     # -- the whole path ---------------------------------------------------
 
@@ -279,9 +290,19 @@ class GovernedPipeline:
                 next_step="The implementation stands; resume review when the window reopens.",
             )
 
+        integration = self._integrate(task_id, convergence)
+        status = _status_for(convergence)
+        if integration is not None and not integration.integrated:
+            # Converged work that will not land is not COMPLETED. A merge
+            # conflict or a merged tree that fails verification means a
+            # human has to decide something, and reporting COMPLETED with
+            # the work stranded on a branch would be the report describing
+            # an intention rather than an outcome.
+            status = ReportStatus.ESCALATION_REQUIRED
         return self._finish(
-            brief, task_id, _status_for(convergence), convergence.outcome.value,
-            schedule=schedule, convergence=convergence,
+            brief, task_id, status,
+            integration.reason if integration is not None else convergence.outcome.value,
+            schedule=schedule, convergence=convergence, integration=integration,
         )
 
     # -- halves -----------------------------------------------------------
@@ -381,6 +402,12 @@ class GovernedPipeline:
             encoding="utf-8")
         return result
 
+    def _integrate(self, task_id: str,
+                   convergence: ConvergenceResult) -> IntegrationResult | None:
+        if self.integrator is None:
+            return None
+        return self.integrator.integrate(task_id, convergence)
+
     # -- reporting --------------------------------------------------------
 
     def _finish(
@@ -391,6 +418,7 @@ class GovernedPipeline:
         reason_code: str,
         schedule: ScheduleOutcome | None = None,
         convergence: ConvergenceResult | None = None,
+        integration: IntegrationResult | None = None,
         brief_state: BriefRecordState | None = None,
         problems: tuple[str, ...] = (),
         next_step: str = "",
@@ -410,10 +438,10 @@ class GovernedPipeline:
             run_id=run_ids[-1] if run_ids else _NO_RUN,
             status=status,
             objective=brief.title,
-            verification=_verification_lines(implementation, convergence),
+            verification=_verification_lines(implementation, convergence, integration),
             problems_encountered=problems or _problem_lines(convergence),
             remaining_risks=_dissent_lines(convergence),
-            recommended_next_step=next_step or _next_step_for(status, convergence),
+            recommended_next_step=next_step or _next_step_for(status, convergence, integration),
         )
         self._write_report(report)
         self.records.update(
@@ -425,7 +453,7 @@ class GovernedPipeline:
         return PipelineOutcome(
             brief_id=brief.brief_id, task_id=task_id, status=status,
             reason_code=reason_code, report=report, schedule=schedule,
-            convergence=convergence,
+            convergence=convergence, integration=integration,
         )
 
     def _write_report(self, report: EngineerReport) -> None:
@@ -478,7 +506,8 @@ def _brief_state_for(status: ReportStatus) -> BriefRecordState:
 
 
 def _verification_lines(implementation: TaskExecutionOutcome | None,
-                        convergence: ConvergenceResult | None) -> tuple[str, ...]:
+                        convergence: ConvergenceResult | None,
+                        integration: IntegrationResult | None = None) -> tuple[str, ...]:
     lines: list[str] = []
     if implementation is not None and implementation.verification is not None:
         lines.append(_verification_line("implementation", implementation.verification))
@@ -493,6 +522,19 @@ def _verification_lines(implementation: TaskExecutionOutcome | None,
                     f"round {record.index} review [{record.review.reviewer}]: "
                     f"{record.review.verdict.value}"
                 )
+    if integration is None:
+        # Said explicitly. COMPLETED means "done and independently
+        # verified"; a reader must not be able to infer from silence that
+        # the work reached the shared branch (Codex review).
+        lines.append("integration: NOT ATTEMPTED (no integrator configured)")
+    else:
+        lines.append(f"integration: {integration.outcome.value} ({integration.reason})")
+        if integration.verification is not None:
+            # The one that matters most: the MERGED tree, not either side
+            # of it. Rule 16.
+            lines.append(_verification_line("merged tree", integration.verification))
+        if integration.checkpoint_ref:
+            lines.append(f"checkpoint: {integration.checkpoint_ref}")
     return tuple(lines)
 
 
@@ -532,9 +574,12 @@ def _dissent_lines(convergence: ConvergenceResult | None) -> tuple[str, ...]:
     return tuple(risks)
 
 
-def _next_step_for(status: ReportStatus, convergence: ConvergenceResult | None) -> str:
+def _next_step_for(status: ReportStatus, convergence: ConvergenceResult | None,
+                   integration: IntegrationResult | None = None) -> str:
     if status is ReportStatus.COMPLETED:
-        return "Integrate the worktree."
+        if integration is not None and integration.integrated:
+            return f"Landed on {integration.branch}; checkpoint {integration.checkpoint_ref}."
+        return "Reviewed work is on the task branch; integrate it when ready."
     if convergence is None:
         return "Inspect the run evidence before resubmitting."
     if convergence.outcome is ConvergenceOutcome.CANNOT_FIX:

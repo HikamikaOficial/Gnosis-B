@@ -80,3 +80,6 @@ Convergence launches a reviewer and a fixer per round — usually more agents th
 
 ## D-027 — A task closes on convergence, never on the implementer's opinion
 `GovernedPipeline` derives the report status from the convergence outcome alone; the implementation's own verdict never sets it. Reviewer independence is enforced as far as the kernel can check it — the same runner object cannot implement and review — and recorded as `convergence/reviewer_independence = SANDBOX_APPROX`, because object identity is not mind identity. Details/evidence: ADR-0017.
+
+## D-028 — Work lands only by fast-forward to an already-verified merge, on a named branch
+`WorkIntegrator` merges in a throwaway staging worktree, runs the verifier on the MERGED tree there, re-reads the base under the lock, and only then fast-forwards a target branch named at construction. Failure means nothing moved, which is the cheapest rollback; a checkpoint ref carrying the base sha names the pre-integration state, and the kernel produces the rollback command without ever running it. The enforcement matrix splits the guarantee honestly: `verified_before_landing = HARD` (ordering is mechanical) and `semantic_correctness = IGNORED` (what the check notices is the operator's verifier, not the kernel's judgement). Details/evidence: ADR-0018.

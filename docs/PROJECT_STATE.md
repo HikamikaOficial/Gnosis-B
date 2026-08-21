@@ -1,6 +1,6 @@
 # GNOSIS Project State
 
-**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE
+**Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
 **Last update:** 2026-08-20
@@ -103,10 +103,10 @@ governs the order of work here: **prefer wiring over documenting**.
   compete) from decisions (which supersede, with a reason). No
   independent review: both channels are unavailable.
 
-Suite: **589 tests, all passing**; mypy strict clean (47 files); ruff at
+Suite: **615 tests, all passing**; mypy strict clean (47 files); ruff at
 the recorded backlog baseline (19 pre-existing findings in untouched
 files, ratcheted down from 20; `.gnosis/state/lint_baseline.json` fails the run if it rises).
-Captured transcript, not prose: `.gnosis/evidence/20260821T004647Z/`.
+Captured transcript, not prose: `.gnosis/evidence/20260821T013040Z/`.
 
 ## Integration milestone (COMPLETE)
 
@@ -124,6 +124,25 @@ both), and a crashing fixer stranded an already-consumed brief with no
 report. Self-review separately found a rule 6 violation created purely by
 composition: a rate limit hit by a review round never reached the hold
 plane, so the next round launched into the same shut window. See L-0019.
+
+## Integration of results (COMPLETE)
+
+`WorkIntegrator` (ADR-0018) lands a converged task's worktree on a
+**named** target branch, and only ever by fast-forward to a commit whose
+MERGED tree already passed the verifier — the answer to constitution
+rule 16. The headline test demonstrates the rule instead of asserting
+it: two tasks fork from one base, one renames a function and updates its
+own caller, the other adds a caller of the old name; git reports zero
+conflicts and the merged tree raises ImportError, so nothing lands.
+
+**Codex review: FAIL, 8 findings, all repaired or corrected** - two
+critical. There was no designated target branch (it merged into whatever
+was checked out, including a detached HEAD, while reporting the shared
+branch had landed work), and the policy snapshot was taken before
+`autosave`, so an approval for one path could authorise landing another.
+The matrix's `post_merge_verification = HARD` was itself false and is
+now two true claims: `verified_before_landing = HARD` (ordering) and
+`semantic_correctness = IGNORED` (meaning). See L-0021, L-0022.
 
 ## Fixed locations
 

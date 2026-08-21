@@ -578,7 +578,9 @@ class TestEnforcementMatrix(unittest.TestCase):
                                 ("policy", "agent_launch_gate"),
                                 ("convergence", "reviewer_read_only"),
                                 ("convergence", "reviewer_independence"),
-                                ("convergence", "verifier_execution")})
+                                ("convergence", "verifier_execution"),
+                                ("integration", "shared_branch_gate"),
+                                ("integration", "semantic_correctness")})
 
     def test_gnosis_matrix_is_pinned_exactly(self):
         # Four mutants survived the previous suite: deleting a claim,
@@ -593,6 +595,9 @@ class TestEnforcementMatrix(unittest.TestCase):
             ("claims", "no_stale_write_after_deposition"): EnforcementLevel.HARD,
             ("policy", "deny_by_default"): EnforcementLevel.HARD,
             ("convergence", "reviewer_read_only"): EnforcementLevel.SANDBOX_APPROX,
+            ("integration", "verified_before_landing"): EnforcementLevel.HARD,
+            ("integration", "semantic_correctness"): EnforcementLevel.IGNORED,
+            ("integration", "shared_branch_gate"): EnforcementLevel.PROMPT_ONLY,
             ("convergence", "reviewer_independence"): EnforcementLevel.SANDBOX_APPROX,
             ("convergence", "verifier_execution"): EnforcementLevel.IGNORED,
             ("policy", "rule_purity"): EnforcementLevel.IGNORED,
