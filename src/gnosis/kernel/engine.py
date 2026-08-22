@@ -49,9 +49,37 @@ from .policy import (
 )
 from .redaction import redact
 from .run_store import RunMeta, RunPaths, RunStore
-from .state_machine import RunState, TaskState, TaskStateMachine
+from .state_machine import (
+    RunState,
+    TaskState,
+    TaskStateMachine,
+    UnevidencedCompletionError,
+    # Re-exported, not redefined: this module used to OWN the
+    # predicate, which is what made the invariant a property of
+    # this caller rather than of the kernel. It now lives with the
+    # authority that enforces it, and the name stays importable
+    # from here so existing callers keep working.
+    completion_is_evidenced,
+)
 from .verification import VerificationResult, Verifier
 from .worktree import WorktreeError, WorktreeHandle, WorktreeManager
+
+# Names this module re-exports rather than defines. `__all__` is what
+# turns "imported but unused" into a deliberate part of the surface:
+# `UnevidencedCompletionError` is what a caller of `execute_task` will
+# see if the state authority refuses a DONE, so it belongs here.
+__all__ = [
+    "AGENT_RUN_INTERVENTION_POINT",
+    "DEFAULT_PERMISSION_MODE",
+    "NO_EVIDENCE_PROBLEM",
+    "TaskEngine",
+    "TaskExecutionOutcome",
+    "UnevidencedCompletionError",
+    "agent_launch_snapshot",
+    "agent_run_intent",
+    "completion_is_evidenced",
+]
+
 
 AGENT_RUN_INTERVENTION_POINT = "before_agent_run"
 # What an operator is told when a run produced no verification evidence at
@@ -248,37 +276,6 @@ def agent_launch_snapshot(
         },
         context={"exec_root": str(planned_root)},
     )
-
-
-def completion_is_evidenced(verification: VerificationResult | None) -> bool:
-    """The single authority for `TaskState.COMPLETED`. Nothing else decides.
-
-    Constitution rule 2: no task reaches DONE without evidence. This
-    function is where that stops being a sentence and becomes a
-    predicate, and it lives at the lowest point that can authorise the
-    transition rather than at each caller — a guarantee every caller has
-    to remember is a guarantee that lasts until the first caller who does
-    not (F-34, and the same shape as L-0035).
-
-    What it refuses, and why each refusal is load-bearing:
-
-    - **`None`.** The predecessor of this function read
-      ``verification_result.passed if verification_result else True``,
-      which converted "nobody checked" into "it passed". Absence of
-      evidence is not success; it is the absence of the only thing that
-      could authorise a DONE, and a bare CLI exit code is the agent's own
-      opinion of its work.
-    - **Anything that is not a `VerificationResult`.** `Verifier` is an
-      ABC but a duck-typed one costs nothing to pass, and a stand-in that
-      returns `None` — or a truthy object — must not be able to mint a
-      DONE the kernel cannot read. Typing is not enforcement (L-0039).
-    - **A `passed` that is not exactly `True`.** `bool` IS an `int` in
-      Python, so `1`, a non-empty string and every other truthy value
-      would pass a bare check. The taxonomy already had to learn this for
-      exit codes (`failures.py`); the same care applies to the flag that
-      closes a task.
-    """
-    return isinstance(verification, VerificationResult) and verification.passed is True
 
 
 def _report_status(task_state: TaskState,
@@ -1055,15 +1052,20 @@ class TaskEngine:
                     else {"passed": False, "name": type(verifier).__name__,
                           "evidence": "the verifier returned no VerificationResult"},
                 )
-            # THE authorisation point for a DONE, and the only one. The
-            # predicate is a named function so that restoring the old
-            # `... if verification_result else True` is a visible edit to
-            # a documented invariant rather than a one-word change inside
-            # an expression (F-34).
-            task_sm.transition(
-                TaskState.COMPLETED if completion_is_evidenced(verification_result)
-                else TaskState.FAILED
-            )
+            # The engine ASKS; it does not decide. `complete()` re-examines
+            # the very object handed to it and refuses anything that is not
+            # a passing VerificationResult, so this branch chooses the ROUTE
+            # and the state authority chooses the OUTCOME.
+            #
+            # ADR-0025 had the engine decide, with `transition()` accepting
+            # COMPLETED from anyone. An independent review showed what that
+            # leaves open: the invariant held for this caller and for no
+            # other. Deleting the predicate call below can no longer produce
+            # an unevidenced DONE — `complete()` would raise.
+            if verification_result is not None and completion_is_evidenced(verification_result):
+                task_sm.complete(verification_result)
+            else:
+                task_sm.transition(TaskState.FAILED)
         else:
             task_sm.transition(TaskState.FAILED)
 

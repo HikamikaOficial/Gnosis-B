@@ -34,7 +34,12 @@ from gnosis.director.brief_record import BriefRecordState
 from gnosis.director.orchestrator import DirectorOrchestrator
 from gnosis.kernel.engine import TaskEngine, completion_is_evidenced
 from gnosis.kernel.run_store import RunStore
-from gnosis.kernel.state_machine import TaskState
+from gnosis.kernel.state_machine import (
+    EVIDENCE_GATED_STATES,
+    TaskState,
+    TaskStateMachine,
+    UnevidencedCompletionError,
+)
 from gnosis.kernel.verification import CommandVerifier, VerificationResult, Verifier
 from gnosis.runner.capture import ExecutionResult
 from gnosis.runner.retry import RetryPolicy
@@ -169,6 +174,73 @@ class TestTheAuthorisingPredicate(unittest.TestCase):
             stdout_excerpt="", stderr_excerpt="",
         )
         self.assertFalse(completion_is_evidenced(result))
+
+
+class TestTheStateAuthorityRefusesUnevidencedCompletion(unittest.TestCase):
+    """The layer BELOW the engine, which is where the invariant belongs.
+
+    The first version of this file tested the predicate and the engine
+    and called the predicate "the single authority". It was not: an
+    independent review walked a bare `TaskStateMachine` from CREATED to
+    COMPLETED with no evidence at all, because `transition()` accepted
+    COMPLETED from anyone and this file never asked it to refuse.
+
+    These tests exist so that "the authority enforces it" is a claim with
+    a falsifier attached, at the level the claim is about.
+    """
+
+    def _verifying(self) -> TaskStateMachine:
+        sm = TaskStateMachine()
+        sm.transition(TaskState.PLANNED)
+        sm.transition(TaskState.IN_PROGRESS)
+        sm.transition(TaskState.VERIFYING)
+        return sm
+
+    def test_the_direct_transition_to_completed_is_refused(self):
+        sm = self._verifying()
+        with self.assertRaises(UnevidencedCompletionError):
+            sm.transition(TaskState.COMPLETED)
+        self.assertEqual(sm.state, TaskState.VERIFYING)
+
+    def test_none_is_refused_by_the_authority(self):
+        sm = self._verifying()
+        with self.assertRaises(UnevidencedCompletionError):
+            sm.complete(None)
+        self.assertNotEqual(sm.state, TaskState.COMPLETED)
+
+    def test_a_failing_verification_result_is_refused_by_the_authority(self):
+        sm = self._verifying()
+        with self.assertRaises(UnevidencedCompletionError):
+            sm.complete(VerificationResult(
+                name="v", passed=False, exit_code=1, duration_s=0.0,
+                stdout_excerpt="", stderr_excerpt="boom",
+            ))
+        self.assertNotEqual(sm.state, TaskState.COMPLETED)
+
+    def test_an_impostor_is_refused_by_the_authority(self):
+        for impostor in ("PASSED", 1, True, object(), {"passed": True}, _NotQuiteTrue()):
+            with self.subTest(impostor=type(impostor).__name__):
+                sm = self._verifying()
+                with self.assertRaises(UnevidencedCompletionError):
+                    sm.complete(impostor)
+                self.assertNotEqual(sm.state, TaskState.COMPLETED)
+
+    def test_only_a_passing_verification_result_completes(self):
+        sm = self._verifying()
+        evidence = VerificationResult(
+            name="v", passed=True, exit_code=0, duration_s=0.0,
+            stdout_excerpt="", stderr_excerpt="",
+        )
+        sm.complete(evidence)
+        self.assertEqual(sm.state, TaskState.COMPLETED)
+        self.assertIs(sm.completion_evidence, evidence)
+
+    def test_a_machine_cannot_start_in_completed(self):
+        with self.assertRaises(UnevidencedCompletionError):
+            TaskStateMachine(TaskState.COMPLETED)
+
+    def test_completed_is_the_gated_state(self):
+        self.assertEqual(EVIDENCE_GATED_STATES, frozenset({TaskState.COMPLETED}))
 
 
 class TestTheEngineRefusesBeforeItSpends(_RepoTestCase):

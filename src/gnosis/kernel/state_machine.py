@@ -5,11 +5,32 @@ No state transition happens implicitly — callers must go through
 `IllegalTransitionError` on anything not in the allowed table. This is the
 mechanism that satisfies the constitution's "no silent architectural drift"
 and "auditable actions" principles at the state level.
+
+**`COMPLETED` is not reachable through `transition()` at all.** It is the
+one state that means "this task is DONE", and constitution rule 2 says a
+DONE requires evidence. ADR-0025 put that check in the engine, and an
+independent review was right that it left the authority itself open: the
+generic transition still walked `VERIFYING -> COMPLETED` for anyone who
+asked, so the guarantee held only for the one caller that happened to
+carry the guard. It is now a property of this module:
+
+- `transition()` REFUSES every target in `EVIDENCE_GATED_STATES`;
+- `complete(verification)` is the only route, and it validates the
+  `VerificationResult` it is handed rather than trusting a flag;
+- a machine cannot be CONSTRUCTED in `COMPLETED` either, so there is no
+  side door and no asterisk on the claim.
+
+The transitions table still lists `VERIFYING -> COMPLETED`, because that
+edge really is part of the state graph. What the table describes is
+which edges exist; what `EVIDENCE_GATED_STATES` describes is which of
+them a caller may take without showing its work.
 """
 from __future__ import annotations
 
 from enum import Enum
 from types import MappingProxyType
+
+from .verification import VerificationResult
 
 
 class IllegalTransitionError(RuntimeError):
@@ -17,15 +38,45 @@ class IllegalTransitionError(RuntimeError):
     transport, adapter — can report the same complete verdict without
     re-deriving the rules (archaeology Directive 3)."""
 
-    def __init__(self, current: Enum, target: Enum, kind: str, allowed_next: frozenset[Enum]):
+    def __init__(self, current: Enum, target: Enum, kind: str, allowed_next: frozenset[Enum],
+                 message: str | None = None):
         allowed = ", ".join(sorted(state.value for state in allowed_next)) or "(terminal)"
-        super().__init__(
+        super().__init__(message or (
             f"Illegal {kind} transition: {current.value} -> {target.value}; "
             f"allowed next: {allowed}"
-        )
+        ))
         self.current = current
         self.target = target
         self.allowed_next = allowed_next
+
+
+class UnevidencedCompletionError(IllegalTransitionError):
+    """`COMPLETED` was requested without a passing `VerificationResult`.
+
+    A subclass of `IllegalTransitionError` on purpose: anything already
+    catching illegal transitions keeps failing closed rather than letting
+    a new exception type escape as an unhandled crash. The distinct type
+    exists so an operator can tell "you took the wrong route" and "your
+    evidence does not hold" apart, which are different mistakes.
+    """
+
+    def __init__(self, current: TaskState, reason: str):
+        allowed: frozenset[Enum] = frozenset(
+            TASK_TRANSITIONS.get(current, frozenset()))
+        super().__init__(
+            current, TaskState.COMPLETED, "task", allowed,
+            message=(
+                f"Refused {current.value} -> COMPLETED: {reason}. A task reaches "
+                "COMPLETED only through TaskStateMachine.complete(verification), "
+                "which requires a VerificationResult whose `passed` is True "
+                "(constitution rule 2: no DONE without evidence). "
+                # Directive 3: every surface reports the same complete verdict,
+                # so the gated refusal carries the same tail as the generic one.
+                f"allowed next: "
+                + (", ".join(sorted(s.value for s in allowed)) or "(terminal)")
+            ),
+        )
+        self.reason = reason
 
 
 class TaskState(str, Enum):
@@ -58,6 +109,44 @@ TASK_TRANSITIONS: MappingProxyType[TaskState, frozenset[TaskState]] = MappingPro
 })
 
 TASK_TERMINAL_STATES = frozenset({TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELLED})
+
+# States the generic `transition()` may never take, because arriving at
+# them is a CLAIM that has to be backed by evidence the state machine
+# examines for itself. Each one needs its own admitting method.
+#
+# Only `COMPLETED` is listed, and that is the point: FAILED, CANCELLED
+# and the rest are statements about work NOT finishing, which nobody has
+# an incentive to forge. A DONE is the one an agent, a bug or a hopeful
+# caller would like to reach cheaply.
+EVIDENCE_GATED_STATES = frozenset({TaskState.COMPLETED})
+
+
+def completion_is_evidenced(verification: VerificationResult | None) -> bool:
+    """The predicate `complete()` applies. Nothing reaches COMPLETED past it.
+
+    Constitution rule 2: no task reaches DONE without evidence. This
+    lives beside the state authority rather than in a caller, because
+    ADR-0025 put it in `TaskEngine` and an independent review
+    demonstrated the gap that leaves — the machine itself still walked
+    `VERIFYING -> COMPLETED` for anybody who asked, so the invariant was
+    a property of one caller rather than of the kernel.
+
+    What it refuses, and why each refusal is load-bearing:
+
+    - **`None`.** The original defect read
+      ``verification_result.passed if verification_result else True``,
+      converting "nobody checked" into "it passed". Absence of evidence
+      is not success.
+    - **Anything that is not a `VerificationResult`.** `Verifier` is an
+      ABC but a duck-typed one costs nothing to pass, and a stand-in that
+      returns `None` — or a truthy object — must not mint a DONE the
+      kernel cannot read. Typing is not enforcement (L-0039).
+    - **A `passed` that is not exactly `True`.** `bool` IS an `int` in
+      Python, so `1`, a non-empty string and every other truthy value
+      would pass a bare check. `failures.py` already had to learn this
+      for exit codes; the flag that closes a task deserves the same care.
+    """
+    return isinstance(verification, VerificationResult) and verification.passed is True
 
 
 class RunState(str, Enum):
@@ -109,10 +198,60 @@ def _transition[StateT: Enum](
 
 class TaskStateMachine:
     def __init__(self, initial: TaskState = TaskState.CREATED):
+        # A machine cannot START in an evidence-gated state either. Without
+        # this, `TaskStateMachine(TaskState.COMPLETED)` is a side door that
+        # makes the guarantee below carry an asterisk, and the whole reason
+        # this unit exists is that the previous claim carried one nobody
+        # had written down. There is no rehydration-from-durable-state path
+        # in this repo today (TaskState is not persisted — F-07); when one
+        # arrives it must arrive WITH the evidence, through `complete()`.
+        if initial in EVIDENCE_GATED_STATES:
+            raise UnevidencedCompletionError(
+                initial, "a task cannot be constructed already COMPLETED"
+            )
         self.state = initial
+        # The evidence that authorised this task's DONE, or None while it
+        # has not earned one. Set only by `complete()`, so a caller can ask
+        # WHAT proved the task rather than trusting that something did.
+        self.completion_evidence: VerificationResult | None = None
 
     def transition(self, target: TaskState) -> TaskState:
+        # The generic route may not reach an evidence-gated state. This is
+        # the hole the independent review of ADR-0025 found: the engine
+        # carried the guard, so the invariant was true of ONE caller and
+        # of nothing else. `sm.transition(TaskState.COMPLETED)` walked
+        # straight through, and a test asserted that it did.
+        if target in EVIDENCE_GATED_STATES:
+            raise UnevidencedCompletionError(
+                self.state, "transition() carries no evidence"
+            )
         self.state = _transition(self.state, target, TASK_TRANSITIONS, "task")
+        return self.state
+
+    def complete(self, verification: VerificationResult) -> TaskState:
+        """The ONLY route to `COMPLETED`, and it validates what it is handed.
+
+        Takes the `VerificationResult` itself, never a boolean: a flag
+        computed by the caller moves the decision back to the caller,
+        which is exactly the arrangement that failed. The object is
+        re-examined here, so a caller that miscomputed — or never
+        computed — is refused rather than believed.
+
+        The ordinary transition rules still apply on top: reaching
+        COMPLETED from anywhere other than `VERIFYING` is an illegal edge
+        whatever evidence accompanies it, because a task that never
+        verified has nothing this result could be evidence *of*.
+        """
+        if not completion_is_evidenced(verification):
+            raise UnevidencedCompletionError(
+                self.state,
+                f"the verification offered is not a passing VerificationResult "
+                f"({type(verification).__name__})",
+            )
+        # `_transition` is still consulted: evidence authorises the CLAIM,
+        # it does not authorise skipping the graph.
+        self.state = _transition(self.state, TaskState.COMPLETED, TASK_TRANSITIONS, "task")
+        self.completion_evidence = verification
         return self.state
 
     def is_terminal(self) -> bool:
