@@ -6,8 +6,13 @@ The kernel owns the loop; reviewers and fixers are injected callables
 from docs/research/REFERENCE_REPOSITORY_FINDINGS.md §6:
 
 - **An agent's DONE claim never closes a Task.** Convergence requires
-  computer-checked evidence: the deterministic verification passed AND
-  the independent review verdict is PASS AND no blocking finding stands.
+  computer-checked evidence: the deterministic verification returned
+  `VerificationVerdict.PASSED` AND the independent review verdict is
+  PASS AND no blocking finding stands. "The verification passed" is read
+  through `verification_verdict`, never off `result.passed`: a third
+  independent F-34 review found this loop reading that field for
+  truthiness, so a `passed` of `1` — evidence the state authority
+  refuses — converged the loop and produced a COMPLETED brief.
   A fixer's ``claims_done`` with an unchanged repo fingerprint is
   downgraded to continue-with-warning (ralphex: DONE means "zero issues
   this round", not "I finished fixing").
@@ -32,6 +37,10 @@ failure for the caller's taxonomy to classify, never something this loop
 absorbs into a fake verdict. ``verify_fn``/``review_fn``/``fingerprint_fn``
 failures are treated as evidence-collection failures: the round cannot
 converge, cannot count toward stalemate, and is recorded with a warning.
+A verification that returns MALFORMED evidence is the same kind of
+event and is handled the same way: a verifier that stated no verdict
+collected nothing, so the round cannot converge and must not count
+toward stalemate either — a broken verifier is not a stuck repo.
 """
 from __future__ import annotations
 
@@ -44,7 +53,13 @@ from typing import Any
 
 from .canonical import hash_canonical
 from .git_evidence import capture_git_evidence
-from .verification import VerificationResult
+from .verification import (
+    Evidence,
+    VerificationVerdict,
+    evidence_name,
+    evidence_reason,
+    verification_verdict,
+)
 
 
 class ReviewVerdict(str, Enum):
@@ -94,7 +109,10 @@ class ReviewReport:
 class FixRequest:
     round_index: int
     blocking_findings: tuple[Finding, ...]
-    verification: VerificationResult | None
+    # `Evidence`, so a fixer prompt can tell "your code is failing" from
+    # "your verifier returned nothing readable". Those are different jobs
+    # and a fixer told the wrong one edits the wrong file.
+    verification: Evidence | None
 
 
 @dataclass(frozen=True)
@@ -133,7 +151,7 @@ class RoundRecord:
     index: int
     fingerprint: str | None
     evidence_ok: bool
-    verification: VerificationResult | None
+    verification: Evidence | None
     review: ReviewReport | None
     blocking: tuple[Finding, ...]
     gated: tuple[GatedFinding, ...]
@@ -255,7 +273,7 @@ class ConvergenceLoop:
     def __init__(
         self,
         policy: ConvergencePolicy,
-        verify_fn: Callable[[], VerificationResult],
+        verify_fn: Callable[[], Evidence],
         review_fn: Callable[[int], ReviewReport],
         fix_fn: Callable[[FixRequest], FixReport],
         fingerprint_fn: Callable[[], str | None],
@@ -275,9 +293,11 @@ class ConvergenceLoop:
         have_prev = False
         unchanged = 0
         last_fix: FixReport | None = None
-        # Last verification outcome observed per fingerprint, for the
-        # flip-detection guard below (Codex review finding 3).
-        verified_by_fp: dict[str, bool] = {}
+        # Last verification VERDICT observed per fingerprint, for the
+        # flip-detection guard below (Codex review finding 3). A verdict,
+        # not a bool: `passed` is the field this loop is not allowed to
+        # read, and a `dict[str, bool]` would have re-admitted it.
+        verified_by_fp: dict[str, VerificationVerdict] = {}
 
         for index in range(1, self.policy.max_rounds + 1):
             warnings: list[str] = []
@@ -288,6 +308,14 @@ class ConvergenceLoop:
                 self.verify_fn, "verification", warnings, evidence_failures)
             review = self._collect(
                 partial(self.review_fn, index), "review", warnings, evidence_failures)
+
+            # The verdict, read ONCE, by the one function that reads it.
+            # Every use below is derived from this value; the loop used to
+            # test `verification.passed` for truthiness in three separate
+            # places, which is three chances to disagree with the state
+            # authority about the same object (third F-34 review).
+            verdict = (verification_verdict(verification)
+                       if verification is not None else None)
             if fingerprint is None and not any("fingerprint" in w for w in warnings):
                 # The probe's documented soft-failure mode is returning
                 # None (git_fingerprint); record it, same as a raise.
@@ -295,8 +323,26 @@ class ConvergenceLoop:
                     "fingerprint unavailable: round cannot converge or "
                     "count toward stalemate"
                 )
+            if verdict is VerificationVerdict.MALFORMED:
+                # Evidence that states no verdict is evidence that was not
+                # collected, whatever object carried it. Same handling as a
+                # verifier that raised — and now recorded with a type, so a
+                # reader can tell an invalid answer from a crash.
+                warnings.append(
+                    f"verification produced invalid evidence: "
+                    f"{evidence_reason(verification)}"
+                )
+                evidence_failures.append(EvidenceFailure(
+                    stage="verification",
+                    error_type="MalformedEvidence",
+                    message=(f"{evidence_name(verification)}: "
+                             f"{evidence_reason(verification)}")[:500],
+                ))
             evidence_ok = (
-                fingerprint is not None and verification is not None and review is not None
+                fingerprint is not None
+                and verification is not None
+                and verdict is not VerificationVerdict.MALFORMED
+                and review is not None
             )
 
             # Signal ∧ evidence: a prior DONE claim with an unchanged repo
@@ -334,7 +380,7 @@ class ConvergenceLoop:
 
             clean = (
                 evidence_ok
-                and verification is not None and verification.passed
+                and verdict is VerificationVerdict.PASSED
                 and review is not None and review.verdict is ReviewVerdict.PASS
                 and not blocking
             )
@@ -347,7 +393,7 @@ class ConvergenceLoop:
             # REPRODUCED in an independent round on the same fingerprint.
             if (
                 clean and fingerprint is not None
-                and verified_by_fp.get(fingerprint) is False
+                and verified_by_fp.get(fingerprint) is VerificationVerdict.FAILED
             ):
                 clean = False
                 warnings.append(
@@ -355,14 +401,18 @@ class ConvergenceLoop:
                     "unchanged repo fingerprint: requiring reproduction in "
                     "an independent round before convergence"
                 )
-            if fingerprint is not None and verification is not None:
-                verified_by_fp[fingerprint] = verification.passed
+            if fingerprint is not None and verdict in (
+                VerificationVerdict.PASSED, VerificationVerdict.FAILED
+            ):
+                # Only a real verdict is remembered. Recording MALFORMED
+                # here would let "the verifier was broken last round" count
+                # as "it failed last round", and the flip guard would then
+                # demand a reproduction of a failure nobody observed.
+                verified_by_fp[fingerprint] = verdict
 
             fix: FixReport | None = None
             if not clean and evidence_ok:
-                needs_fix = bool(blocking) or (
-                    verification is not None and not verification.passed
-                )
+                needs_fix = bool(blocking) or verdict is VerificationVerdict.FAILED
                 if needs_fix:
                     fix = self.fix_fn(FixRequest(
                         round_index=index,

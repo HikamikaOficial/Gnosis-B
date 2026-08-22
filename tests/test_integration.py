@@ -20,7 +20,11 @@ from gnosis.kernel.integration import (
     WorkIntegrator,
     integration_branches,
 )
-from gnosis.kernel.verification import CommandVerifier
+from gnosis.kernel.verification import (
+    CommandVerifier,
+    VerificationResult,
+    Verifier,
+)
 from gnosis.kernel.worktree import WorktreeManager
 
 _CONVERGED = ConvergenceResult(
@@ -579,3 +583,90 @@ class TestRereviewIsEvidence(_IntegrationTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _MalformedVerifier(Verifier):
+    """Answers with a `VerificationResult` whose `passed` is `1`.
+
+    `passed=1` is DATA, not a typo: `bool` IS an `int` in Python, so a
+    linter "correcting" it to `True` would delete the defect under test.
+    """
+
+    name = "malformed"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def run(self, cwd):  # type: ignore[override]
+        self.calls += 1
+        return VerificationResult(
+            name="merged-tree-suite", passed=1,  # type: ignore[arg-type]
+            exit_code=0, duration_s=0.0,
+            stdout_excerpt="looks fine", stderr_excerpt="",
+        )
+
+
+class TestMalformedEvidenceDoesNotLand(_IntegrationTestCase):
+    """F-34, third independent review, at the most irreversible action.
+
+    `_merge_and_verify` read `if not verification.passed`. `not 1` is
+    `False`, so a merged tree whose verification the state authority
+    refuses would have advanced the SHARED branch — the one every other
+    task builds on.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.verifier = _MalformedVerifier()
+        self.integrator = WorkIntegrator(
+            source_repo=self.repo, worktrees=self.worktrees,
+            verifier=self.verifier,
+            integration_root=self.root / "integration",
+        )
+
+    def test_the_shared_branch_does_not_move(self):
+        self._work("TASK-A", {"lib.py": "def greet():\n    return 'A'\n"})
+        before = self._head()
+        result = self.integrator.integrate("TASK-A", _CONVERGED)
+        self.assertNotEqual(result.outcome, IntegrationOutcome.INTEGRATED)
+        self.assertEqual(self._head(), before,
+                         "the shared branch must not have moved")
+
+    def test_the_refusal_is_differentiable_from_an_ordinary_failure(self):
+        # "the merged code is wrong" sends a human to read the diff;
+        # "the verifier is wrong" sends them somewhere else entirely.
+        self._work("TASK-A", {"lib.py": "def greet():\n    return 'A'\n"})
+        result = self.integrator.integrate("TASK-A", _CONVERGED)
+        self.assertEqual(result.outcome, IntegrationOutcome.VERIFICATION_INVALID)
+        self.assertNotEqual(result.outcome, IntegrationOutcome.VERIFICATION_FAILED)
+        self.assertIn("no_verdict", result.reason)
+
+    def test_the_reason_is_carried_where_an_operator_reads_it(self):
+        self._work("TASK-A", {"lib.py": "def greet():\n    return 'A'\n"})
+        result = self.integrator.integrate("TASK-A", _CONVERGED)
+        self.assertIn("neither True nor False", result.detail["evidence"])
+
+    def test_the_merge_really_was_attempted_and_really_was_verified(self):
+        # A refusal that happened for some earlier reason would prove
+        # nothing about this gate.
+        self._work("TASK-A", {"lib.py": "def greet():\n    return 'A'\n"})
+        result = self.integrator.integrate("TASK-A", _CONVERGED)
+        self.assertEqual(self.verifier.calls, 1)
+        self.assertIsNotNone(result.merged_sha)
+        self.assertEqual(result.conflicts, ())
+
+    def test_the_rejected_evidence_is_kept_on_the_result(self):
+        # Refusing evidence is not the same as hiding it. The raw object
+        # survives with its `passed` of `1` intact for forensics; what
+        # decides is the OUTCOME, which nothing derived from that field.
+        self._work("TASK-A", {"lib.py": "def greet():\n    return 'A'\n"})
+        result = self.integrator.integrate("TASK-A", _CONVERGED)
+        self.assertIsNotNone(result.verification)
+        self.assertEqual(result.verification.passed, 1)
+        self.assertEqual(result.to_dict()["verification"]["passed"], 1)
+        self.assertEqual(result.to_dict()["outcome"], "VERIFICATION_INVALID")
+
+    def test_a_checkpoint_still_exists_to_roll_back_to(self):
+        self._work("TASK-A", {"lib.py": "def greet():\n    return 'A'\n"})
+        result = self.integrator.integrate("TASK-A", _CONVERGED)
+        self.assertTrue(result.checkpoint_ref)

@@ -10,14 +10,33 @@ verifier, and the engine then read
 which turns "nobody checked" into "it passed". A default-constructed
 orchestrator could report COMPLETED having proved nothing.
 
+A THIRD independent review found the invariant broken again, one level
+up. `CompositeVerifier` read its members with `all(r.passed for r in
+results)` and returned a NEW `VerificationResult(passed=True)`: every
+strict reader downstream was then correct about a well-formed object
+computed from evidence the kernel refuses. The same review found
+`CompositeVerifier("empty", [])` passing on `all([]) is True` — a DONE
+minted by running no check at all. Aggregation was the hole: the
+verdict has three states and `passed` has two, so a composite had
+nowhere to say "a member returned nothing readable".
+
 This file exists so that regression is not possible silently. It tests
-the invariant at three heights:
+the invariant at four heights:
 
 1. the predicate — `completion_is_evidenced`, the single authority for
    the transition;
-2. the engine — refusing before the agent launches, and refusing to
+2. the aggregator — `CompositeVerifier`, which may not convert a
+   member's malformed evidence into a verdict of its own;
+3. the engine — refusing before the agent launches, and refusing to
    complete on a verifier that produced nothing;
-3. the Director entry point — refusing before a brief is consumed.
+4. the Director entry point — refusing before a brief is consumed.
+
+The other three production readers of `passed` are tested where their
+harnesses live, and are part of this invariant:
+
+- `ConvergenceLoop` — `TestConvergenceRefusesMalformedEvidence` below;
+- `GovernedPipeline` — `tests/test_pipeline.py::TestABriefDoesNotCompleteOnMalformedEvidence`;
+- `WorkIntegrator` — `tests/test_integration.py::TestMalformedEvidenceDoesNotLand`.
 
 Every test here is written so that restoring the old expression, or
 loosening the predicate, turns it red.
@@ -28,10 +47,19 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from gnosis.adapters.cli_review import verification_prompt_line
 from gnosis.contracts.director_brief import BriefSource, DirectorBrief
 from gnosis.contracts.engineer_report import ReportStatus
 from gnosis.director.brief_record import BriefRecordState
 from gnosis.director.orchestrator import DirectorOrchestrator
+from gnosis.kernel.convergence import (
+    ConvergenceLoop,
+    ConvergenceOutcome,
+    ConvergencePolicy,
+    FixReport,
+    ReviewReport,
+    ReviewVerdict,
+)
 from gnosis.kernel.engine import (
     MALFORMED_EVIDENCE_PROBLEM,
     NO_EVIDENCE_PROBLEM,
@@ -47,6 +75,9 @@ from gnosis.kernel.state_machine import (
 )
 from gnosis.kernel.verification import (
     CommandVerifier,
+    CompositeVerifier,
+    EmptyCompositeError,
+    MalformedEvidence,
     VerificationResult,
     VerificationVerdict,
     Verifier,
@@ -695,3 +726,378 @@ class TestNoInvalidDoneAtTheDirectorEntryPoint(_RepoTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _FixedVerifier(Verifier):
+    """Answers with whatever it was handed, and counts its calls.
+
+    Takes the ANSWER rather than a `passed` flag, so a member can return
+    a malformed `VerificationResult`, a `MalformedEvidence`, or something
+    that is neither — the three cases a composite has to tell apart.
+    """
+
+    def __init__(self, name: str, answer: object) -> None:
+        self.name = name
+        self.answer = answer
+        self.calls = 0
+
+    def run(self, cwd: Path):  # type: ignore[override]
+        self.calls += 1
+        return self.answer
+
+
+def _result(name: str, passed: object) -> VerificationResult:
+    """A `VerificationResult` whose `passed` is whatever was asked for.
+
+    `passed=1` is DATA here, not a typo. A linter or a type checker
+    "correcting" it to `True` would delete the defect under test.
+    """
+    return VerificationResult(
+        name=name, passed=passed,  # type: ignore[arg-type]
+        exit_code=0, duration_s=0.5,
+        stdout_excerpt=f"{name} said so", stderr_excerpt=f"{name} stderr",
+    )
+
+
+def _member(name: str, passed: object) -> _FixedVerifier:
+    return _FixedVerifier(name, _result(name, passed))
+
+
+class TestACompositeCannotLaunderMalformedEvidence(unittest.TestCase):
+    """The third F-34 review, at the level where it happened.
+
+    Verified reproduction, before the repair:
+
+        CompositeVerifier("composite", [child_with_passed_1]).run(...)
+        -> VerificationResult(name='composite', passed=True, exit_code=0)
+        -> verification_verdict(...) is PASSED
+        -> TaskState.COMPLETED, ReportStatus.COMPLETED
+
+    and
+
+        CompositeVerifier("empty", []).run(...)
+        -> VerificationResult(name='empty', passed=True)   # all([]) is True
+
+    Both are DONEs minted from evidence nobody produced.
+    """
+
+    # -- an empty composite may not exist ---------------------------------
+
+    def test_an_empty_composite_is_refused_at_construction(self):
+        # Refused BEFORE anything can run, because a composite that can
+        # never say anything meaningful is a construction error and not a
+        # verification outcome.
+        with self.assertRaises(EmptyCompositeError) as caught:
+            CompositeVerifier("empty", [])
+        self.assertIn("no verifiers", str(caught.exception))
+
+    def test_the_empty_refusal_is_a_value_error(self):
+        # Callers that guard broadly must still catch it.
+        with self.assertRaises(ValueError):
+            CompositeVerifier("empty", [])
+
+    def test_an_empty_composite_never_reaches_run(self):
+        # The reproduction ran `.run()` and got a pass. There is now no
+        # object on which that call could be made.
+        try:
+            composite = CompositeVerifier("empty", ())
+        except EmptyCompositeError:
+            return
+        self.fail(f"an empty composite was constructed: {composite!r}")
+
+    def test_the_members_cannot_be_emptied_after_construction(self):
+        # A refusal that holds only until somebody holds the object is
+        # not a refusal: `verifiers.clear()` would restore `all([])`.
+        composite = CompositeVerifier("composite", [_member("a", True)])
+        self.assertIsInstance(composite.verifiers, tuple)
+        with self.assertRaises(AttributeError):
+            composite.verifiers.clear()  # type: ignore[attr-defined]
+
+    def test_a_mutable_argument_is_copied_not_aliased(self):
+        members = [_member("a", True)]
+        composite = CompositeVerifier("composite", members)
+        members.clear()
+        self.assertEqual(len(composite.verifiers), 1)
+
+    # -- aggregation, by verdict -----------------------------------------
+
+    def test_two_passing_members_pass(self):
+        composite = CompositeVerifier("composite", [_member("a", True),
+                                                    _member("b", True)])
+        evidence = composite.run(Path("."))
+        self.assertIs(verification_verdict(evidence), VerificationVerdict.PASSED)
+        self.assertIsInstance(evidence, VerificationResult)
+        self.assertIs(evidence.passed, True)
+        self.assertEqual(evidence.exit_code, 0)
+
+    def test_a_passing_and_a_failing_member_fail(self):
+        composite = CompositeVerifier("composite", [_member("a", True),
+                                                    _member("b", False)])
+        evidence = composite.run(Path("."))
+        self.assertIs(verification_verdict(evidence), VerificationVerdict.FAILED)
+        self.assertIs(evidence.passed, False)
+        # The failing member's stderr is what an operator needs; the
+        # passing one's is noise.
+        self.assertIn("b stderr", evidence.stderr_excerpt)
+        self.assertNotIn("a stderr", evidence.stderr_excerpt)
+
+    def test_a_malformed_member_makes_the_composite_invalid_not_passed(self):
+        # THE regression. `all(r.passed ...)` turned this into passed=True.
+        composite = CompositeVerifier("composite", [_member("a", True),
+                                                    _member("b", 1)])
+        evidence = composite.run(Path("."))
+        self.assertIs(verification_verdict(evidence), VerificationVerdict.MALFORMED)
+        self.assertNotIsInstance(evidence, VerificationResult)
+        self.assertIsInstance(evidence, MalformedEvidence)
+        self.assertFalse(completion_is_evidenced(evidence))
+
+    def test_a_lone_malformed_member_is_the_verbatim_reproduction(self):
+        composite = CompositeVerifier("composite", [_member("only", 1)])
+        self.assertIs(verification_verdict(composite.run(Path("."))),
+                      VerificationVerdict.MALFORMED)
+
+    def test_invalid_evidence_is_not_reported_as_an_ordinary_failure(self):
+        # "your code is broken" and "your verifier is broken" send an
+        # operator to different files. Collapsing them wastes the day.
+        malformed = CompositeVerifier(
+            "composite", [_member("a", True), _member("b", 1)]).run(Path("."))
+        failed = CompositeVerifier(
+            "composite", [_member("a", True), _member("b", False)]).run(Path("."))
+        self.assertIsNot(verification_verdict(malformed),
+                         verification_verdict(failed))
+        self.assertIn("invalid evidence", malformed.reason)
+        self.assertIn("b", malformed.reason)
+
+    def test_a_falsy_malformed_member_is_also_invalid(self):
+        # `passed=0` is the mirror case: still no verdict. Reading it as a
+        # failure would invent one.
+        composite = CompositeVerifier("composite", [_member("b", 0)])
+        self.assertIs(verification_verdict(composite.run(Path("."))),
+                      VerificationVerdict.MALFORMED)
+
+    def test_a_member_that_is_not_a_result_at_all_is_invalid(self):
+        composite = CompositeVerifier(
+            "composite", [_member("a", True),
+                          _FixedVerifier("ducky", "looks fine to me")])
+        self.assertIs(verification_verdict(composite.run(Path("."))),
+                      VerificationVerdict.MALFORMED)
+
+    def test_a_member_that_answers_with_nothing_is_invalid(self):
+        composite = CompositeVerifier(
+            "composite", [_member("a", True), _FixedVerifier("silent", None)])
+        self.assertIs(verification_verdict(composite.run(Path("."))),
+                      VerificationVerdict.MALFORMED)
+
+    def test_a_nested_composite_cannot_launder_through_a_layer(self):
+        # One level of aggregation is not special. A composite whose
+        # member is a composite whose member is malformed must still be
+        # invalid, or the hole reopens one indirection down.
+        inner = CompositeVerifier("inner", [_member("bad", 1)])
+        outer = CompositeVerifier("outer", [_member("a", True), inner])
+        self.assertIs(verification_verdict(outer.run(Path("."))),
+                      VerificationVerdict.MALFORMED)
+
+    # -- what is preserved -------------------------------------------------
+
+    def test_the_rejected_members_are_kept_for_forensics(self):
+        composite = CompositeVerifier("composite", [_member("a", True),
+                                                    _member("b", 1)])
+        evidence = composite.run(Path("."))
+        raws = [child["raw"] for child in evidence.children]
+        # The raw child may still carry `passed: 1` — that is the point of
+        # keeping it. What must not happen is anything DECIDING on it,
+        # which is why the verdict travels beside it already read.
+        self.assertIn(1, [raw.get("passed") for raw in raws])
+        self.assertIn(VerificationVerdict.MALFORMED.value,
+                      [child["verdict"] for child in evidence.children])
+
+    def test_the_serialized_composite_has_no_passed_key_to_misread(self):
+        evidence = CompositeVerifier("composite", [_member("b", 1)]).run(Path("."))
+        payload = evidence.to_dict()
+        self.assertNotIn("passed", payload)
+        self.assertEqual(payload["verdict"], VerificationVerdict.MALFORMED.value)
+
+    def test_every_member_still_runs_before_the_verdict_is_formed(self):
+        # A composite that short-circuits on the first malformed member
+        # would hide the state of the others, and the operator would fix
+        # them one round at a time.
+        good, bad = _member("a", True), _member("b", 1)
+        CompositeVerifier("composite", [bad, good]).run(Path("."))
+        self.assertEqual((good.calls, bad.calls), (1, 1))
+
+
+class TestTheEngineDoesNotCompleteOnACompositeVerifier(_RepoTestCase):
+    """Reproduction 1 of the third review, end to end through `TaskEngine`."""
+
+    def _run(self, task_id: str, verifier: Verifier):
+        engine = TaskEngine(run_store=self.store, cli_runner=_CountingRunner(["succeed"]))
+        return engine.execute_task(
+            task_id=task_id, objective="Demo", prompt="do it",
+            repo_path=self.repo, verifier=verifier,
+        )
+
+    def test_a_composite_with_a_malformed_member_does_not_complete(self):
+        outcome = self._run("TASK-C1",
+                            CompositeVerifier("composite", [_member("bad", 1)]))
+        self.assertEqual(outcome.final_task_state, TaskState.FAILED)
+        self.assertNotEqual(outcome.report.status, ReportStatus.COMPLETED)
+
+    def test_the_report_never_calls_it_a_pass(self):
+        outcome = self._run("TASK-C2",
+                            CompositeVerifier("composite", [_member("bad", 1)]))
+        blob = " ".join((
+            *outcome.report.verification,
+            *outcome.report.problems_encountered,
+            *outcome.report.work_completed,
+            outcome.report.recommended_next_step,
+        ))
+        self.assertNotIn("PASSED", blob)
+        self.assertNotIn("PASS", blob)
+
+    def test_the_report_names_the_member_that_broke_it(self):
+        outcome = self._run("TASK-C3",
+                            CompositeVerifier("composite", [_member("bad", 1)]))
+        verification = " ".join(outcome.report.verification)
+        self.assertIn("REJECTED", verification)
+        self.assertIn("invalid evidence", verification.lower())
+        self.assertIn("bad", verification)
+
+    def test_the_problems_list_is_not_empty(self):
+        outcome = self._run("TASK-C4",
+                            CompositeVerifier("composite", [_member("bad", 1)]))
+        self.assertTrue(outcome.report.problems_encountered)
+        self.assertIn("records no verdict",
+                      " ".join(outcome.report.problems_encountered))
+
+    def test_the_ledger_does_not_present_it_as_a_valid_verification(self):
+        outcome = self._run("TASK-C5",
+                            CompositeVerifier("composite", [_member("bad", 1)]))
+        events = [e for e in self.store.ledger_for(outcome.run_ids[-1]).read_all()
+                  if e.event_type == "task.verification_result"]
+        self.assertEqual(len(events), 1)
+        recorded = events[0].data
+        self.assertIs(recorded["passed"], False)
+        self.assertEqual(recorded["verdict"], VerificationVerdict.MALFORMED.value)
+        self.assertIn("records no verdict", recorded["evidence"])
+        # Kept, quarantined: the rejected members remain inspectable.
+        self.assertIn("children", recorded["rejected_result"])
+
+    def test_a_composite_of_real_passing_verifiers_still_completes(self):
+        # The repair must not make every composite unusable.
+        outcome = self._run("TASK-C6", CompositeVerifier(
+            "composite", [passing_verifier(), passing_verifier()]))
+        self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
+        self.assertEqual(outcome.report.verification, ("composite: PASSED",))
+
+    def test_a_composite_with_a_real_failure_still_fails_as_a_failure(self):
+        outcome = self._run("TASK-C7", CompositeVerifier(
+            "composite", [passing_verifier(), failing_verifier()]))
+        self.assertEqual(outcome.final_task_state, TaskState.FAILED)
+        self.assertEqual(outcome.report.verification, ("composite: FAILED",))
+
+
+class TestConvergenceRefusesMalformedEvidence(unittest.TestCase):
+    """`ConvergenceLoop` may not converge on evidence that states no verdict.
+
+    Before the repair the loop's clean predicate read
+    `verification is not None and verification.passed`, so a `passed` of
+    `1` converged the loop — and a converged loop is what the Director
+    turns into `ReportStatus.COMPLETED`.
+    """
+
+    def _loop(self, verification: object, max_rounds: int = 2) -> ConvergenceLoop:
+        return ConvergenceLoop(
+            ConvergencePolicy(max_rounds=max_rounds, max_unchanged_rounds=3),
+            verify_fn=lambda: verification,  # type: ignore[arg-type,return-value]
+            review_fn=lambda index: ReviewReport(verdict=ReviewVerdict.PASS,
+                                                 reviewer="independent"),
+            fix_fn=lambda request: FixReport(claims_done=True),
+            fingerprint_fn=lambda: "fp-unchanged",
+        )
+
+    def test_a_truthy_passed_does_not_converge(self):
+        result = self._loop(_result("suite", 1)).run()
+        self.assertIsNot(result.outcome, ConvergenceOutcome.CONVERGED)
+
+    def test_a_malformed_evidence_object_does_not_converge(self):
+        malformed = CompositeVerifier("composite", [_member("bad", 1)]).run(Path("."))
+        self.assertIsNot(self._loop(malformed).run().outcome,
+                         ConvergenceOutcome.CONVERGED)
+
+    def test_the_failure_is_typed_and_named(self):
+        result = self._loop(_result("suite", 1)).run()
+        stages = {(f.stage, f.error_type) for f in result.evidence_failures}
+        self.assertIn(("verification", "MalformedEvidence"), stages)
+
+    def test_a_round_on_invalid_evidence_does_not_count_toward_stalemate(self):
+        # A broken verifier is not a stuck repo. Counting it would file a
+        # STALEMATE that sends the operator to look at the diff.
+        result = self._loop(_result("suite", 1), max_rounds=6).run()
+        self.assertIsNot(result.outcome, ConvergenceOutcome.STALEMATE)
+        self.assertTrue(all(record.unchanged_streak == 0
+                            for record in result.rounds))
+
+    def test_no_round_is_marked_as_having_complete_evidence(self):
+        result = self._loop(_result("suite", 1)).run()
+        self.assertTrue(all(not record.evidence_ok for record in result.rounds))
+
+    def test_a_real_pass_still_converges(self):
+        result = self._loop(_result("suite", True)).run()
+        self.assertIs(result.outcome, ConvergenceOutcome.CONVERGED)
+
+    def test_a_real_failure_still_produces_an_ordinary_round(self):
+        # Not an evidence failure: a FAILED verification IS evidence, and
+        # the fixer must be asked to act on it.
+        fixes: list[object] = []
+        loop = ConvergenceLoop(
+            ConvergencePolicy(max_rounds=1),
+            verify_fn=lambda: _result("suite", False),
+            review_fn=lambda index: ReviewReport(verdict=ReviewVerdict.PASS,
+                                                 reviewer="independent"),
+            fix_fn=lambda request: (fixes.append(request), FixReport())[1],
+            fingerprint_fn=lambda: "fp",
+        )
+        result = loop.run()
+        self.assertIsNot(result.outcome, ConvergenceOutcome.CONVERGED)
+        self.assertEqual(len(fixes), 1)
+        self.assertEqual(result.evidence_failures, ())
+
+
+class TestTheFixPromptTellsTheAgentWhichThingIsBroken(unittest.TestCase):
+    """Rule: a review message may not describe MALFORMED as a code failure.
+
+    `build_fix_prompt` tested `not request.verification.passed`, so a
+    `passed` of `1` printed nothing at all — the fixer was told the round
+    was clean while the kernel had thrown the evidence out.
+    """
+
+    def test_a_failing_verification_says_the_code_must_pass(self):
+        line = verification_prompt_line(_result("suite", False))
+        self.assertIsNotNone(line)
+        self.assertIn("FAILING", line)
+
+    def test_invalid_evidence_says_the_verifier_is_the_problem(self):
+        line = verification_prompt_line(_result("suite", 1))
+        self.assertIsNotNone(line)
+        self.assertIn("INVALID EVIDENCE", line)
+        self.assertIn("do not start by editing it", line)
+
+    def test_the_two_messages_are_not_the_same(self):
+        self.assertNotEqual(verification_prompt_line(_result("suite", False)),
+                            verification_prompt_line(_result("suite", 1)))
+
+    def test_invalid_evidence_is_not_described_as_failing(self):
+        line = verification_prompt_line(_result("suite", 1))
+        self.assertNotIn("currently FAILING", line)
+
+    def test_a_composite_that_states_no_verdict_is_described_as_invalid(self):
+        malformed = CompositeVerifier("composite", [_member("bad", 1)]).run(Path("."))
+        line = verification_prompt_line(malformed)
+        self.assertIn("INVALID EVIDENCE", line)
+        self.assertIn("records no verdict", line)
+
+    def test_a_passing_verification_says_nothing(self):
+        self.assertIsNone(verification_prompt_line(_result("suite", True)))
+
+    def test_no_verification_says_nothing(self):
+        self.assertIsNone(verification_prompt_line(None))

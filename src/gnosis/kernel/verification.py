@@ -20,6 +20,27 @@ is what a human reads.
 MALFORMED for anything that is neither `True` nor `False`. Every
 consumer — the completion predicate, the ledger, the report — derives
 its answer from that one function, so they cannot disagree.
+
+A THIRD independent review then showed that one function is not enough
+while the only way to REPORT a verdict is a two-state field.
+`CompositeVerifier` ran a child whose `passed` was `1`, read it with
+`all(r.passed for r in results)`, and returned a brand-new
+`VerificationResult(passed=True)`. Every strict reader downstream was
+then perfectly correct and perfectly wrong: the composite really is a
+well-formed passing result, and the malformed evidence it was computed
+from had been laundered out of existence. The same review found
+`CompositeVerifier("empty", [])` passing on `all([]) is True` — a DONE
+minted by running no check at all.
+
+`passed: bool` has two states and the verdict has three, so a composite
+that must say "a member returned invalid evidence" had nowhere to say
+it. `MalformedEvidence` is that third state made representable:
+evidence that records NO verdict, kept as its own type so that
+`verification_verdict` classifies it MALFORMED by construction and no
+arithmetic over `passed` can collapse it into a pass. `Verifier.run`
+therefore returns `Evidence`, not `VerificationResult`, which is what
+makes every production reader confront the case instead of inheriting a
+guarantee nobody checked.
 """
 from __future__ import annotations
 
@@ -72,6 +93,59 @@ class VerificationVerdict(str, Enum):
     MALFORMED = "MALFORMED"
 
 
+@dataclass(frozen=True)
+class MalformedEvidence:
+    """Evidence that records NO verdict, kept as a thing in its own right.
+
+    A `VerificationResult` cannot express this. Its `passed` is a
+    two-state field and MALFORMED is the third state, so a verifier that
+    aggregates others — `CompositeVerifier` — had exactly two ways to
+    report "a member returned something I could not read": call it a pass
+    or call it a failure. It called it a pass (third F-34 review), and
+    because the object it built was itself well-formed, every strict
+    reader downstream believed it.
+
+    This is not a `VerificationResult` subclass, deliberately.
+    `verification_verdict` classifies anything that is not a
+    `VerificationResult` as MALFORMED, so an instance of this type is
+    unable to be read as a pass by the one function that decides — the
+    property holds by construction rather than by anyone remembering to
+    check. Inheriting would have made `isinstance` say yes and put the
+    guarantee back in the hands of every call site.
+
+    `children` keeps the raw member payloads. Rejecting evidence is not
+    the same as destroying it: a serialized child may still carry its
+    original `passed` of `1`, because that is what forensics is for. What
+    no summary may do is read that field to decide anything, which is why
+    each child arrives with the `verdict` already computed beside it.
+    """
+
+    name: str
+    reason: str
+    children: tuple[dict[str, Any], ...] = ()
+    ts: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            # Named `verdict`, never `passed`. A reader scanning a payload
+            # for `passed` must not find a key here at all, rather than
+            # find one whose value they then have to interpret correctly.
+            "verdict": VerificationVerdict.MALFORMED.value,
+            "reason": self.reason,
+            "children": [dict(child) for child in self.children],
+            "ts": self.ts,
+        }
+
+
+#: What a `Verifier` may answer: a readable result, or a record that it
+#: could not produce one. Widening the ABC's return type to this union is
+#: what makes mypy name every reader that assumed the narrow case — the
+#: composite's laundering was invisible precisely because the type said
+#: it could not happen.
+Evidence = VerificationResult | MalformedEvidence
+
+
 #: What an operator is told when a verifier answered with a
 #: `VerificationResult` whose `passed` states no verdict. Deliberately
 #: free of the word this module refuses to print for such a result, so a
@@ -94,9 +168,12 @@ def verification_verdict(result: object) -> VerificationVerdict:
     see it, and narrowing the annotation here would let the type checker
     delete the very branch that catches it.
 
-    - not a `VerificationResult` (including `None`) -> MALFORMED. Absence
-      of evidence is not success, and neither is a stand-in the kernel
-      cannot read.
+    - not a `VerificationResult` (including `None`, and including a
+      `MalformedEvidence`) -> MALFORMED. Absence of evidence is not
+      success, and neither is a stand-in the kernel cannot read.
+      `MalformedEvidence` needs no branch of its own here on purpose:
+      it is classified by the same rule as every other non-result, so
+      the property cannot be lost by editing a branch that names it.
     - `passed is True` -> PASSED. The exact object, never a truthy one.
     - `passed is False` -> FAILED. Also the exact object: a falsy value
       that is not `False` says no more than a truthy one that is not
@@ -119,11 +196,54 @@ def verification_verdict(result: object) -> VerificationVerdict:
     return VerificationVerdict.MALFORMED
 
 
+def evidence_reason(result: object) -> str:
+    """Why this evidence states no verdict, in words an operator can act on.
+
+    `MALFORMED_EVIDENCE_EXPLANATION` describes ONE cause — a `passed`
+    that is neither `True` nor `False`. A composite whose member returned
+    invalid evidence, or a verifier that returned nothing at all, has a
+    different cause, and printing the generic sentence for all of them
+    sends the reader to inspect a field that is not the problem. The
+    verdict is shared; the reason is not.
+    """
+    if isinstance(result, MalformedEvidence):
+        return result.reason
+    return MALFORMED_EVIDENCE_EXPLANATION
+
+
+def evidence_name(result: object, fallback: str = "unknown") -> str:
+    """The name to file this evidence under, without trusting its type."""
+    name = getattr(result, "name", None)
+    return name if isinstance(name, str) and name else fallback
+
+
+def evidence_payload(result: object) -> dict[str, Any]:
+    """A serializable record of evidence, with its verdict ALREADY read.
+
+    Constitution rule 2 is about what may be claimed, and a payload is
+    read by things that claim. The raw object is preserved verbatim —
+    including a `passed` of `1`, which is the whole point of keeping it —
+    but `verdict` travels beside it so that nothing downstream has to
+    re-derive the classification from the raw field. Re-derivation is the
+    defect this module keeps repairing.
+    """
+    verdict = verification_verdict(result)
+    if isinstance(result, VerificationResult | MalformedEvidence):
+        return {"verdict": verdict.value, "raw": result.to_dict()}
+    # A duck-typed verifier can return literally anything; a repr is all
+    # that can honestly be said about it, and it is bounded because an
+    # object's repr is not a trusted length.
+    return {
+        "verdict": verdict.value,
+        "raw": {"type": type(result).__name__, "repr": repr(result)[:500]},
+    }
+
+
 class Verifier(ABC):
     name: str
 
     @abstractmethod
-    def run(self, cwd: Path) -> VerificationResult:
+    def run(self, cwd: Path) -> Evidence:
         raise NotImplementedError
 
 
@@ -167,21 +287,112 @@ class CommandVerifier(Verifier):
             )
 
 
+class EmptyCompositeError(ValueError):
+    """A `CompositeVerifier` was constructed with nothing to run.
+
+    Its own exception type because "you passed an empty collection" and
+    "your verifier is misconfigured in some other way" are different
+    repairs, and because a caller assembling an optional set of checks
+    should have to catch this deliberately rather than discover it as a
+    green run that proved nothing.
+    """
+
+
 class CompositeVerifier(Verifier):
-    """Runs several verifiers and passes only if all of them pass."""
+    """Runs several verifiers; passes only when EVERY member said PASSED.
+
+    Three things this refuses to do, each of which minted an unevidenced
+    DONE in the third independent F-34 review:
+
+    **It refuses to exist with nothing to run.** `all([])` is `True`, so
+    an empty composite reported a pass having executed no check at all —
+    the purest possible violation of rule 2. The collection is validated
+    in `__init__`, before anything can run, because a composite that can
+    never produce a meaningful answer is a construction error and not a
+    verification outcome. The members are then held as a tuple: a list an
+    owner could empty after construction would put the same hole back.
+
+    **It refuses to read `passed` for truthiness.** Every member is
+    classified by `verification_verdict` and by nothing else, so a
+    `passed` of `1` is MALFORMED here exactly as it is everywhere else.
+
+    **It refuses to convert a malformed member into a verdict.** Not into
+    a pass, which is what `all(...)` did, and not into an ordinary
+    failure either: a failing member is evidence that the WORK is wrong,
+    while a malformed one is evidence that the VERIFIER is wrong, and an
+    operator sent to debug the first when it is the second will not find
+    anything. The composite answers `MalformedEvidence`, which
+    `verification_verdict` reads as MALFORMED by construction.
+    """
 
     def __init__(self, name: str, verifiers: Sequence[Verifier]):
+        members = tuple(verifiers)
+        if not members:
+            raise EmptyCompositeError(
+                f"CompositeVerifier {name!r} was given no verifiers to run. "
+                "An empty composite reports on nothing: `all([])` is True, "
+                "so it would answer PASSED having executed no check at all "
+                "(constitution rule 2: no DONE without evidence)."
+            )
         self.name = name
-        self.verifiers = list(verifiers)
+        # A tuple, not a list. `composite.verifiers.clear()` on a live
+        # object would restore the empty case the constructor exists to
+        # refuse, and the refusal would then hold only until somebody held
+        # the object.
+        self.verifiers: tuple[Verifier, ...] = members
 
-    def run(self, cwd: Path) -> VerificationResult:
-        results = [v.run(cwd) for v in self.verifiers]
-        all_passed = all(r.passed for r in results)
+    def run(self, cwd: Path) -> Evidence:
+        # Typed `object` for the reason the engine does the same: a member
+        # may be duck-typed past the ABC and return anything at all, and a
+        # narrower annotation would let mypy delete the checks below as
+        # unreachable (L-0039).
+        graded: list[tuple[object, VerificationVerdict]] = [
+            (produced, verification_verdict(produced))
+            for produced in (member.run(cwd) for member in self.verifiers)
+        ]
+
+        invalid = [child for child, verdict in graded
+                   if verdict is VerificationVerdict.MALFORMED]
+        if invalid or not graded:
+            # `not graded` is unreachable through `__init__` and is kept
+            # anyway: it states the invariant where it is relied upon, so
+            # deleting the constructor's guard cannot silently restore
+            # `all([]) is True` here.
+            return self._no_verdict(graded, invalid)
+
+        # Every member is PASSED or FAILED, so every member IS a
+        # `VerificationResult` — but that is derived, and the narrowing is
+        # therefore done explicitly rather than assumed.
+        results = [child for child, _ in graded if isinstance(child, VerificationResult)]
+        failed = [child for child, verdict in graded
+                  if verdict is VerificationVerdict.FAILED
+                  and isinstance(child, VerificationResult)]
+        all_passed = not failed
         return VerificationResult(
             name=self.name,
+            # A `bool` literal, never the value of an `all(...)` over a
+            # field whose annotation nothing enforces.
             passed=all_passed,
             exit_code=0 if all_passed else 1,
             duration_s=sum(r.duration_s for r in results),
             stdout_excerpt="\n".join(f"[{r.name}] {r.stdout_excerpt}" for r in results),
-            stderr_excerpt="\n".join(f"[{r.name}] {r.stderr_excerpt}" for r in results if not r.passed),
+            stderr_excerpt="\n".join(f"[{r.name}] {r.stderr_excerpt}" for r in failed),
+        )
+
+    def _no_verdict(self, graded: Sequence[tuple[object, VerificationVerdict]],
+                    invalid: Sequence[object]) -> MalformedEvidence:
+        """The composite records no verdict, and says which member broke it."""
+        names = ", ".join(evidence_name(child) for child in invalid) or "none"
+        reason = (
+            f"composite verifier {self.name!r} records no verdict: "
+            f"{len(invalid)} of {len(graded)} member verifier(s) returned "
+            f"invalid evidence ({names}). A member that states no verdict "
+            "cannot be aggregated into one: reading it as a pass is how "
+            "F-34 recurred, and reading it as a failure would blame the "
+            "work for a broken verifier. The evidence is invalid, so the "
+            "task is not COMPLETED (constitution rule 2)."
+        )
+        return MalformedEvidence(
+            name=self.name, reason=reason,
+            children=tuple(evidence_payload(child) for child, _ in graded),
         )

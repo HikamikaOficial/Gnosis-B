@@ -31,6 +31,12 @@ from typing import Any, Protocol
 
 from ..kernel.convergence import Finding, FixReport, FixRequest, ReviewReport
 from ..kernel.git_evidence import tamper_fingerprint
+from ..kernel.verification import (
+    VerificationVerdict,
+    evidence_name,
+    evidence_reason,
+    verification_verdict,
+)
 from ..runner.capture import ExecutionResult
 from ..runner.claude_cli_runner import McpRunnerConfig
 from .review_payload import (
@@ -124,6 +130,37 @@ def build_review_prompt(
     return "\n\n".join(parts)
 
 
+def verification_prompt_line(evidence: object) -> str | None:
+    """What a fixer is told about the deterministic verification.
+
+    Three answers, because there are three states and collapsing them
+    misdirects the agent that reads it:
+
+    - PASSED, or no verification this round: nothing to say here.
+    - FAILED: the code is wrong and must end up passing.
+    - MALFORMED: the VERIFIER is wrong. Telling a fixer "verification is
+      failing" here sends it to edit code that may be perfectly fine,
+      and the old line did exactly that — it tested
+      `not request.verification.passed`, so a `passed` of `1` printed
+      nothing at all and the round looked clean (third F-34 review).
+    """
+    if evidence is None:
+        return None
+    verdict = verification_verdict(evidence)
+    if verdict is VerificationVerdict.FAILED:
+        return ("Deterministic verification is currently FAILING; that must "
+                "end up passing.")
+    if verdict is VerificationVerdict.MALFORMED:
+        return (
+            "Deterministic verification returned INVALID EVIDENCE: "
+            f"{evidence_name(evidence)} recorded no verdict, so nothing is "
+            "known about whether the code is correct. This is NOT a report "
+            "that the code failed — do not start by editing it. Repair the "
+            f"verifier first. Details: {evidence_reason(evidence)}"
+        )
+    return None
+
+
 def build_fix_prompt(request: FixRequest, objective: str) -> str:
     parts = [
         ("You are fixing defects an independent reviewer found. Change the "
@@ -131,11 +168,9 @@ def build_fix_prompt(request: FixRequest, objective: str) -> str:
         f"Objective: {objective}",
         f"Round: {request.round_index}",
     ]
-    if request.verification is not None and not request.verification.passed:
-        parts.append(
-            "Deterministic verification is currently FAILING; that must end "
-            "up passing."
-        )
+    verification_line = verification_prompt_line(request.verification)
+    if verification_line is not None:
+        parts.append(verification_line)
     if request.blocking_findings:
         parts.append("Blocking findings:\n" + "\n".join(
             _render_finding(index, finding)

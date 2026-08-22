@@ -16,8 +16,18 @@ from typing import ClassVar
 from gnosis.contracts.director_brief import BriefSource, DirectorBrief
 from gnosis.contracts.engineer_report import ReportStatus
 from gnosis.director.brief_record import BriefRecordState
-from gnosis.director.pipeline import FIX_STAGE, REVIEW_STAGE, GovernedPipeline
-from gnosis.kernel.convergence import ConvergenceOutcome, ConvergencePolicy
+from gnosis.director.pipeline import (
+    FIX_STAGE,
+    REVIEW_STAGE,
+    GovernedPipeline,
+    _status_for,
+)
+from gnosis.kernel.convergence import (
+    ConvergenceOutcome,
+    ConvergencePolicy,
+    ConvergenceResult,
+    RoundRecord,
+)
 from gnosis.kernel.credentials import (
     Credential,
     CredentialKind,
@@ -36,7 +46,12 @@ from gnosis.kernel.policy import (
 from gnosis.kernel.replay import InteractionStore, ReplayMode
 from gnosis.kernel.run_store import RunStore
 from gnosis.kernel.scheduler import HoldStore, TaskScheduler
-from gnosis.kernel.verification import CommandVerifier
+from gnosis.kernel.verification import (
+    CommandVerifier,
+    CompositeVerifier,
+    VerificationResult,
+    Verifier,
+)
 from gnosis.kernel.worktree import WorktreeManager
 from gnosis.runner.capture import ExecutionResult
 from gnosis.runner.gated_runner import CredentialHeld, GatedAgentRunner
@@ -932,3 +947,114 @@ class TestRotationReachesTheLaunch(_PipelineTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _MalformedMember(Verifier):
+    """A member verifier whose `passed` records no verdict.
+
+    `passed=1` is DATA, not a typo: `bool` IS an `int` in Python, so a
+    linter "correcting" it to `True` would delete the defect under test.
+    """
+
+    name = "bad-suite"
+
+    def run(self, cwd):  # type: ignore[override]
+        return VerificationResult(
+            name=self.name, passed=1,  # type: ignore[arg-type]
+            exit_code=0, duration_s=0.0,
+            stdout_excerpt="looks fine", stderr_excerpt="",
+        )
+
+
+class TestABriefDoesNotCompleteOnMalformedEvidence(_PipelineTestCase):
+    """F-34, third independent review, at the level a human reads.
+
+    Verified reproduction, before the repair: a `CompositeVerifier` whose
+    member returned `passed=1` produced `VerificationResult(passed=True)`,
+    the loop converged on it, and the Director filed
+    `ReportStatus.COMPLETED` with `BriefRecordState.COMPLETED` — the
+    durable record of a brief that proved nothing.
+
+    Two ends are asserted, not one. `ConvergenceLoop` refuses to converge
+    on such evidence, and `GovernedPipeline` refuses to derive COMPLETED
+    from a convergence whose evidence it cannot read. An invariant
+    enforced at exactly one end is a property of that end (ADR-0025).
+    """
+
+    def _run_malformed(self):
+        agent = _Agent()
+        pipeline = self._pipeline(
+            agent, verifier=CompositeVerifier("composite", [_MalformedMember()]))
+        return pipeline, pipeline.run_brief(self._brief())
+
+    def test_the_brief_does_not_report_completed(self):
+        _, outcome = self._run_malformed()
+        self.assertNotEqual(outcome.status, ReportStatus.COMPLETED)
+
+    def test_the_loop_does_not_converge(self):
+        _, outcome = self._run_malformed()
+        self.assertIsNot(outcome.convergence.outcome, ConvergenceOutcome.CONVERGED)
+
+    def test_the_durable_record_is_not_completed(self):
+        # The report can be re-read; the record store is what the next
+        # session believes.
+        pipeline, _ = self._run_malformed()
+        self.assertNotEqual(pipeline.records.get("BRIEF-1").state,
+                            BriefRecordState.COMPLETED.value)
+
+    def test_the_written_report_never_shows_a_pass(self):
+        pipeline, outcome = self._run_malformed()
+        report = json.loads(
+            (pipeline.inbox.layout.outbox / f"{outcome.task_id}.json").read_text(
+                encoding="utf-8"))
+        self.assertNotEqual(report["status"], "COMPLETED")
+        # Every VERIFICATION line, and only those: the reviewer really did
+        # answer PASS and the report must keep saying so. What may never
+        # appear is a pass attributed to evidence the kernel refused.
+        lines = [line for line in report["verification"] if "verification [" in line]
+        self.assertTrue(lines)
+        for line in lines:
+            self.assertIn("REJECTED", line)
+            self.assertNotIn("PASS", line)
+
+    def test_the_operator_is_told_the_evidence_was_invalid(self):
+        _, outcome = self._run_malformed()
+        blob = " ".join(outcome.report.problems_encountered)
+        self.assertIn("invalid evidence", blob.lower())
+
+    def test_a_converged_result_with_unreadable_evidence_is_escalated(self):
+        # The Director's own end of the invariant, exercised directly: a
+        # loop outcome that SAYS converged while its final round records
+        # no passing verdict is a kernel contradiction, and a
+        # contradiction is a human's decision, not a PARTIAL to retry.
+        forged = ConvergenceResult(
+            outcome=ConvergenceOutcome.CONVERGED,
+            rounds=(RoundRecord(
+                index=1, fingerprint="fp", evidence_ok=True,
+                verification=VerificationResult(
+                    name="suite", passed=1,  # type: ignore[arg-type]
+                    exit_code=0, duration_s=0.0,
+                    stdout_excerpt="", stderr_excerpt=""),
+                review=None, blocking=(), gated=(), fix=None, warnings=(),
+                unchanged_streak=0),),
+            gate_ledger=(), dissent=(), warnings=(),
+        )
+        self.assertEqual(_status_for(forged), ReportStatus.ESCALATION_REQUIRED)
+
+    def test_a_converged_result_over_zero_rounds_is_not_completed(self):
+        # CONVERGED with no rounds is `all([])` wearing a different coat.
+        empty = ConvergenceResult(
+            outcome=ConvergenceOutcome.CONVERGED, rounds=(), gate_ledger=(),
+            dissent=(), warnings=(),
+        )
+        self.assertNotEqual(_status_for(empty), ReportStatus.COMPLETED)
+
+    def test_a_sound_composite_still_completes_a_brief(self):
+        # The repair must not make a legitimate composite unusable.
+        agent = _Agent()
+        pipeline = self._pipeline(agent, verifier=CompositeVerifier(
+            "composite", [self._verifier(), self._verifier()]))
+        outcome = pipeline.run_brief(self._brief())
+        self.assertEqual(outcome.status, ReportStatus.COMPLETED)
+        self.assertEqual(pipeline.records.get("BRIEF-1").state,
+                         BriefRecordState.COMPLETED.value)

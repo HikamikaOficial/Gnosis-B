@@ -16,7 +16,7 @@
 `docs/V1_COMPLIANCE_MATRIX.md` is the LIVING matrix — a row changes only
 when an ADR with captured evidence backs it.
 
-- **F-34 repaired in three passes; awaiting a THIRD independent review.**
+- **F-34 repaired in four passes; awaiting a FOURTH independent review.**
   ADR-0025 (`29d3666`) closed the reachable production route; an
   independent Codex review returned **FAIL PARCIAL** because the state
   authority itself still admitted `VERIFYING -> COMPLETED` with no
@@ -30,22 +30,43 @@ when an ADR with captured evidence backs it.
   `passed` with a third answer, MALFORMED, that the ledger, the report
   and the completion predicate all derive from. Six mutants captured,
   none survived. Evidence `.gnosis/evidence/20260822T162729Z/` (822
-  passed, 60 subtests, clean tree at `1591aa7`). **Next action: hand this
-  unit to a third independent review.** It is not closed until that returns.
-- **Candidate findings handed to that review, deliberately NOT repaired
-  here** (the instruction was to repair this closure and start nothing
-  else): the same truthy read of `passed` survives in
-  `kernel/convergence.py:337/359/364`, `kernel/integration.py:437` and
-  `adapters/cli_review.py:134`. None of them can produce a
-  `TaskState.COMPLETED` — the state authority refuses that independently
-  — but they would read a `passed=1` as a pass when deciding
-  convergence, landing a merged tree, and what a reviewer is shown.
+  passed, 60 subtests, clean tree at `1591aa7`). A **third** independent
+  review then returned **FAIL CRÍTICO**: `CompositeVerifier` read its
+  members with `all(r.passed for r in results)` and returned a fresh
+  `VerificationResult(passed=True)`, so a `passed` of `1` reached
+  `TaskState.COMPLETED` and `ReportStatus.COMPLETED` with every strict
+  reader downstream behaving correctly — and `CompositeVerifier("empty",
+  [])` passed on `all([]) is True`, having run nothing. The three readers
+  listed below as "candidate findings" were still live. Repaired in this
+  unit: `MalformedEvidence` makes "states no verdict" a TYPE that
+  `verification_verdict` classifies MALFORMED by construction;
+  `Verifier.run` returns `Evidence`, so mypy enumerates the readers;
+  `CompositeVerifier` refuses an empty collection at construction and
+  never converts a malformed member into a verdict; `ConvergenceLoop`,
+  `WorkIntegrator`, `cli_review` and `GovernedPipeline` each fail closed
+  with a differentiable reason. Nine mutants, none survived, and the
+  mutation check is now a committed script
+  (`scripts/mutation_check.py`). **Next action: hand this unit to a
+  FOURTH independent review.** It is not closed until that returns.
+- **The three truthy readers round 2 deferred are now REPAIRED**, not
+  deferred again: `kernel/convergence.py` (one verdict per round, the
+  flip memo holds verdicts, malformed verification is a typed evidence
+  failure), `kernel/integration.py` (landing gated on
+  `verification_verdict(...) is PASSED`, with `VERIFICATION_INVALID` as
+  its own outcome) and `adapters/cli_review.py`
+  (`verification_prompt_line`, three answers). L-0048 records why naming
+  them and deferring them was not enough.
 - **The count, so no living document repeats it wrong again:** the frozen
   audit holds **43 items** (F-01..F-42 plus F-29b). **6 are PASS** and are
-  not defects (F-06, F-09, F-11, F-29b, F-41, F-42); **1 is closed**
-  (F-34); **36 are open.** An earlier version of this file said 41, which
-  counted the PASS items and F-34 as work. Direction sets the order;
-  nothing outside F-34 was touched in either pass, deliberately.
+  not defects (F-06, F-09, F-11, F-29b, F-41, F-42); **0 are closed**;
+  **37 are open**, including F-34 itself, which is repaired and evidenced
+  but not closed — three consecutive independent reviews found a new
+  reader of the same field, and this project's rule is that a finding is
+  not resolved because it looks resolved. An earlier version of this file
+  said 41, which counted the PASS items and F-34 as work; the version
+  before this one said "1 closed (F-34)", which was true for what was
+  known then. Direction sets the order; nothing outside F-34 was touched
+  in any pass, deliberately.
 
 The ones this project's own history says will cost the most:
 

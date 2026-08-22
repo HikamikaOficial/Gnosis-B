@@ -63,9 +63,14 @@ from .state_machine import (
 )
 from .verification import (
     MALFORMED_EVIDENCE_EXPLANATION,
+    Evidence,
+    MalformedEvidence,
     VerificationResult,
     VerificationVerdict,
     Verifier,
+    evidence_name,
+    evidence_payload,
+    evidence_reason,
     verification_verdict,
 )
 from .worktree import WorktreeError, WorktreeHandle, WorktreeManager
@@ -291,7 +296,7 @@ def agent_launch_snapshot(
 
 
 def _verification_ledger_payload(
-    result: VerificationResult | None,
+    result: object,
     verdict: VerificationVerdict,
     verifier_name: str,
 ) -> dict[str, Any]:
@@ -319,15 +324,23 @@ def _verification_ledger_payload(
             }
         return {
             "passed": False,
-            "name": result.name,
+            "name": evidence_name(result, verifier_name),
             "verdict": verdict.value,
-            "evidence": MALFORMED_EVIDENCE_PROBLEM,
-            "rejected_result": result.to_dict(),
+            # The REASON, not one fixed sentence. A composite whose member
+            # returned an unreadable `passed` and a verifier whose own
+            # `passed` was unreadable are different repairs, and a ledger
+            # that prints the same sentence for both sends the reader to
+            # inspect a field that is not the problem (third F-34 review).
+            "evidence": evidence_reason(result),
+            # Kept verbatim, quarantined under a key nothing decides on:
+            # a raw child may still carry `passed: 1`, and that is what
+            # forensics is for.
+            "rejected_result": evidence_payload(result)["raw"],
         }
     # PASSED/FAILED: `passed` really is a bool, so the result speaks for
     # itself. The verdict travels with it anyway, so a later reader never
     # has to re-derive it — re-derivation is the defect this repairs.
-    assert result is not None  # PASSED/FAILED are only reachable via a result
+    assert isinstance(result, VerificationResult)  # only reachable via a result
     payload = result.to_dict()
     payload["verdict"] = verdict.value
     return payload
@@ -335,7 +348,7 @@ def _verification_ledger_payload(
 
 def _verification_report_lines(
     verdict: VerificationVerdict | None,
-    result: VerificationResult | None,
+    result: object,
 ) -> tuple[str, ...]:
     """The report's account of verification, derived from the verdict alone.
 
@@ -346,14 +359,15 @@ def _verification_report_lines(
     """
     if verdict is None:
         return ("Not reached: the agent run did not succeed.",)
-    if verdict is VerificationVerdict.PASSED and result is not None:
+    if verdict is VerificationVerdict.PASSED and isinstance(result, VerificationResult):
         return (f"{result.name}: PASSED",)
-    if verdict is VerificationVerdict.FAILED and result is not None:
+    if verdict is VerificationVerdict.FAILED and isinstance(result, VerificationResult):
         return (f"{result.name}: FAILED",)
     if result is not None:
         return (
-            f"{result.name}: REJECTED — invalid evidence, no verdict recorded",
-            MALFORMED_EVIDENCE_PROBLEM,
+            (f"{evidence_name(result)}: REJECTED — invalid evidence, no "
+             "verdict recorded"),
+            evidence_reason(result),
         )
     return ("No verification evidence was produced; the task is not complete.",)
 
@@ -508,7 +522,12 @@ class TaskExecutionOutcome:
     task_id: str
     run_ids: list[str]
     final_task_state: TaskState
-    verification: VerificationResult | None
+    # `Evidence`, not `VerificationResult`: a verifier that recorded no
+    # verdict produced something, and the outcome carries the rejected
+    # object for forensics rather than reporting the run as evidence-free
+    # (third F-34 review). `verification_verdict` is what any reader asks
+    # of it; the field itself promises nothing.
+    verification: Evidence | None
     execution_result: ExecutionResult | None
     report: EngineerReport
     # Directive 9: the typed classification of the last attempt, so a
@@ -1099,6 +1118,13 @@ class TaskEngine:
 
         cli_succeeded = bool(last_result and last_result.succeeded)
         verification_result: VerificationResult | None = None
+        # Evidence that arrived and stated no verdict. Distinct from
+        # `verification_result` because only a real `VerificationResult`
+        # may be offered to the state authority, and distinct from
+        # `evidence_missing` because a composite that rejected its own
+        # members DID produce something an operator needs to read (third
+        # F-34 review).
+        rejected_evidence: MalformedEvidence | None = None
 
         # Whether the verifier produced nothing readable. Distinct from
         # "it failed": a failing verifier IS evidence and its excerpt is
@@ -1129,6 +1155,8 @@ class TaskEngine:
             verdict = verification_verdict(produced)
             if isinstance(produced, VerificationResult):
                 verification_result = produced
+            elif isinstance(produced, MalformedEvidence):
+                rejected_evidence = produced
             else:
                 # A duck-typed verifier that answers with anything else
                 # collected no evidence. It is recorded as such rather
@@ -1139,7 +1167,7 @@ class TaskEngine:
                 store.ledger_for(latest_run_id).append(
                     latest_run_id, "task.verification_result",
                     _verification_ledger_payload(
-                        verification_result, verdict, type(verifier).__name__),
+                        produced, verdict, type(verifier).__name__),
                 )
             # The engine ASKS; it does not decide. `complete()` re-examines
             # the very object handed to it and refuses anything that is not
@@ -1174,12 +1202,14 @@ class TaskEngine:
                 problems = (redact(tail),) if tail.strip() else ()
         elif verdict is VerificationVerdict.FAILED and verification_result is not None:
             problems = (redact(verification_result.stderr_excerpt),)
-        elif verdict is VerificationVerdict.MALFORMED and verification_result is not None:
+        elif verdict is VerificationVerdict.MALFORMED and (
+            verification_result is not None or rejected_evidence is not None
+        ):
             # Evidence was produced and REJECTED. Saying nothing here is
             # what let the reproduction report a clean-looking PARTIAL
             # with an empty problems list — the operator had no way to
             # learn their verifier was the thing that was broken.
-            problems = (MALFORMED_EVIDENCE_PROBLEM,)
+            problems = (evidence_reason(verification_result or rejected_evidence),)
         elif evidence_missing:
             problems = (NO_EVIDENCE_PROBLEM,)
 
@@ -1189,7 +1219,8 @@ class TaskEngine:
             status=_report_status(task_sm.state, classifications),
             objective=objective,
             work_completed=(f"Executed {len(run_ids)} run attempt(s) via the Claude Code CLI runner.",),
-            verification=_verification_report_lines(verdict, verification_result),
+            verification=_verification_report_lines(
+                verdict, verification_result or rejected_evidence),
             problems_encountered=problems,
             recommended_next_step=(
                 "None, task completed and verified." if task_sm.state == TaskState.COMPLETED
@@ -1199,6 +1230,7 @@ class TaskEngine:
 
         return TaskExecutionOutcome(
             task_id=task_id, run_ids=run_ids, final_task_state=task_sm.state,
-            verification=verification_result, execution_result=last_result, report=report,
+            verification=verification_result or rejected_evidence,
+            execution_result=last_result, report=report,
             classification=classifications[-1] if classifications else None,
         )

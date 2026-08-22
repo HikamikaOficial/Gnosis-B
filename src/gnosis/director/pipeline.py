@@ -66,9 +66,10 @@ from ..kernel.ordering import LandingCoordinator
 from ..kernel.policy import ApprovalStore, PolicyDecision, PolicyEngine
 from ..kernel.scheduler import ScheduleOutcome, TaskScheduler
 from ..kernel.verification import (
-    VerificationResult,
     VerificationVerdict,
     Verifier,
+    evidence_name,
+    evidence_reason,
     verification_verdict,
 )
 from ..kernel.worktree import WorktreeError, WorktreeManager
@@ -680,15 +681,46 @@ def _reason_from(message: str) -> str:
     return message.split(marker, 1)[1].strip() if marker in message else message
 
 
+def converged_on_valid_evidence(convergence: ConvergenceResult) -> bool:
+    """CONVERGED, and the round that converged really did verify.
+
+    `ConvergenceLoop` already refuses to converge on malformed evidence,
+    so this is a second, independent reading of the same question — and
+    it is here deliberately. ADR-0025 recorded the lesson the hard way:
+    an invariant enforced by exactly one caller is a property of that
+    caller, not of the system. The Director is what turns a loop outcome
+    into `ReportStatus.COMPLETED` and `BriefRecordState.COMPLETED`, which
+    are what a human reads and what the record store durably remembers,
+    so it re-examines the evidence rather than inheriting a conclusion.
+
+    A CONVERGED result whose final round did not verify PASSED is a
+    kernel contradiction, not a completion: something upstream is broken
+    and a human has to look at it.
+    """
+    if convergence.outcome is not ConvergenceOutcome.CONVERGED:
+        return False
+    if not convergence.rounds:
+        # CONVERGED over zero rounds is `all([])` wearing a different
+        # coat: an outcome asserted with nothing behind it.
+        return False
+    final = convergence.rounds[-1]
+    return verification_verdict(final.verification) is VerificationVerdict.PASSED
+
+
 def _status_for(convergence: ConvergenceResult) -> ReportStatus:
-    """Only a converged loop is COMPLETED.
+    """Only a converged loop with valid evidence is COMPLETED.
 
     The implementation's own verdict does not appear here on purpose. A
     task closes on evidence — deterministic verification AND an
     independent review — never on the claim of the agent that did the
     work."""
     if convergence.outcome is ConvergenceOutcome.CONVERGED:
-        return ReportStatus.COMPLETED
+        if converged_on_valid_evidence(convergence):
+            return ReportStatus.COMPLETED
+        # Converged on evidence this end refuses to read. Not PARTIAL:
+        # nothing here can be fixed by another round, because the two
+        # halves of the kernel disagree about what happened.
+        return ReportStatus.ESCALATION_REQUIRED
     if convergence.outcome is ConvergenceOutcome.CANNOT_FIX:
         return ReportStatus.ESCALATION_REQUIRED
     # STALEMATE and ROUNDS_EXHAUSTED: work happened, it did not finish.
@@ -738,7 +770,7 @@ def _verification_lines(implementation: TaskExecutionOutcome | None,
     return tuple(lines)
 
 
-def _verification_line(label: str, result: VerificationResult) -> str:
+def _verification_line(label: str, result: object) -> str:
     """One line of the Director's report, read through the shared verdict.
 
     It used to be `'PASS' if result.passed else 'FAIL'`. That is the same
@@ -752,7 +784,7 @@ def _verification_line(label: str, result: VerificationResult) -> str:
         VerificationVerdict.PASSED: "PASS",
         VerificationVerdict.FAILED: "FAIL",
     }.get(verdict, "REJECTED (invalid evidence, no verdict recorded)")
-    return f"{label} verification [{result.name}]: {shown}"
+    return f"{label} verification [{evidence_name(result)}]: {shown}"
 
 
 def _problem_lines(convergence: ConvergenceResult | None) -> tuple[str, ...]:
@@ -770,6 +802,17 @@ def _problem_lines(convergence: ConvergenceResult | None) -> tuple[str, ...]:
         f"{failure.stage} evidence failed [{failure.error_type}]: {failure.message}"
         for failure in convergence.evidence_failures
     )
+    # A CONVERGED loop whose final round did not verify PASSED never
+    # reaches COMPLETED (`_status_for`), and it must not reach the report
+    # silently either: the reader has to be told which half is broken.
+    if (convergence.outcome is ConvergenceOutcome.CONVERGED
+            and not converged_on_valid_evidence(convergence)):
+        final = convergence.rounds[-1].verification if convergence.rounds else None
+        problems.append(
+            "the convergence loop reported CONVERGED on evidence that "
+            "records no passing verdict; this is a kernel contradiction "
+            f"and the brief is NOT complete: {evidence_reason(final)}"
+        )
     return tuple(problems)
 
 

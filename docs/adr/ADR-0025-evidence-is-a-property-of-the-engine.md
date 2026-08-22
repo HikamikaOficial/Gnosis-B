@@ -534,3 +534,220 @@ gate and broken at the page).
   `TestTheVerdictIsReadByIdentityNotTruthiness` (6 tests, 24 subtests) and
   `TestARejectedResultIsNeverReportedAsAPass` (10 tests), including the
   end-to-end `TaskEngine` run with `passed=1`.
+
+---
+
+## Third independent review addendum — 2026-08-22: **FAIL CRÍTICO**
+
+The repair in `1591aa7` was re-reviewed independently and returned FAIL
+CRÍTICO. The two previous repairs held: the state authority still refuses
+an unevidenced COMPLETED, and the engine's report still refuses to print
+a rejected result as a pass. The invariant was broken anyway, one level
+up, and this round is the most serious of the three because the reviewer
+did not need to defeat any of the guards — they went **around** them.
+
+### The finding, reproduced
+
+```python
+CompositeVerifier("composite", [verifier_returning_passed_1]).run(cwd)
+# -> VerificationResult(name='composite', passed=True, exit_code=0)
+# -> verification_verdict(...) is PASSED
+# -> TaskState.COMPLETED, ReportStatus.COMPLETED, problems=()
+```
+
+```python
+CompositeVerifier("empty", []).run(cwd)
+# -> VerificationResult(name='empty', passed=True)     # all([]) is True
+# -> TaskState.COMPLETED, ReportStatus.COMPLETED
+```
+
+Both were replayed against `9117b63` before any change and produced
+exactly that. The second is the purer one: a DONE minted by running no
+check at all.
+
+What makes this different from rounds 1 and 2 is that **every strict
+reader downstream was correct.** `verification_verdict` read the
+composite's `passed` and found the object `True`. `completion_is_evidenced`
+agreed. The report printed `PASSED` because the evidence really did say
+so. The malformed child had been laundered out of existence one frame
+earlier, by the one component that was supposed to be aggregating
+evidence and was instead manufacturing it.
+
+The mechanism is small and general: **the verdict has three states and
+`VerificationResult.passed` has two.** A composite whose member returns
+something unreadable has exactly two things it can say in that field, and
+neither of them is true. `all(r.passed for r in results)` picked one, and
+because `bool` IS an `int` in Python it picked the wrong one — silently,
+for every truthy value, and unconditionally for the empty case.
+
+Round 2's addendum said, in as many words:
+
+> `CompositeVerifier` is safe by accident: `all()` returns a real bool.
+
+**That sentence is retracted.** It is true about the composite's own
+return type and false about everything that matters. `all()` does return
+a real bool — computed by evaluating each member's `passed` for truth,
+which is the exact defect the same addendum had just spent two pages
+repairing elsewhere. The claim was written from the type and never
+checked against a run; one line of code would have falsified it.
+
+Round 2 also named three unrepaired truthy readers — `convergence.py`,
+`integration.py`, `cli_review.py` — and deferred them as "a candidate
+finding for the next review". They were still there. Naming a defect is
+not bounding it, and the reviewer's instruction this round was explicit
+that "`verification_verdict` is the only reader" remained false.
+
+### The repair
+
+**Evidence can now state no verdict, as a type.** `MalformedEvidence` is
+a frozen dataclass carrying a `name`, a `reason` and the raw member
+payloads. It is deliberately NOT a `VerificationResult` subclass:
+`verification_verdict` classifies everything that is not a
+`VerificationResult` as MALFORMED, so an instance of this type cannot be
+read as a pass by the one function that decides — the property holds by
+construction rather than by anyone remembering to check. Its `to_dict()`
+has no `passed` key at all, so a reader scanning a payload for that field
+finds nothing to misread rather than something to interpret correctly.
+
+`Verifier.run` is therefore typed `-> Evidence`, not
+`-> VerificationResult`. That is what turned the audit from a grep into a
+type error: mypy named every production reader that had assumed the
+narrow case, which is precisely the set of places rounds 1 and 2 had to
+find by hand and twice found incompletely.
+
+**`CompositeVerifier` refuses three things.** It refuses to exist with an
+empty collection (`EmptyCompositeError`, raised in `__init__`, before
+anything can run) and stores its members as a tuple, so a refusal that
+held only until somebody called `.clear()` is not what was built. It
+classifies every member with `verification_verdict` and nothing else. And
+it refuses to convert a malformed member into a verdict — not into a pass
+and not into an ordinary failure either, because a failing member says
+the WORK is wrong while a malformed one says the VERIFIER is wrong, and
+an operator sent to debug the first when it is the second will not find
+anything. A nested composite cannot launder through a layer either.
+
+**The three deferred readers are repaired, each in its own terms.**
+
+- `ConvergenceLoop` reads the verdict once per round and derives all
+  three of its former truthy reads from it. Malformed verification is
+  treated as an evidence-collection failure — the round cannot converge,
+  cannot count toward stalemate (a broken verifier is not a stuck repo),
+  and is recorded as a typed `EvidenceFailure` with `error_type
+  MalformedEvidence`. The flip-detection memo now stores verdicts rather
+  than bools, so "the verifier was broken last round" can never be
+  remembered as "it failed last round".
+- `WorkIntegrator` gates the shared branch on `verification_verdict(...)
+  is PASSED`. Malformed evidence fails closed under its own outcome,
+  `VERIFICATION_INVALID`, which is deliberately not a synonym for
+  `VERIFICATION_FAILED`: one sends a human to read the diff and the other
+  says the diff is not the problem. Landing is the most irreversible
+  action in the system and was the last place still guessing.
+- `cli_review` builds its line through `verification_prompt_line`, which
+  answers three ways. A fixer told "verification is currently FAILING"
+  when the verifier is what broke will edit code that may be fine; before
+  this, a `passed` of `1` printed nothing at all and the round looked
+  clean.
+
+**The Director re-examines rather than inherits.** `ConvergenceLoop`
+already refuses to converge on malformed evidence, and `GovernedPipeline`
+now independently refuses to derive `ReportStatus.COMPLETED` or
+`BriefRecordState.COMPLETED` from a CONVERGED result whose final round
+does not verify PASSED. That is the lesson of this ADR's own first
+addendum applied to itself: an invariant enforced at exactly one end is a
+property of that end. A CONVERGED result over zero rounds is refused for
+the same reason `all([])` is — an outcome asserted with nothing behind
+it. The contradiction is reported as ESCALATION_REQUIRED, not PARTIAL:
+another round cannot repair two halves of the kernel disagreeing.
+
+**What was deliberately NOT done.** `VerificationResult.passed` is not
+validated in `__post_init__`. Making the reproduction unconstructible
+would move the guarantee into the constructor and leave every consumer
+believing whatever it was handed by any other route — a duck-typed
+verifier, a deserialized ledger entry, a future dataclass with the same
+shape. The reviewer asked for this explicitly, and it is the right call:
+consumers must keep failing closed on malformed data, so the data has to
+stay constructible. `passed=1` is still legal to build, still preserved
+verbatim in `rejected_result` and in `MalformedEvidence.children`, and
+still refused by everything that decides.
+
+### Mutation check
+
+Nine mutants, each restoring exactly one defect, run by
+`scripts/mutation_check.py` — a committed script with the mutants
+declared as data, so a fourth reviewer can re-run the claim rather than
+read it. Targeted suite: `tests/test_no_invalid_done.py`,
+`tests/test_verification.py`, `tests/test_convergence.py`,
+`tests/test_integration.py`, `tests/test_pipeline.py`; baseline **203
+passed / 39 subtests**.
+
+| Mutant | Result |
+|---|---|
+| M1 `CompositeVerifier` reads `passed` for truthiness again (`all(r.passed …)`) | **red** |
+| M2 an empty `CompositeVerifier` can be constructed again | **red** |
+| M3 `all([]) is True` restored end to end (constructor AND `run` guards removed) | **red** |
+| M4 a malformed member is collapsed into an ordinary FAILED | **red** |
+| M5 `ConvergenceLoop` reads truthiness again and malformed evidence counts as collected | **red** |
+| M6 `WorkIntegrator` lands on `if not verification.passed` | **red** |
+| M7 the fixer prompt reads `not verification.passed` again | **red** |
+| M8 `GovernedPipeline` derives COMPLETED from CONVERGED alone | **red** |
+| M9 the shared verdict itself reads truthiness (round-2 mutant, kept) | **red** |
+
+None survived; the tree was restored and re-verified green (203 passed).
+The script exits non-zero if any mutant survives or if the baseline is
+not green, so it cannot produce a clean transcript for an unguarded tree.
+
+### What this says about the process, a third time
+
+The pattern across three rounds is now legible enough to name. Round 1
+put the invariant in one caller. Round 2 put it in the methods and left
+the field public, then printed a pass off evidence the gate had refused.
+Round 3 put it in a single reader and then handed that reader's answer to
+a component that could not carry it. Each round the repair was correct
+and each round it was applied one level below where the outcome is
+actually produced.
+
+Two lessons are recorded. **L-0047**: an aggregator launders evidence
+when its carrier is narrower than its verdict — a tri-state judgement
+cannot survive a two-state field, and `all([])` asserts success from
+nothing. **L-0048**: a named-and-deferred finding recurs, and an
+unverified reassurance is worse than silence — round 2 wrote that the
+composite was "safe by accident" from the return type without running the
+case, and listed three live readers as a candidate finding instead of a
+falsifier.
+
+There is also a process change in this unit rather than only a note: the
+mutation check is now a committed script, `scripts/mutation_check.py`,
+with the mutants declared as data. The previous two rounds produced
+transcripts by hand, so a fourth reviewer could read the claim but not
+re-run it. It exits non-zero if any mutant survives, so it cannot produce
+a clean transcript for an unguarded tree.
+
+### Files
+
+- `src/gnosis/kernel/verification.py` — `MalformedEvidence`, the
+  `Evidence` union, `evidence_reason` / `evidence_name` /
+  `evidence_payload`, `EmptyCompositeError`, and `CompositeVerifier`
+  rebuilt around the verdict.
+- `src/gnosis/kernel/state_machine.py` — `completion_is_evidenced` takes
+  `object`, so evidence that states no verdict is refused by the same
+  rule as any other non-result.
+- `src/gnosis/kernel/engine.py` — rejected evidence is carried as itself
+  (`MalformedEvidence`) rather than collapsed into "no evidence"; the
+  ledger payload, the report lines and the problems list all derive from
+  `evidence_reason`.
+- `src/gnosis/kernel/convergence.py` — one verdict per round; malformed
+  verification is a typed evidence failure; the flip-detection memo holds
+  verdicts.
+- `src/gnosis/kernel/integration.py` — `VERIFICATION_INVALID`; landing
+  gated on `verification_verdict(...) is PASSED`.
+- `src/gnosis/adapters/cli_review.py` — `verification_prompt_line`.
+- `src/gnosis/director/pipeline.py` — `converged_on_valid_evidence`;
+  `_status_for` re-examines rather than inherits.
+- `scripts/mutation_check.py` — new, the mutants as data.
+- `tests/test_no_invalid_done.py` —
+  `TestACompositeCannotLaunderMalformedEvidence`,
+  `TestTheEngineDoesNotCompleteOnACompositeVerifier`,
+  `TestConvergenceRefusesMalformedEvidence`,
+  `TestTheFixPromptTellsTheAgentWhichThingIsBroken`.
+- `tests/test_pipeline.py` — `TestABriefDoesNotCompleteOnMalformedEvidence`.
+- `tests/test_integration.py` — `TestMalformedEvidenceDoesNotLand`.

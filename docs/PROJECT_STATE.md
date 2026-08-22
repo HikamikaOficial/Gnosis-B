@@ -270,7 +270,7 @@ addenda rather than carried silently. The two closed since: concurrent
 (L-0042) — and unpaced crash recovery. Rule 9 verified mechanically: the
 tree fingerprint was identical before and after the reviews.
 
-## Traceability audit, and F-34 closed (ADR-0025, 2026-08-22)
+## Traceability audit, and F-34 — repaired four times, not closed (ADR-0025, 2026-08-22)
 
 A read-only audit of the whole V1 surface — `docs/V1_TRACEABILITY_AUDIT.md`,
 frozen at commit `83ae84e` and never edited afterwards — produced 42
@@ -304,9 +304,43 @@ captured against a CLEAN code tree at `29d3666` (tree `cf7a2657`), with
 `f34-tree-binding.json` recording `content_fingerprint()` before and
 after the run.
 
+**Three independent reviews, three FAILs, and the finding is still
+open.** Round 1 (Codex, FAIL PARCIAL): the state machine itself walked
+`VERIFYING -> COMPLETED` for anybody who asked, so the invariant was a
+property of one caller. Round 2 (FAIL PARCIAL): `state` and
+`completion_evidence` were public attributes, and the engine's report
+printed `PASSED` for a `VerificationResult(passed=1)` the authority had
+just refused. Round 3 (**FAIL CRÍTICO**): `CompositeVerifier` read its
+members with `all(r.passed for r in results)` and returned a brand-new,
+well-formed `VerificationResult(passed=True)` — so every strict reader
+downstream was correct about evidence that had been laundered one frame
+earlier — and `CompositeVerifier("empty", [])` passed on `all([]) is
+True`, a DONE minted by running no check at all. The three truthy readers
+round 2 named and deferred (`convergence.py`, `integration.py`,
+`cli_review.py`) were still live.
+
+The repair makes the third verdict representable as a TYPE:
+`MalformedEvidence`, which is not a `VerificationResult`, so
+`verification_verdict` classifies it MALFORMED by construction.
+`Verifier.run` returns `Evidence`, which is what let mypy — rather than a
+grep — enumerate every production reader. `CompositeVerifier` refuses an
+empty collection at construction, classifies members only by verdict, and
+never converts a malformed member into a pass or into an ordinary
+failure. `ConvergenceLoop`, `WorkIntegrator`, `cli_review` and
+`GovernedPipeline` each fail closed on MALFORMED with a differentiable
+reason. Nine mutants, none survived — and the mutation check is now a
+committed script (`scripts/mutation_check.py`) rather than a hand-made
+transcript, so the next reviewer can re-run it.
+
+**F-34 is NOT marked closed.** It is repaired and evidenced; three
+consecutive independent reviews found a new reader of the same field, and
+this project's own rule is that a finding is not resolved because it
+looks resolved. It closes when an independent review returns without
+findings. L-0047 and L-0048 record why.
+
 **Scope discipline: F-34 only.** The other 36 open findings are
 untouched — 43 items in the frozen audit, of which 6 are PASS and not
-defects (F-06, F-09, F-11, F-29b, F-41, F-42) and 1 is closed. That
+defects (F-06, F-09, F-11, F-29b, F-41, F-42). That
 includes the documentation drift THIS FILE still carries
 (F-19..F-32: the stale 164-test line and mypy file count below, the
 resolved-vs-pending Codex contradiction, the `src/gnosis/` "empty

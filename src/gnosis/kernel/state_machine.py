@@ -142,7 +142,7 @@ TASK_TERMINAL_STATES = frozenset({TaskState.COMPLETED, TaskState.FAILED, TaskSta
 EVIDENCE_GATED_STATES = frozenset({TaskState.COMPLETED})
 
 
-def completion_is_evidenced(verification: VerificationResult | None) -> bool:
+def completion_is_evidenced(verification: object) -> bool:
     """The predicate `complete()` applies. Nothing reaches COMPLETED past it.
 
     Constitution rule 2: no task reaches DONE without evidence. This
@@ -166,6 +166,16 @@ def completion_is_evidenced(verification: VerificationResult | None) -> bool:
       Python, so `1`, a non-empty string and every other truthy value
       would pass a bare check. `failures.py` already had to learn this
       for exit codes; the flag that closes a task deserves the same care.
+
+    - **Evidence that states no verdict at all.** `MalformedEvidence` is
+      not a `VerificationResult`, so it is refused by the same rule as
+      any other non-result. A composite whose member returned an
+      unreadable `passed` answers with one (third F-34 review), and it
+      must not be able to close a task any more than a bare `None` can.
+
+    The argument is typed `object`, not `VerificationResult | None`, for
+    the reason L-0039 records and this predicate exists to survive: the
+    values that reach it are exactly the ones no annotation constrained.
 
     The rules above are no longer spelled out here: `verification_verdict`
     is the one function that interprets `passed`, and this predicate is

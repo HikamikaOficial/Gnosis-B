@@ -74,7 +74,13 @@ from .policy import (
     parse_command,
     resolve_escalation,
 )
-from .verification import VerificationResult, Verifier
+from .verification import (
+    Evidence,
+    VerificationVerdict,
+    Verifier,
+    evidence_reason,
+    verification_verdict,
+)
 from .worktree import BRANCH_PREFIX, WorktreeError, WorktreeManager
 
 INTEGRATION_INTERVENTION_POINT = "before_integration"
@@ -101,6 +107,13 @@ class IntegrationOutcome(str, Enum):
     # Attempted, and the target did not move.
     MERGE_CONFLICT = "MERGE_CONFLICT"
     VERIFICATION_FAILED = "VERIFICATION_FAILED"
+    # The merged tree was verified and the verifier stated no verdict.
+    # NOT a synonym for VERIFICATION_FAILED: that one says the merged code
+    # is wrong and a human should read the diff, while this one says the
+    # verification apparatus is wrong and the diff is not the problem.
+    # Landing on either is refused; sending an operator to the wrong one
+    # costs them the afternoon (third F-34 review).
+    VERIFICATION_INVALID = "VERIFICATION_INVALID"
     INTEGRATION_ERROR = "INTEGRATION_ERROR"
 
 
@@ -119,7 +132,10 @@ class IntegrationResult:
     checkpoint_ref: str | None = None
     conflicts: tuple[str, ...] = ()
     changed_paths: tuple[str, ...] = ()
-    verification: VerificationResult | None = None
+    # `Evidence`: the merged tree's verification may be a result or a
+    # record that no verdict could be produced, and the second is kept
+    # rather than discarded so the refusal is inspectable.
+    verification: Evidence | None = None
     # The independent verdict against the MERGED tree, when one was
     # required. This is what makes a stale review recoverable as
     # evidence rather than only waivable as a decision (ADR-0021).
@@ -433,8 +449,25 @@ class WorkIntegrator:
         # each passed their own review can combine into a tree that does
         # not — a rename on one side and a new caller of the old name on
         # the other conflict semantically and not textually.
+        #
+        # Read through `verification_verdict`, never off `passed`. This
+        # line was `if not verification.passed`, and a third independent
+        # F-34 review showed what that admits: `not 1` is `False`, so a
+        # verifier whose evidence the state authority refuses would have
+        # advanced the shared branch. Landing is the most irreversible
+        # action in the system, so it is the last place that may guess.
         verification = self.verifier.run(staging)
-        if not verification.passed:
+        verdict = verification_verdict(verification)
+        if verdict is VerificationVerdict.MALFORMED:
+            return IntegrationResult(
+                IntegrationOutcome.VERIFICATION_INVALID, task_id, branch,
+                reason="merged_tree_verification_stated_no_verdict",
+                base_sha=base_sha, merged_sha=merged_sha,
+                checkpoint_ref=checkpoint_ref, changed_paths=changed,
+                verification=verification,
+                detail={"evidence": evidence_reason(verification)},
+            )
+        if verdict is not VerificationVerdict.PASSED:
             return IntegrationResult(
                 IntegrationOutcome.VERIFICATION_FAILED, task_id, branch,
                 reason="merged_tree_failed_verification", base_sha=base_sha,
