@@ -57,8 +57,45 @@ when an ADR with captured evidence backs it.
   — verified by the reviewer's own run (249 tests, 39 subtests targeted),
   not by the author's transcript. No new findings in scope. **F-34 is
   closed**, by the rule that a finding closes when an independent review
-  returns without findings. **Next action: the next audit finding, by
-  direction** — nothing about F-34 remains to do.
+  returns without findings. Nothing about F-34 remains to do.
+
+- **F-14 repaired (ADR-0026), NOT closed — awaiting a FIRST independent
+  review.** The evidence script recorded HEAD and `git status`, which is
+  a state and a name: two different dirty trees touching the same files
+  produced a byte-identical bundle. It now takes the tree's content
+  identity (`content_fingerprint()`, the primitive the repo already had
+  and this surface was the last not to use) before the first check and
+  again after the last, writes both complete fingerprints into
+  `SUMMARY.json`, and refuses to call itself evidence if they differ or
+  if either could not be taken — whatever the tests said. Four outcomes
+  stay distinct with four exit codes: checks failed (1), tree mutated
+  (2), identity unavailable (3), lint debt within the recorded baseline
+  (0, and not a failure). The bundle is built outside the repository and
+  published after the post fingerprint, so it cannot appear in its own
+  identity. 36 tests, 5 subtests; nine mutants, none survived
+  (`scripts/mutation_check_f14.py`). **Next action: hand this unit to an
+  independent review.** It is not closed until that returns.
+
+- **Observed overlap with F-15..F-18, none of them marked repaired:**
+  F-15's suggested correction is what this script now does, but the
+  finding covers the evidence surface and one script changed; F-16's
+  ordering defect no longer affects the binding, though the command list
+  is unchanged and `git-status.stdout.txt` is still post-suite; F-17 now
+  has HEAD, the status digest and both identities inside `SUMMARY.json`
+  and still has **no hash chain and no signature**; F-18 is untouched.
+
+- **A pre-existing flaky test, found while checking the baseline and
+  deliberately not repaired here:**
+  `test_work_queue.py::TestACrashedWorkerLosesNothing::`
+  `test_recovery_never_takes_a_brief_from_a_live_worker` fails about 1
+  run in 5. `_short_lived()` sets a 50 ms lease TTL and this test needs
+  the lease alive across `recover()`, `running_ids()` and `complete()` —
+  four file-locked JSON round-trips on Windows — while its neighbours
+  sleep 150 ms precisely to let it expire. It is a timing defect in the
+  test, not in the queue. Repairing it means making it deterministic
+  (inject the clock, or give this one test its own TTL), which is a
+  change to `tests/` that no F-14 evidence should carry. **Next unit that
+  touches the work queue, or a standalone one by direction.**
 - **The three truthy readers round 2 deferred are now REPAIRED**, not
   deferred again: `kernel/convergence.py` (one verdict per round, the
   flip memo holds verdicts, malformed verification is a typed evidence
@@ -125,9 +162,13 @@ cd "C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi"
 PYTHONUTF8=1 .venv/Scripts/python.exe scripts/capture_evidence.py
 ```
 
-Green baseline first (874 passed with 60 subtests as of `9c6064c`, mypy
-strict clean over 55 files, ruff at the 19-finding baseline), then
-**whichever audit finding direction names**.
+That script now fails closed rather than producing an unattributable
+transcript: exit 2 if the tree moved during the capture, exit 3 if its
+identity could not be taken. Baseline as of ADR-0026: **874 tests and 60
+subtests when the flaky work-queue test cooperates** (873 + 1 flaky
+failure otherwise — see above), mypy strict clean over 56 source files,
+ruff at the 19-finding baseline. Then **whichever audit finding direction
+names**.
 Do not batch them: the audit was produced one finding at a time and the
 repairs are cheaper to review the same way.
 

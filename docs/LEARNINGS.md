@@ -400,3 +400,21 @@ Format:
 - Corollary for scope discipline: "repair this closure and start nothing else" is a correct instruction and it does not make the deferred items safe. The right artifact for a deferred defect is a ticket with a reproduction, not a paragraph.
 - Related: L-0047 (the aggregator that laundered them), L-0044 (check a superlative against the thing it names), L-0016 / L-0041 (self-review finds about one in four).
 - Revalidation condition: standing rule; no expiry.
+
+## L-0049 — A name is not a content: an identity built from states and paths re-derives its claims from the thing it was supposed to prove
+- Scope: any evidence, cache key, approval binding, audit record or "did this change?" check built on `git status`, file names, timestamps, sizes or diff stats.
+- What happened: `capture_evidence.py` recorded HEAD and `git status --porcelain` and called the result evidence. Status prints `XY <path>`. Two different dirty trees that modify the same files produce a byte-identical bundle, and `git diff --stat` gives identical counts for any same-length edit. The bundle cited as proof of "760 tests passing" ran against a dirty tree at `92fe18ab`; the bytes it tested are unrecoverable from it. The same blindness had already been found twice in this repo — in the policy-approval key and in the rule-9 reviewer check — and `content_fingerprint()` was written to fix it. The evidence surface never adopted it.
+- Root cause, stated generally: **an identity made of metadata answers "which files" and the question was "which bytes".** Every consumer then has to corroborate the evidence with something outside it — in this case the commit — which inverts what evidence is for.
+- Lesson: when an artifact exists to prove a state, its identity must be content-addressed and must be part of the artifact. And check the repo before inventing one: the second and third occurrences of this bug were reachable by grep from the first.
+- Corollary about workarounds: all four ADR-0025 rounds wrote an external `tree-binding.json` by hand around the broken script. A workaround performed once is pragmatism; performed four times it is the finding, and the fourth repetition is late to notice.
+- Related: L-0011 (status is blind to content in the rule-9 check), L-0046, L-0047.
+- Revalidation condition: standing rule; no expiry.
+
+## L-0050 — An instrument that writes into what it measures reports on itself
+- Scope: evidence capture, profilers, snapshot tools, audit writers, anything that records a system into a location the system contains.
+- What happened: making the capture take a before/after fingerprint immediately exposed a second defect that the weaker check had hidden: `.gnosis/evidence/` is tracked, so a bundle written in place is an untracked change inside the tree the post fingerprint is about to read. Every capture would have reported that the tree moved, and would have been right about itself.
+- Root cause, stated generally: **the measurement was inside the measured set.** A weak check tolerates that because it cannot see the artifact; a strong check cannot, and the failure looks like a false positive when it is the tool telling the truth about its own footprint.
+- Lesson: build the artifact outside the observed boundary and move it in afterwards, with the boundary crossing named in the artifact itself (`covers`, here) rather than left for a reviewer to infer. Where the crossing cannot be avoided, state it; do not narrow the check until the artifact stops showing up.
+- Corollary: a test that stages the bundle INSIDE the repository and asserts the capture invalidates itself is what keeps this from being re-broken by someone tidying the temp directory away.
+- Related: L-0049, L-0011.
+- Revalidation condition: standing rule; no expiry.

@@ -1,10 +1,10 @@
 # GNOSIS — Matriz V1 viva
 
-**Última actualización:** 2026-08-22 · **Unidad:** ADR-0025 + cuatro
-addenda de revisión independiente (FAIL PARCIAL, FAIL PARCIAL,
+**Última actualización:** 2026-08-22 · **Unidad:** ADR-0026 — **F-14
+reparado, NO cerrado**, entregado para primera revisión independiente.
+Unidad anterior: ADR-0025 + cuatro addenda (FAIL PARCIAL, FAIL PARCIAL,
 **FAIL CRÍTICO**, **PASS**) — F-34 **CERRADO** por la cuarta revisión,
-que volvió sin hallazgos sobre el código `9c6064c` y la evidencia
-`f02e18e`
+sin hallazgos sobre el código `9c6064c` y la evidencia `f02e18e`
 
 Esta es la matriz **viva**. `docs/V1_TRACEABILITY_AUDIT.md` es el
 diagnóstico congelado del 2026-08-22 y no se edita; cada hallazgo se
@@ -109,21 +109,56 @@ conserva abajo sin reescribir.
 | **F-34 (tercera revisión)** — `CompositeVerifier` lavaba evidencia MALFORMED (`all(r.passed …)` → `passed=True`) y un compuesto vacío pasaba con `all([])`; los tres lectores diferidos seguían vivos; **FAIL CRÍTICO** | ADR-0025 addendum 3 | 2026-08-22 | `.gnosis/evidence/20260822T181937Z/` (874 passed, árbol limpio en `9c6064c`; nueve mutantes capturados) |
 | **F-34 (cuarta revisión)** — las dos reproducciones críticas fallan cerradas, `CompositeVerifier` con un miembro `passed=1` produce `MalformedEvidence` y el motor termina FAILED/PARTIAL registrando el problema, el compuesto vacío lanza `EmptyCompositeError`, y no queda lector productivo de `.passed` que decida fuera de `verification_verdict()`; **PASS, sin hallazgos** | ADR-0025 addendum 4 | 2026-08-22 | revisada sobre código `9c6064c` y evidencia `f02e18e`; 249 pruebas y 39 subtests dirigidos verificados por el revisor; el bundle registra 874 pruebas, 60 subtests, mypy limpio y ruff en baseline |
 
+## F-14 — reparación entregada, PENDIENTE DE REVISIÓN INDEPENDIENTE
+
+**F-14 sigue ABIERTO.** La reparación existe, está probada y tiene
+evidencia; lo que no tiene todavía es una revisión independiente. Esta
+tabla no mueve un hallazgo a «cerrado» por parecerlo, y menos después de
+lo que costó F-34.
+
+| Hallazgo | ADR | Fecha | Estado | Evidencia |
+|---|---|---|---|---|
+| **F-14** — la evidencia capturada no identifica de forma vinculante los bytes probados: `git status` es estado y nombre, nunca contenido | ADR-0026 | 2026-08-22 | **reparado, sin revisar** | ver §Evidencia del ADR; 36 pruebas y 5 subtests dirigidos; nueve mutantes, ninguno sobrevive (`scripts/mutation_check_f14.py`) |
+
+Qué hace la reparación: `probe_tree_identity()` envuelve
+`content_fingerprint()` — HEAD, el parche contra él y el sha256 de cada
+fichero sin seguimiento, por ruta — y la huella se toma **antes** de la
+primera comprobación y **después** de la última. Ambas huellas completas
+van a `SUMMARY.json`. Si difieren, o si alguna no pudo obtenerse, la
+captura no es evidencia y lo dice, hayan pasado las pruebas o no. El
+bundle se construye fuera del repositorio y se publica después de la
+huella final, para que la evidencia no aparezca en su propia huella.
+
+**Solapamiento observado con F-15…F-18, que NO se marcan reparados:**
+F-15 (la primitiva existía sin usarse) — este script ya la usa, que era
+la corrección sugerida, pero el hallazgo abarca la superficie de
+evidencia y aquí cambió un script; F-16 (orden de captura) — la huella
+previa se toma antes de todo, así que el vínculo ya no depende del orden,
+pero la lista de comandos sigue igual y `git-status.stdout.txt` sigue
+siendo un artefacto posterior a la suite; F-17 (tamper-evidence) —
+`SUMMARY.json` ya contiene HEAD, el digest de status y las dos
+identidades completas, pero **no hay hash-chain ni firma**, que es de lo
+que trata F-17; F-18 (deriva de evidencia) — intacto.
+
 ## Hallazgos abiertos
 
-F-01, F-02, F-03, F-04, F-05, F-07, F-08, F-10, F-12, F-13, F-14, F-15,
-F-16, F-17, F-18, F-19…F-32, F-33, F-35, F-36, F-37, F-38, F-39, F-40.
+F-01, F-02, F-03, F-04, F-05, F-07, F-08, F-10, F-12, F-13, **F-14**,
+F-15, F-16, F-17, F-18, F-19…F-32, F-33, F-35, F-36, F-37, F-38, F-39,
+F-40.
 
 **Recuento, para que ningún documento vivo lo repita mal:** el diagnóstico
 congelado tiene **43 elementos** (F-01…F-42 más F-29b). De ellos **6 son
 PASS** y no son defectos (F-06, F-09, F-11, F-29b, F-41, F-42), **1 está
 cerrado** (F-34) y **36 siguen abiertos** — exactamente los enumerados
-arriba. Historial del recuento, porque ha estado mal dos veces: una
+arriba, F-14 incluido: reparado en ADR-0026 y **no** cerrado, porque
+ninguna revisión independiente lo ha visto todavía. El recuento no cambia
+en esta unidad. Historial del recuento, porque ha estado mal dos veces: una
 versión dijo 41, contando los PASS y F-34 como trabajo; otra dijo
 "1 cerrado (F-34)" antes de que la tercera revisión lo reabriera; otra
 dijo "0 cerrados y 37 abiertos", correcto mientras F-34 estuvo reabierto.
 El recuento vivo es **6 PASS · 1 cerrado · 36 abiertos**.
 
 Ninguno de los 36 se ha tocado en ninguna de las cuatro pasadas de F-34.
-Los 15 hallazgos abiertos de las revisiones anteriores
-(`PROJECT_REPORT.md §8`) tampoco.
+ADR-0026 toca exactamente uno de ellos, F-14, y lo deja abierto. Los 15
+hallazgos abiertos de las revisiones anteriores (`PROJECT_REPORT.md §8`)
+siguen igual.

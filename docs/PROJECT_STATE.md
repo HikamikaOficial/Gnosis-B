@@ -417,6 +417,61 @@ sites), `kernel/integration.py` and `adapters/cli_review.py`, which are
 decision logic in other subsystems; none can forge a COMPLETED, but
 "cannot forge a DONE" is weaker than "cannot be misread".
 
+## F-14 — the evidence surface now binds bytes (ADR-0026, 2026-08-22)
+
+`scripts/capture_evidence.py` recorded HEAD and `git status --porcelain`.
+Status is a state and a NAME: two different dirty trees that touch the
+same files produce a byte-identical bundle, and `git diff --stat` gives
+the same counts for any same-length edit. Nothing in a bundle said WHICH
+bytes passed the suite. The audit's receipt for that is the bundle this
+project cited as proof of "760 tests passing": HEAD `92fe18ab`, four ` M`
+paths, contents unrecoverable. Agreement with a later commit is an
+inference from the commit, not a proof from the evidence.
+
+The primitive was already here and this was the last surface not using
+it. `probe_tree_identity()` wraps `content_fingerprint()` — HEAD, the
+patch against it, and the sha256 of every untracked file's bytes per path
+— and the identity is taken BEFORE the first check and again immediately
+AFTER the last. Both complete fingerprints go into `SUMMARY.json`. Two
+identical available fingerprints, or the capture is not evidence: a tree
+that moved is `TREE_MUTATED` (exit 2) and a probe that could not answer
+is `IDENTITY_UNAVAILABLE` (exit 3), both fail closed whatever the tests
+said, and an unavailable PRE identity means nothing runs at all. Failed
+checks (exit 1) and lint debt within the recorded baseline (exit 0) stay
+distinct from both, because the operator response differs. The bundle is
+built outside the repository and published after the post fingerprint, so
+evidence cannot invalidate itself by existing. `all_passed` is gated on
+the binding, with the ungated fact kept beside it as
+`checks_all_zero_exit` — L-0046 applied to this surface before someone
+had to find it again.
+
+All four ADR-0025 rounds wrote an external `tree-binding.json` by hand
+around this script. That workaround is now unnecessary.
+
+**F-14 is NOT closed.** It is repaired, tested (36 tests, 5 subtests) and
+mutation-checked (nine mutants, none survived,
+`scripts/mutation_check_f14.py`), and no independent review has seen it.
+It closes when one returns without findings.
+
+**Overlap recorded, not claimed:** F-15 (the unused primitive) is what
+this script now uses; F-16 (capture order) no longer affects the binding
+though the command list is unchanged; F-17 now has HEAD, the status
+digest and both identities inside `SUMMARY.json` but still **no hash
+chain and no signature**; F-18 is untouched. None of them are marked
+repaired.
+
+**The baseline was not green at the start of this unit, and not because
+of it.** The full suite at `aea62b0` returned 1 failed, 873 passed:
+`test_work_queue.py::TestACrashedWorkerLosesNothing::`
+`test_recovery_never_takes_a_brief_from_a_live_worker`. The fixture
+`_short_lived()` sets a 50 ms lease TTL, and that test needs the lease
+alive across four file-locked round-trips while its neighbours sleep
+150 ms precisely to let it expire. Reproduced at 1 failure in 5 runs in
+isolation; mypy clean, ruff at the 19 baseline in the same run. A
+pre-existing flaky test, left alone because this unit is scoped to F-14
+and because making a test deterministic is a change to `tests/` that no
+F-14 evidence should carry.
+
 ## Fixed locations
 
 - Project: `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi`

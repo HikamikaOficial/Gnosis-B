@@ -1,49 +1,74 @@
-"""Capture a verification transcript with exit codes.
+"""Capture a verification transcript BOUND to the bytes it ran against.
 
-An ADR line reading "suite 535/535; mypy strict clean" is a claim about
-a command nobody can see. An independent review called that out
-precisely: self-reported prose is not evidence, and this project's own
-definition of done requires proof.
+An ADR line reading "874 passed; mypy strict clean" is a claim about a
+command nobody can see. This script runs the commands and keeps their
+argv, exit code, duration and output, so the claim is a transcript.
 
-Writes `.gnosis/evidence/<utc-stamp>/` containing each command's argv,
-exit code, duration and captured output, plus a `SUMMARY.json` an ADR
-can cite by path. Exits non-zero if any command failed, so it cannot
-produce a green transcript for a red tree.
+That was the first half, and it was not enough. The audit's F-14: the
+bundle recorded HEAD and `git status --porcelain`, which is a state and a
+NAME, never a content. Two different dirty trees that touch the same
+files produce a byte-identical bundle, so nothing in the evidence said
+WHICH bytes passed. Every F-34 round had to write an external
+`tree-binding.json` by hand around this script to say what the script
+should have said itself.
 
-    uv run --no-project --with pytest --with mypy --with ruff \
-        python scripts/capture_evidence.py
+Now the tree's identity — `content_fingerprint()`, the primitive this
+repository already had — is taken before the first check and again
+immediately after the last, and both complete fingerprints go into
+`SUMMARY.json`. If they differ, or if either could not be taken, the
+capture is not evidence and says so, whatever the tests did.
+
+The bundle is built OUTSIDE the repository and published afterwards, so
+the evidence does not turn up in its own post fingerprint.
+
+    PYTHONUTF8=1 .venv/Scripts/python.exe scripts/capture_evidence.py
+
+Exit codes are distinct on purpose:
+
+    0  bound, and the gates are clean or within the recorded lint baseline
+    1  bound, and a check failed (or lint debt rose above the baseline)
+    2  the tree changed during the capture — the transcript is unattributable
+    3  the tree's identity could not be taken — the probe is broken
 """
 from __future__ import annotations
 
 import json
-import subprocess
+import shutil
 import sys
-import time
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-EVIDENCE_ROOT = REPO / ".gnosis" / "evidence"
+if str(REPO / "src") not in sys.path:
+    # Runnable with a bare interpreter, not only from an editable install.
+    sys.path.insert(0, str(REPO / "src"))
 
-COMMANDS: list[tuple[str, list[str]]] = [
-    ("pytest", [sys.executable, "-m", "pytest", "tests/", "-q"]),
-    ("mypy", [sys.executable, "-m", "mypy", "src/gnosis"]),
-    ("ruff", [sys.executable, "-m", "ruff", "check", "src/gnosis", "tests",
-              "--no-cache", "--output-format=concise"]),
-    ("git-head", ["git", "rev-parse", "HEAD"]),
-    ("git-status", ["git", "status", "--porcelain"]),
+from gnosis.kernel.evidence_capture import (  # noqa: E402
+    CheckCommand,
+    publish_bundle,
+    run_capture,
+)
+
+EVIDENCE_ROOT = REPO / ".gnosis" / "evidence"
+LINT_BASELINE = REPO / ".gnosis" / "state" / "lint_baseline.json"
+
+COMMANDS: list[CheckCommand] = [
+    CheckCommand("pytest", (sys.executable, "-m", "pytest", "tests/", "-q")),
+    CheckCommand("mypy", (sys.executable, "-m", "mypy", "src/gnosis")),
+    # Ruff's rule set here is broader than the one earlier milestones were
+    # written against, so the repo carries documented residuals in files
+    # nobody has touched since. Counting them, rather than ignoring the
+    # check or pretending it is clean, is what keeps "no NEW lint debt"
+    # enforceable while the backlog is paid down.
+    CheckCommand("ruff", (sys.executable, "-m", "ruff", "check", "src/gnosis", "tests",
+                          "--no-cache", "--output-format=concise"), lint_baseline=True),
+    CheckCommand("git-head", ("git", "rev-parse", "HEAD")),
+    CheckCommand("git-status", ("git", "status", "--porcelain")),
 ]
 
-# Commands whose non-zero exit is a KNOWN backlog rather than a broken
-# tree. Ruff's default rule set here is broader than the one earlier
-# milestones were written against, so the repo carries documented
-# residuals in files nobody has touched since. Counting them, rather than
-# ignoring the check or pretending it is clean, is what keeps "no NEW
-# lint debt" enforceable while the backlog is paid down.
-LINT_BASELINE = Path(__file__).resolve().parent.parent / ".gnosis" / "state" / "lint_baseline.json"
 
-
-def _lint_baseline() -> int:
+def lint_baseline() -> int:
     try:
         payload = json.loads(LINT_BASELINE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -55,67 +80,33 @@ def _lint_baseline() -> int:
     return int(value) if isinstance(value, int) else 0
 
 
+def staging_root() -> Path:
+    """Where the bundle is built: OUTSIDE the repository, deliberately.
+
+    `.gnosis/evidence/` is tracked, so a bundle written in place is an
+    untracked change in the tree the post fingerprint is about to read.
+    The capture would then report that the tree moved — and it would be
+    right, about itself. Build it elsewhere, publish it after.
+    """
+    return Path(tempfile.mkdtemp(prefix="gnosis-evidence-"))
+
+
 def main() -> int:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    out_dir = EVIDENCE_ROOT / stamp
-    out_dir.mkdir(parents=True, exist_ok=True)
+    staging = staging_root()
+    try:
+        capture = run_capture(REPO, COMMANDS, staging, lint_baseline=lint_baseline())
+        out_dir = publish_bundle(staging, EVIDENCE_ROOT / stamp)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
-    results = []
-    failed = False
-    for name, argv in COMMANDS:
-        started = time.monotonic()
-        proc = subprocess.run(argv, cwd=REPO, capture_output=True, text=True, check=False)
-        duration = time.monotonic() - started
-        (out_dir / f"{name}.stdout.txt").write_text(proc.stdout, encoding="utf-8")
-        (out_dir / f"{name}.stderr.txt").write_text(proc.stderr, encoding="utf-8")
-        results.append({
-            "name": name,
-            "argv": argv,
-            "exit_code": proc.returncode,
-            "duration_s": round(duration, 2),
-            # The last line is the one an ADR quotes ("535 passed in ...").
-            "tail": (proc.stdout.strip().splitlines() or [""])[-1][:300],
-        })
-        if name == "ruff" and proc.returncode != 0:
-            count = sum(1 for line in proc.stdout.splitlines()
-                        if line.strip() and ":" in line and not line.startswith("["))
-            baseline = _lint_baseline()
-            results[-1]["lint_findings"] = count
-            results[-1]["lint_baseline"] = baseline
-            if count > baseline:
-                results[-1]["verdict"] = f"NEW LINT DEBT: {count} > baseline {baseline}"
-                failed = True
-            else:
-                results[-1]["verdict"] = "known backlog, not above baseline"
-            continue
-        if proc.returncode != 0:
-            failed = True
-
-    # `all_passed` used to be `not failed`, where `failed` forgave ruff for
-    # exiting non-zero as long as it stayed at baseline. A one-line summary
-    # that reads `true` while a gate exited 1 is where a reader stops, and
-    # the reconciliation two levels down is not where they look
-    # (independent review). The verdict is now split: what actually
-    # succeeded, and what is a known, bounded backlog.
-    non_zero = [r["name"] for r in results if r["exit_code"] != 0]
-    summary = {
-        "captured_at": datetime.now(UTC).isoformat(),
-        "python": sys.version.split()[0],
-        "results": results,
-        "all_passed": not failed and not non_zero,
-        "gates_clean": not failed,
-        "non_zero_exits": non_zero,
-        "verdict": (
-            "all gates clean" if not failed and not non_zero
-            else "within baseline; see non_zero_exits" if not failed
-            else "FAILED"
-        ),
-    }
-    (out_dir / "SUMMARY.json").write_text(
-        json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
-    print(json.dumps(summary, indent=2, sort_keys=True))
+    print(json.dumps(dict(capture.summary), indent=2, sort_keys=True))
     print(f"\nevidence: {out_dir.relative_to(REPO)}")
-    return 1 if failed else 0
+    if not capture.evidence_valid:
+        print(f"\n{capture.summary['verdict']}")
+        print("This bundle is a transcript, not evidence: it cannot be cited "
+              "as proof about a tree.")
+    return capture.exit_code
 
 
 if __name__ == "__main__":
