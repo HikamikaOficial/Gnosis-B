@@ -16,12 +16,29 @@
 `docs/V1_COMPLIANCE_MATRIX.md` is the LIVING matrix — a row changes only
 when an ADR with captured evidence backs it.
 
-- **F-34 CLOSED** — in two passes. ADR-0025 (`29d3666`) closed the
-  reachable production route; an independent Codex review returned **FAIL
-  PARCIAL** because the state authority itself still admitted
-  `VERIFYING -> COMPLETED` with no evidence, and `6c4859a` closed that.
-  Evidence `.gnosis/evidence/20260822T142519Z/` (800 passed on a clean
-  tree, two mutants captured).
+- **F-34 repaired in three passes; awaiting a THIRD independent review.**
+  ADR-0025 (`29d3666`) closed the reachable production route; an
+  independent Codex review returned **FAIL PARCIAL** because the state
+  authority itself still admitted `VERIFYING -> COMPLETED` with no
+  evidence, and `6c4859a` closed that. A **second** independent review
+  returned **FAIL PARCIAL** again: `state`/`completion_evidence` were
+  still public attributes (`sm.state = TaskState.COMPLETED` reached a
+  terminal DONE past every guard), and the engine's report printed
+  `PASSED` for a `VerificationResult(passed=1)` the authority had just
+  rejected. Both repaired in this unit — private storage behind read-only
+  properties, and `verification_verdict()` as the single reader of
+  `passed` with a third answer, MALFORMED, that the ledger, the report
+  and the completion predicate all derive from. Six mutants captured,
+  none survived. **Next action: hand this unit to a third independent
+  review.** It is not closed until that returns.
+- **Candidate findings handed to that review, deliberately NOT repaired
+  here** (the instruction was to repair this closure and start nothing
+  else): the same truthy read of `passed` survives in
+  `kernel/convergence.py:337/359/364`, `kernel/integration.py:437` and
+  `adapters/cli_review.py:134`. None of them can produce a
+  `TaskState.COMPLETED` — the state authority refuses that independently
+  — but they would read a `passed=1` as a pass when deciding
+  convergence, landing a merged tree, and what a reviewer is shown.
 - **The count, so no living document repeats it wrong again:** the frozen
   audit holds **43 items** (F-01..F-42 plus F-29b). **6 are PASS** and are
   not defects (F-06, F-09, F-11, F-29b, F-41, F-42); **1 is closed**

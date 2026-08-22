@@ -169,6 +169,88 @@ class TestCompletedIsEvidenceGated(unittest.TestCase):
         self.assertIn(TaskState.COMPLETED, TASK_TRANSITIONS[TaskState.VERIFYING])
 
 
+class TestStateIsNotPubliclyWritable(unittest.TestCase):
+    """The wall behind the gate (second independent review of F-34).
+
+    `transition()` and `complete()` both refused an unevidenced DONE and
+    the review still reached one:
+
+        sm = TaskStateMachine(TaskState.VERIFYING)
+        sm.state = TaskState.COMPLETED
+
+    A terminal COMPLETED with `completion_evidence` still None, past
+    every check, because the field the checks protect was public. These
+    tests assert what the module now claims: no PUBLIC assignment moves
+    the machine, and each attempt raises rather than silently doing
+    nothing.
+
+    What they deliberately do NOT claim: protection against `_state`,
+    `object.__setattr__`, `__dict__` or any other deliberate reach past
+    the underscore. That is not enforceable in Python and the module
+    docstring says so; asserting it here would be the same overclaim
+    this file exists to prevent.
+    """
+
+    def _verifying(self) -> TaskStateMachine:
+        sm = TaskStateMachine(TaskState.VERIFYING)
+        return sm
+
+    def test_the_exact_reproduction_from_the_review_raises(self):
+        sm = TaskStateMachine(TaskState.VERIFYING)
+        with self.assertRaises(AttributeError):
+            sm.state = TaskState.COMPLETED       # type: ignore[misc]
+        # and nothing moved
+        self.assertEqual(sm.state, TaskState.VERIFYING)
+        self.assertFalse(sm.is_terminal())
+        self.assertIsNone(sm.completion_evidence)
+
+    def test_no_state_can_be_assigned_from_outside(self):
+        # Not just COMPLETED: the field is closed, not filtered.
+        for target in TaskState:
+            with self.subTest(target=target.value):
+                sm = TaskStateMachine(TaskState.VERIFYING)
+                with self.assertRaises(AttributeError):
+                    sm.state = target            # type: ignore[misc]
+                self.assertEqual(sm.state, TaskState.VERIFYING)
+
+    def test_completion_evidence_cannot_be_attached_from_outside(self):
+        sm = TaskStateMachine(TaskState.VERIFYING)
+        with self.assertRaises(AttributeError):
+            sm.completion_evidence = _passed()   # type: ignore[misc]
+        self.assertIsNone(sm.completion_evidence)
+        self.assertEqual(sm.state, TaskState.VERIFYING)
+
+    def test_completion_evidence_cannot_be_detached_from_a_completed_task(self):
+        # The mirror image: a real DONE must not be stripped of the
+        # evidence that authorised it, leaving a COMPLETED that cannot
+        # say what proved it.
+        sm = TaskStateMachine(TaskState.VERIFYING)
+        evidence = _passed()
+        sm.complete(evidence)
+        with self.assertRaises(AttributeError):
+            sm.completion_evidence = None        # type: ignore[misc]
+        self.assertIs(sm.completion_evidence, evidence)
+
+    def test_the_only_writers_are_transition_and_complete(self):
+        # Both doors still work — read-only must not mean immovable.
+        sm = TaskStateMachine()
+        self.assertEqual(sm.transition(TaskState.PLANNED), TaskState.PLANNED)
+        sm.transition(TaskState.IN_PROGRESS)
+        sm.transition(TaskState.VERIFYING)
+        evidence = _passed()
+        self.assertEqual(sm.complete(evidence), TaskState.COMPLETED)
+        self.assertEqual(sm.state, TaskState.COMPLETED)
+        self.assertIs(sm.completion_evidence, evidence)
+
+    def test_a_run_machine_state_is_read_only_too(self):
+        sm = RunStateMachine()
+        with self.assertRaises(AttributeError):
+            sm.state = RunState.SUCCEEDED        # type: ignore[misc]
+        self.assertEqual(sm.state, RunState.PENDING)
+        sm.transition(RunState.RUNNING)
+        self.assertEqual(sm.state, RunState.RUNNING)
+
+
 class TestRunStateMachine(unittest.TestCase):
     def test_happy_path(self):
         sm = RunStateMachine()

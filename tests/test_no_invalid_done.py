@@ -32,7 +32,12 @@ from gnosis.contracts.director_brief import BriefSource, DirectorBrief
 from gnosis.contracts.engineer_report import ReportStatus
 from gnosis.director.brief_record import BriefRecordState
 from gnosis.director.orchestrator import DirectorOrchestrator
-from gnosis.kernel.engine import TaskEngine, completion_is_evidenced
+from gnosis.kernel.engine import (
+    MALFORMED_EVIDENCE_PROBLEM,
+    NO_EVIDENCE_PROBLEM,
+    TaskEngine,
+    completion_is_evidenced,
+)
 from gnosis.kernel.run_store import RunStore
 from gnosis.kernel.state_machine import (
     EVIDENCE_GATED_STATES,
@@ -40,7 +45,13 @@ from gnosis.kernel.state_machine import (
     TaskStateMachine,
     UnevidencedCompletionError,
 )
-from gnosis.kernel.verification import CommandVerifier, VerificationResult, Verifier
+from gnosis.kernel.verification import (
+    CommandVerifier,
+    VerificationResult,
+    VerificationVerdict,
+    Verifier,
+    verification_verdict,
+)
 from gnosis.runner.capture import ExecutionResult
 from gnosis.runner.retry import RetryPolicy
 
@@ -90,6 +101,34 @@ class _TruthyVerifier(Verifier):
 
     def run(self, cwd: Path):  # type: ignore[override]
         return "everything looks fine to me"
+
+
+class _MalformedResultVerifier(Verifier):
+    """Returns a REAL `VerificationResult` whose `passed` is `1`.
+
+    The exact reproduction from the second independent review, and the
+    one shape the `isinstance` check cannot catch: this IS a
+    VerificationResult, so it is not "missing evidence" — it is evidence
+    the kernel refuses to read, which the report then described as a
+    pass.
+
+    `passed=1` is data, not a typo: a linter or a type checker
+    "correcting" it to `True` would delete the defect under test.
+    """
+
+    name = "malformed"
+
+    def __init__(self, passed: object = 1) -> None:
+        self._passed = passed
+        self.calls = 0
+
+    def run(self, cwd: Path) -> VerificationResult:
+        self.calls += 1
+        return VerificationResult(
+            name="malformed-suite", passed=self._passed,  # type: ignore[arg-type]
+            exit_code=0, duration_s=0.0,
+            stdout_excerpt="looks fine", stderr_excerpt="",
+        )
 
 
 class _NotQuiteTrue:
@@ -366,6 +405,199 @@ class TestNoInvalidDoneInTheEngine(_RepoTestCase):
                     self.assertTrue(completion_is_evidenced(outcome.verification))
                 if outcome.report.status == ReportStatus.COMPLETED:
                     self.assertTrue(completion_is_evidenced(outcome.verification))
+
+
+class TestTheVerdictIsReadByIdentityNotTruthiness(unittest.TestCase):
+    """One function decides what `passed` means, and it says three things.
+
+    The second review found the predicate and the report reading the
+    same field independently and disagreeing. `verification_verdict` is
+    now the only reader; these tests pin its answers, because everything
+    downstream is derived from them.
+    """
+
+    def _result(self, passed: object) -> VerificationResult:
+        return VerificationResult(
+            name="v", passed=passed,  # type: ignore[arg-type]
+            exit_code=0, duration_s=0.0, stdout_excerpt="", stderr_excerpt="",
+        )
+
+    def test_only_the_object_true_is_passed(self):
+        self.assertIs(verification_verdict(self._result(True)), VerificationVerdict.PASSED)
+
+    def test_only_the_object_false_is_failed(self):
+        self.assertIs(verification_verdict(self._result(False)), VerificationVerdict.FAILED)
+
+    def test_truthy_non_bools_are_malformed_not_passed(self):
+        for passed in (1, 2, "PASSED", [1], {"ok": True}, object()):
+            with self.subTest(passed=repr(passed)):
+                self.assertIs(
+                    verification_verdict(self._result(passed)), VerificationVerdict.MALFORMED)
+
+    def test_falsy_non_bools_are_malformed_not_failed(self):
+        # A `0` says no more than a `1` does. Reporting it as a FAILURE
+        # would invent a verdict too, just a less flattering one.
+        for passed in (0, "", None, [], {}):
+            with self.subTest(passed=repr(passed)):
+                self.assertIs(
+                    verification_verdict(self._result(passed)), VerificationVerdict.MALFORMED)
+
+    def test_non_results_are_malformed(self):
+        for impostor in (None, "PASSED", 1, True, object(), {"passed": True}, _NotQuiteTrue()):
+            with self.subTest(impostor=type(impostor).__name__):
+                self.assertIs(verification_verdict(impostor), VerificationVerdict.MALFORMED)
+
+    def test_the_completion_predicate_agrees_with_the_verdict(self):
+        # They must not be able to drift: one is defined in terms of the
+        # other, and this is the assertion that keeps it that way.
+        for passed in (True, False, 1, 0, "PASSED", None):
+            with self.subTest(passed=repr(passed)):
+                result = self._result(passed)
+                self.assertEqual(
+                    completion_is_evidenced(result),
+                    verification_verdict(result) is VerificationVerdict.PASSED,
+                )
+
+
+class TestARejectedResultIsNeverReportedAsAPass(_RepoTestCase):
+    """End-to-end through `TaskEngine`, with `passed=1` (second review).
+
+    Verified reproduction, before the repair:
+
+        TaskState.FAILED
+        ReportStatus.PARTIAL
+        verification=("malformed: PASSED",)
+        problems_encountered=()
+
+    The gate held and the report lied. A human reading that report sees
+    a suite that passed and an empty problems list, and has no way to
+    learn that the kernel threw the evidence out.
+    """
+
+    def _run(self, task_id: str, passed: object = 1):
+        verifier = _MalformedResultVerifier(passed)
+        engine = TaskEngine(run_store=self.store, cli_runner=_CountingRunner(["succeed"]))
+        outcome = engine.execute_task(
+            task_id=task_id, objective="Demo", prompt="do it",
+            repo_path=self.repo, verifier=verifier,
+        )
+        self.assertEqual(verifier.calls, 1)     # the verifier really ran
+        return outcome
+
+    def _recorded_verification(self, run_id: str) -> dict:
+        """The single `task.verification_result` entry this run wrote."""
+        events = [e for e in self.store.ledger_for(run_id).read_all()
+                  if e.event_type == "task.verification_result"]
+        self.assertEqual(len(events), 1)
+        return events[0].data
+
+    def test_the_task_does_not_complete(self):
+        outcome = self._run("TASK-M1")
+        self.assertEqual(outcome.final_task_state, TaskState.FAILED)
+        self.assertNotEqual(outcome.report.status, ReportStatus.COMPLETED)
+
+    def test_the_report_never_shows_the_rejected_result_as_a_pass(self):
+        # THE regression. Scanning the whole report, not just the
+        # verification tuple: the claim is that the word does not appear
+        # anywhere a reader could take it from.
+        outcome = self._run("TASK-M2")
+        blob = " ".join((
+            *outcome.report.verification,
+            *outcome.report.problems_encountered,
+            *outcome.report.work_completed,
+            outcome.report.recommended_next_step,
+        ))
+        self.assertNotIn("PASSED", blob)
+        self.assertNotIn("PASS", blob)
+
+    def test_the_report_says_the_evidence_is_invalid(self):
+        # Not merely silent about the pass: it must NAME the problem, or
+        # the operator debugs their code instead of their verifier.
+        outcome = self._run("TASK-M3")
+        verification = " ".join(outcome.report.verification)
+        self.assertIn("REJECTED", verification)
+        self.assertIn("malformed-suite", verification)
+        self.assertIn("invalid evidence", verification.lower())
+
+    def test_the_problems_list_is_not_empty(self):
+        # It was `()` in the reproduction, which is what made the report
+        # read as an ordinary partial result.
+        outcome = self._run("TASK-M4")
+        self.assertEqual(outcome.report.problems_encountered, (MALFORMED_EVIDENCE_PROBLEM,))
+        self.assertIn("neither True nor False", MALFORMED_EVIDENCE_PROBLEM)
+
+    def test_a_malformed_result_is_not_confused_with_a_missing_one(self):
+        # Two different broken states, two different messages: evidence
+        # that arrived and was rejected is not evidence that never came.
+        malformed = self._run("TASK-M5").report
+        engine = TaskEngine(run_store=self.store, cli_runner=_CountingRunner(["succeed"]))
+        missing = engine.execute_task(
+            task_id="TASK-M6", objective="Demo", prompt="do it",
+            repo_path=self.repo, verifier=_SilentVerifier(),
+        ).report
+        self.assertEqual(missing.problems_encountered, (NO_EVIDENCE_PROBLEM,))
+        self.assertNotEqual(malformed.problems_encountered, missing.problems_encountered)
+        self.assertNotEqual(malformed.verification, missing.verification)
+
+    def test_the_ledger_does_not_present_it_as_a_valid_verification(self):
+        outcome = self._run("TASK-M7")
+        run_id = outcome.run_ids[-1]
+        events = [e for e in self.store.ledger_for(run_id).read_all()
+                  if e.event_type == "task.verification_result"]
+        self.assertEqual(len(events), 1)
+        recorded = events[0].data
+        self.assertIs(recorded["passed"], False)
+        self.assertEqual(recorded["verdict"], VerificationVerdict.MALFORMED.value)
+        self.assertIn("neither True nor False", recorded["evidence"])
+        # The rejected object is KEPT, but quarantined: a reader scanning
+        # the top level for `passed` cannot pick up the `1`.
+        self.assertEqual(recorded["rejected_result"]["passed"], 1)
+
+    def test_a_real_pass_is_still_recorded_as_one(self):
+        # The repair must not make every verification unreadable.
+        engine = TaskEngine(run_store=self.store, cli_runner=_CountingRunner(["succeed"]))
+        outcome = engine.execute_task(
+            task_id="TASK-M8", objective="Demo", prompt="do it",
+            repo_path=self.repo, verifier=passing_verifier(),
+        )
+        self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
+        self.assertEqual(outcome.report.verification, ("always-pass: PASSED",))
+        run_id = outcome.run_ids[-1]
+        recorded = self._recorded_verification(run_id)
+        self.assertIs(recorded["passed"], True)
+        self.assertEqual(recorded["verdict"], VerificationVerdict.PASSED.value)
+        self.assertNotIn("rejected_result", recorded)
+
+    def test_a_real_failure_is_still_recorded_as_one(self):
+        engine = TaskEngine(run_store=self.store, cli_runner=_CountingRunner(["succeed"]))
+        outcome = engine.execute_task(
+            task_id="TASK-M9", objective="Demo", prompt="do it",
+            repo_path=self.repo, verifier=failing_verifier(),
+        )
+        self.assertEqual(outcome.report.verification, ("always-fail: FAILED",))
+        run_id = outcome.run_ids[-1]
+        recorded = self._recorded_verification(run_id)
+        self.assertIs(recorded["passed"], False)
+        self.assertEqual(recorded["verdict"], VerificationVerdict.FAILED.value)
+
+    def test_a_falsy_malformed_passed_is_also_rejected_not_called_a_failure(self):
+        # `passed=0` is the mirror case: still no verdict, and reporting
+        # it as FAILED would invent one.
+        outcome = self._run("TASK-M10", passed=0)
+        self.assertEqual(outcome.final_task_state, TaskState.FAILED)
+        self.assertNotIn("FAILED", " ".join(outcome.report.verification))
+        self.assertIn("REJECTED", " ".join(outcome.report.verification))
+
+    def test_the_outcome_still_carries_the_rejected_object_for_forensics(self):
+        # Rejecting it is not the same as hiding it. What must not
+        # happen is a caller reading it as a pass, and the predicate is
+        # what answers that question.
+        outcome = self._run("TASK-M11")
+        self.assertIsNotNone(outcome.verification)
+        self.assertEqual(outcome.verification.passed, 1)
+        self.assertFalse(completion_is_evidenced(outcome.verification))
+        self.assertIs(
+            verification_verdict(outcome.verification), VerificationVerdict.MALFORMED)
 
 
 class TestNoInvalidDoneAtTheDirectorEntryPoint(_RepoTestCase):

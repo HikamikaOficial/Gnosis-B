@@ -17,8 +17,29 @@ carry the guard. It is now a property of this module:
 - `transition()` REFUSES every target in `EVIDENCE_GATED_STATES`;
 - `complete(verification)` is the only route, and it validates the
   `VerificationResult` it is handed rather than trusting a flag;
-- a machine cannot be CONSTRUCTED in `COMPLETED` either, so there is no
-  side door and no asterisk on the claim.
+- a machine cannot be CONSTRUCTED in `COMPLETED` either;
+- `state` and `completion_evidence` are READ-ONLY properties, so the
+  guarded methods are not merely the recommended route but the only one
+  the public API offers.
+
+That last point was a second finding, and it is worth stating why it
+was not obvious. Two rounds of review had hardened the doors —
+constructor, `transition()`, `complete()` — while the field behind them
+stayed a plain attribute. `sm.state = TaskState.COMPLETED` reached a
+terminal DONE with `completion_evidence` still None, past every check.
+A guard is only as good as the thing it guards being unreachable
+otherwise.
+
+**Scope of the guarantee, stated honestly.** What this module
+guarantees is a property of its PUBLIC API: no sequence of public
+attribute assignments and public method calls reaches `COMPLETED`
+without a passing `VerificationResult`. It is NOT tamper-proofing.
+`sm._state = ...`, `object.__setattr__`, `sm.__dict__`, monkeypatching
+and every other deliberate reach past the underscore still work, and
+Python offers no way to stop them that is worth the cost. The threat
+this addresses is the realistic one — an agent, a refactor or a caller
+taking the cheap route by accident — not an adversary inside the
+process, who has already lost the game by being there.
 
 The transitions table still lists `VERIFYING -> COMPLETED`, because that
 edge really is part of the state graph. What the table describes is
@@ -30,7 +51,7 @@ from __future__ import annotations
 from enum import Enum
 from types import MappingProxyType
 
-from .verification import VerificationResult
+from .verification import VerificationResult, VerificationVerdict, verification_verdict
 
 
 class IllegalTransitionError(RuntimeError):
@@ -145,8 +166,15 @@ def completion_is_evidenced(verification: VerificationResult | None) -> bool:
       Python, so `1`, a non-empty string and every other truthy value
       would pass a bare check. `failures.py` already had to learn this
       for exit codes; the flag that closes a task deserves the same care.
+
+    The rules above are no longer spelled out here: `verification_verdict`
+    is the one function that interprets `passed`, and this predicate is
+    the question "did it say PASSED?" asked of it. They used to be two
+    independent readings of the same field, which is how a second review
+    found the authority refusing a `passed` of `1` while the report of
+    that same task printed it as a pass.
     """
-    return isinstance(verification, VerificationResult) and verification.passed is True
+    return verification_verdict(verification) is VerificationVerdict.PASSED
 
 
 class RunState(str, Enum):
@@ -209,11 +237,38 @@ class TaskStateMachine:
             raise UnevidencedCompletionError(
                 initial, "a task cannot be constructed already COMPLETED"
             )
-        self.state = initial
+        self._state = initial
         # The evidence that authorised this task's DONE, or None while it
         # has not earned one. Set only by `complete()`, so a caller can ask
         # WHAT proved the task rather than trusting that something did.
-        self.completion_evidence: VerificationResult | None = None
+        self._completion_evidence: VerificationResult | None = None
+
+    @property
+    def state(self) -> TaskState:
+        """Read-only. Every write goes through `transition()`/`complete()`.
+
+        The second independent review of ADR-0025 found the gate closed
+        and the wall missing: `transition()` and `complete()` both
+        refused an unevidenced DONE, and then
+
+            sm = TaskStateMachine(TaskState.VERIFYING)
+            sm.state = TaskState.COMPLETED
+
+        put the machine in a terminal COMPLETED with
+        `completion_evidence` still None. A guard on the doors is not a
+        guarantee while the field they guard is public.
+        """
+        return self._state
+
+    @property
+    def completion_evidence(self) -> VerificationResult | None:
+        """Read-only, and set only by `complete()`.
+
+        Writable, this was the other half of the same hole: evidence
+        could be attached to a task that never earned it, or detached
+        from one that did, without the authority ever being asked.
+        """
+        return self._completion_evidence
 
     def transition(self, target: TaskState) -> TaskState:
         # The generic route may not reach an evidence-gated state. This is
@@ -225,8 +280,8 @@ class TaskStateMachine:
             raise UnevidencedCompletionError(
                 self.state, "transition() carries no evidence"
             )
-        self.state = _transition(self.state, target, TASK_TRANSITIONS, "task")
-        return self.state
+        self._state = _transition(self._state, target, TASK_TRANSITIONS, "task")
+        return self._state
 
     def complete(self, verification: VerificationResult) -> TaskState:
         """The ONLY route to `COMPLETED`, and it validates what it is handed.
@@ -250,21 +305,35 @@ class TaskStateMachine:
             )
         # `_transition` is still consulted: evidence authorises the CLAIM,
         # it does not authorise skipping the graph.
-        self.state = _transition(self.state, TaskState.COMPLETED, TASK_TRANSITIONS, "task")
-        self.completion_evidence = verification
-        return self.state
+        self._state = _transition(self._state, TaskState.COMPLETED, TASK_TRANSITIONS, "task")
+        self._completion_evidence = verification
+        return self._state
 
     def is_terminal(self) -> bool:
-        return self.state in TASK_TERMINAL_STATES
+        return self._state in TASK_TERMINAL_STATES
 
 
 class RunStateMachine:
+    """Same read-only discipline as `TaskStateMachine`, for the same reason.
+
+    No run state is evidence-gated — nothing forges a SUCCEEDED into a
+    DONE, the task authority still has to be satisfied separately — so
+    this is consistency, not a second gate. It is here because "the
+    state of a state machine is not publicly writable" should be a
+    property of this module rather than of whichever class a reviewer
+    happened to probe.
+    """
+
     def __init__(self, initial: RunState = RunState.PENDING):
-        self.state = initial
+        self._state = initial
+
+    @property
+    def state(self) -> RunState:
+        return self._state
 
     def transition(self, target: RunState) -> RunState:
-        self.state = _transition(self.state, target, RUN_TRANSITIONS, "run")
-        return self.state
+        self._state = _transition(self._state, target, RUN_TRANSITIONS, "run")
+        return self._state
 
     def is_terminal(self) -> bool:
-        return self.state in RUN_TERMINAL_STATES
+        return self._state in RUN_TERMINAL_STATES

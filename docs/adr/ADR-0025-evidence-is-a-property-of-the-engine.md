@@ -17,13 +17,17 @@
   (rewritten) and
   `tests/test_director_orchestrator.py::TestGovernedOrchestrator::test_governed_failure_fails_the_brief_without_aborting_the_batch`
   (provocation replaced).
-- Independent review: **DONE 2026-08-22 by Codex, verdict FAIL PARCIAL.**
-  The reachable production defect was genuinely closed; the claim that
-  the invariant lived at the lowest point that authorises COMPLETED was
-  false, and is corrected below. See the addendum, and commit `6c4859a`
-  for the repair. The first version of this ADR shipped self-reviewed and
-  said so; L-0041 puts that channel at roughly one finding in four, and
-  this is what the missing three-quarters looks like.
+- Independent review: **TWO rounds, both FAIL PARCIAL.**
+  Round 1 (Codex, 2026-08-22) found the invariant was a property of one
+  caller rather than of the state authority; repaired in `6c4859a`.
+  Round 2 (2026-08-22) found the repaired authority still had a public
+  `state` attribute, and the engine's REPORT still printing a pass for
+  evidence the authority had rejected; repaired in this unit. Both
+  addenda are below. A **third** independent review is outstanding: this
+  unit is delivered for it, not declared closed by it. The first version
+  of this ADR shipped self-reviewed and said so; L-0041 puts that channel
+  at roughly one finding in four, and two consecutive PARTIALs on the same
+  unit are what the missing three-quarters looks like.
 - Scope: **F-34 only.** Of the 43 items in the frozen audit, 6 are PASS
   (F-06, F-09, F-11, F-29b, F-41, F-42) and 36 remain open and untouched.
   Nothing here closes any of them.
@@ -306,3 +310,196 @@ written, not against the object the sentence named. That is L-0044, and
 it is the second time in two units that a superlative in a document was
 weaker than the code under it. The self-review channel did not catch it;
 an independent reviewer reproduced it in four lines.
+
+---
+
+## Second independent review addendum — 2026-08-22: **FAIL PARCIAL**
+
+The repair in `6c4859a` was re-reviewed independently and returned FAIL
+PARCIAL again. `transition()` and `complete()` held: neither can be made
+to produce an unevidenced COMPLETED. Two defects of the SAME closure
+survived, and they are worth reading together, because they are the same
+mistake at two altitudes — **the repair was made where the check is, not
+where the outcome is produced or where it is reported.**
+
+### Finding 1 — a gate on the doors, with the field left public
+
+```python
+sm = TaskStateMachine(TaskState.VERIFYING)
+sm.state = TaskState.COMPLETED
+```
+
+Terminal COMPLETED. `completion_evidence` still `None`. No exception, no
+ledger entry, nothing to audit. Three rounds of hardening had gone into
+the constructor, `transition()` and `complete()` — and the attribute they
+all guard was a plain public field that anybody could assign.
+
+`completion_evidence` was writable the same way, in both directions: a
+task that never earned a DONE could be handed evidence, and a task that
+did could be stripped of it, leaving a COMPLETED that cannot say what
+proved it.
+
+**Repair.** `_state` and `_completion_evidence` are the storage; `state`
+and `completion_evidence` are read-only properties with no setter. Only
+`transition()` and `complete()` write. `RunStateMachine` got the same
+treatment — no run state is evidence-gated, so that is consistency rather
+than a second gate, but "the state of a state machine is not publicly
+writable" should be a property of the module and not of whichever class a
+reviewer happened to probe.
+
+**The guarantee, stated with its limits.** What is now guaranteed is a
+property of the PUBLIC API: no sequence of public attribute assignments
+and public method calls reaches COMPLETED without a passing
+`VerificationResult`. It is **not** tamper-proofing. `sm._state = ...`,
+`object.__setattr__`, `sm.__dict__` and monkeypatching all still work, and
+Python offers no way to stop them worth the cost. The threat this closes
+is the realistic one — an agent, a refactor, or a caller taking the cheap
+route by accident. An adversary executing inside the process has already
+won for reasons no property decorator addresses. The module docstring and
+the tests both say this in those words; asserting more would be the same
+overclaim this ADR has now had to retract twice.
+
+### Finding 2 — the gate refused the evidence and the report printed it as a pass
+
+With a `VerificationResult(passed=1)`:
+
+```text
+TaskState.FAILED
+ReportStatus.PARTIAL
+verification=("malformed: PASSED",)
+problems_encountered=()
+```
+
+Every line of that is defensible on its own and together they are a lie.
+The authority did its job — `passed is True` is False for `1`, so the task
+did NOT complete. Then the report, reading the same field with
+`"PASSED" if verification_result.passed else "FAILED"`, printed a pass for
+the evidence the kernel had just thrown out, and the problems list was
+empty because `not 1` is False. A human reading that report sees a suite
+that passed, a partial result, and no problems. The ledger recorded
+`to_dict()` verbatim, so the audit trail said `passed: 1` too.
+
+Rule 2 is about what a task may CLAIM, and **a report is a claim.** An
+invariant enforced at the gate and contradicted at the printer is worse
+than one enforced nowhere, because the contradiction is invisible: the
+gate is right, so the tests of the gate are green.
+
+**Root cause: two independent readings of one field.** The predicate
+asked `passed is True`. The report asked `if passed`. Nothing forced them
+to agree, and for every ordinary bool they did — which is why this
+survived a suite, a mutation check and a review.
+
+**Repair: one reader, three answers.**
+
+```python
+def verification_verdict(result: object) -> VerificationVerdict:  # PASSED | FAILED | MALFORMED
+```
+
+`MALFORMED` is the value that was missing. A verification attempt has
+three outcomes, not two: it passed, it failed, or it produced something
+that states no verdict at all. Collapsing the third into either of the
+others invents a verdict nobody gave — and the two mistakes are not
+symmetrical to an operator, who needs to know whether to debug their code
+or their verifier.
+
+- `completion_is_evidenced` is now *defined as* `verdict is PASSED`, so
+  the predicate and the report cannot drift apart by construction.
+- `TaskEngine` computes the verdict once and DERIVES the ledger entry,
+  the report's verification lines and the problems list from it.
+- A rejected result is reported as `"<name>: REJECTED — invalid evidence,
+  no verdict recorded"` plus the reason. The word the reproduction
+  printed does not appear anywhere in the report, and a test asserts that
+  over the whole report, not just the field.
+- The ledger records `passed: false`, `verdict: "MALFORMED"` and the
+  explanation at the top level, with the rejected object preserved
+  verbatim under `rejected_result`. Rejecting evidence is not a licence to
+  discard it; what must not happen is a reader scanning for `passed` and
+  finding the `1`.
+- `passed=0` is treated the same way. A falsy non-bool says no more than a
+  truthy one, so reporting it as FAILED would invent a verdict too.
+- `director/pipeline.py::_verification_line` carried the identical
+  `'PASS' if result.passed else 'FAIL'` and now reads the shared verdict.
+  Same finding, second report surface — not a new one.
+
+`VerificationResult` was deliberately NOT given constructor validation
+that rejects a non-bool `passed`. It would close the shape at the source,
+and it would also make the reproduction unconstructible, delete two
+existing tests that the review required be preserved, and turn a
+deserialised ledger row into an exception at read time instead of a
+classifiable MALFORMED. The rendering layer has to be correct regardless;
+that is where the fix belongs.
+
+### Mutation check
+
+Six mutants, each restoring exactly one half of the repair, captured in
+`mutation-check.f34-round2.txt`. Targeted suite:
+`tests/test_state_machine.py` + `tests/test_no_invalid_done.py`, baseline
+71 passed / 57 subtests.
+
+| Mutant | Result |
+|---|---|
+| M1 `state` is a writable attribute again (the literal reproduction) | **10 red** |
+| M2 `completion_evidence` is writable again | **2 red** |
+| M3 the report reads `passed` for truthiness again | **3 red** |
+| M4 the ledger records the rejected result verbatim again | **3 red** |
+| M5 the problems list says nothing about rejected evidence | **1 red** |
+| M6 the shared verdict itself reads truthiness | **20 red** |
+
+None survived; the tree was restored and re-verified green.
+
+### Not repaired here, and named rather than implied
+
+The same truthy read of `passed` remains in three places this unit did
+not touch, because they are **decision** logic in other subsystems with
+their own contracts and tests, and the review's instruction was to repair
+this closure and start nothing else:
+
+- `kernel/convergence.py:337` — `verification is not None and
+  verification.passed` decides whether a round is `clean`;
+  `:364` decides whether a fix is needed; `:359` stores the flag for the
+  flip-detection guard.
+- `kernel/integration.py:437` — `if not verification.passed` gates
+  landing a merged tree.
+- `adapters/cli_review.py:134` — selects what a reviewer is shown.
+
+A `VerificationResult(passed=1)` reaching any of those would be read as a
+pass. None of them can produce a `TaskState.COMPLETED` — the state
+authority still refuses that independently — but "cannot forge a DONE" is
+a weaker statement than "cannot be misread", and this ADR does not claim
+the stronger one. `CompositeVerifier` is safe by accident: `all()` returns
+a real bool.
+
+This is offered as a **candidate finding for the next review**, not as
+closed work.
+
+### What this says about the process, again
+
+L-0044 said: to check "X is the only route to Y", go to the object that
+produces Y and try to produce it without X. Round 2 found that I applied
+that to the METHODS and not to the FIELD — I hardened every route I could
+name and left the destination writable. And the report defect is L-0043's
+shape one more time: the rule was enforced where the decision is made and
+not where the decision is *published*, so it was simply off in the second
+place. Two new lessons are recorded: **L-0045** (a guard on the methods is
+not a guarantee while the field is public) and **L-0046** (a report is a
+claim; an invariant that the printer does not share is enforced at the
+gate and broken at the page).
+
+### Files
+
+- `src/gnosis/kernel/verification.py` — `VerificationVerdict`,
+  `verification_verdict()`, `MALFORMED_EVIDENCE_EXPLANATION`.
+- `src/gnosis/kernel/state_machine.py` — read-only `state` /
+  `completion_evidence` on both machines; `completion_is_evidenced`
+  defined in terms of the shared verdict; the honest scope statement.
+- `src/gnosis/kernel/engine.py` — one verdict per run, derived ledger
+  payload (`_verification_ledger_payload`) and report lines
+  (`_verification_report_lines`), `MALFORMED_EVIDENCE_PROBLEM`.
+- `src/gnosis/director/pipeline.py` — `_verification_line` reads the
+  shared verdict.
+- `tests/test_state_machine.py` — `TestStateIsNotPubliclyWritable`
+  (6 tests, 9 subtests).
+- `tests/test_no_invalid_done.py` —
+  `TestTheVerdictIsReadByIdentityNotTruthiness` (6 tests, 24 subtests) and
+  `TestARejectedResultIsNeverReportedAsAPass` (10 tests), including the
+  end-to-end `TaskEngine` run with `passed=1`.

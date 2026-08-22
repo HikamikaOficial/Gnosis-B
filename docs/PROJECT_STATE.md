@@ -288,9 +288,10 @@ evidence — was enforced inside `if authority is not None`. The default
 not mean "no verifier configured"; it means ABSENCE OF EVIDENCE IS
 SUCCESS. Two lines produced a COMPLETED brief that had proved nothing.
 
-Now: `completion_is_evidenced` is the single authority for
-`TaskState.COMPLETED` and the one site that transitions to it calls
-nothing else; `execute_task` refuses a verifier-less task before it
+Now: `TaskStateMachine.complete()` is the single authority for
+`TaskState.COMPLETED` — `completion_is_evidenced` is the predicate it
+applies, and calling it "the authority" was the round-1 overclaim
+(L-0044); `execute_task` refuses a verifier-less task before it
 launches anything; `run_pending` refuses before it consumes a brief.
 `tests/test_no_invalid_done.py` is the first suite in this repo named
 after one of the four invariants, and the mutation check that proves it
@@ -324,6 +325,27 @@ the state authority: `transition()` refuses `COMPLETED` outright and
 caller-supplied flag. Evidence `.gnosis/evidence/20260822T142519Z/` —
 800 passed on a clean tree at `6c4859a`, two mutants captured. See
 ADR-0025's addendum and L-0044.
+
+**Second independent review: FAIL PARCIAL again (2026-08-22).** The
+gated methods held; two defects of the same closure did not.
+(1) `state` and `completion_evidence` were still PUBLIC attributes, so
+`sm.state = TaskState.COMPLETED` reached a terminal DONE with no
+evidence, past every guard — a lock on each door and no wall (L-0045).
+(2) With a `VerificationResult(passed=1)` the authority correctly refused
+the DONE and the REPORT of that same task printed
+`verification=("malformed: PASSED",)` with an empty problems list,
+because the predicate read `passed is True` and the printer read
+`if passed` — two independent readings of one field (L-0046). Both are
+repaired: the storage is private behind read-only properties, and
+`verification_verdict()` is now the single reader, with a third answer
+(MALFORMED) that the ledger, the report and the completion predicate all
+derive from. Six mutants captured, none survived. **A THIRD independent
+review is outstanding — this unit is delivered for review, not declared
+closed.** Named and NOT repaired, as candidates for that review: the
+same truthy read of `passed` remains in `kernel/convergence.py` (3
+sites), `kernel/integration.py` and `adapters/cli_review.py`, which are
+decision logic in other subsystems; none can forge a COMPLETED, but
+"cannot forge a DONE" is weaker than "cannot be misread".
 
 ## Fixed locations
 

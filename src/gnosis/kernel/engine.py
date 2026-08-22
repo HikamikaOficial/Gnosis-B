@@ -61,7 +61,13 @@ from .state_machine import (
     # from here so existing callers keep working.
     completion_is_evidenced,
 )
-from .verification import VerificationResult, Verifier
+from .verification import (
+    MALFORMED_EVIDENCE_EXPLANATION,
+    VerificationResult,
+    VerificationVerdict,
+    Verifier,
+    verification_verdict,
+)
 from .worktree import WorktreeError, WorktreeHandle, WorktreeManager
 
 # Names this module re-exports rather than defines. `__all__` is what
@@ -71,6 +77,7 @@ from .worktree import WorktreeError, WorktreeHandle, WorktreeManager
 __all__ = [
     "AGENT_RUN_INTERVENTION_POINT",
     "DEFAULT_PERMISSION_MODE",
+    "MALFORMED_EVIDENCE_PROBLEM",
     "NO_EVIDENCE_PROBLEM",
     "TaskEngine",
     "TaskExecutionOutcome",
@@ -89,6 +96,11 @@ NO_EVIDENCE_PROBLEM = (
     "verification evidence. The task is not COMPLETED: absence of evidence "
     "is not success (constitution rule 2)."
 )
+# What an operator is told when a run produced a VerificationResult the
+# engine could not read as a verdict. Distinct from BOTH of the above:
+# something was returned (so it is not missing) and it does not say the
+# work failed (so it is not a failure) — the verifier is what is broken.
+MALFORMED_EVIDENCE_PROBLEM = MALFORMED_EVIDENCE_EXPLANATION
 # The mode the CLI runner actually defaults to. Stated as a constant so
 # the value the rules are shown cannot drift from the value used.
 DEFAULT_PERMISSION_MODE = "plan"
@@ -276,6 +288,74 @@ def agent_launch_snapshot(
         },
         context={"exec_root": str(planned_root)},
     )
+
+
+def _verification_ledger_payload(
+    result: VerificationResult | None,
+    verdict: VerificationVerdict,
+    verifier_name: str,
+) -> dict[str, Any]:
+    """What the ledger records about a verification attempt.
+
+    The ledger is what recovery replays and what an audit reads back, so
+    it must never present evidence the engine REJECTED as a verification
+    that stands. For a malformed result that means two things at once:
+
+    - the top level says `passed: false` and names the verdict, so a
+      reader scanning for `passed` cannot find the `1` the verifier
+      offered and take it for a pass;
+    - the raw object is kept verbatim under `rejected_result`, because
+      the whole point of a ledger is that the rejected thing remains
+      inspectable. Discarding it would trade one kind of dishonesty for
+      another.
+    """
+    if verdict is VerificationVerdict.MALFORMED:
+        if result is None:
+            return {
+                "passed": False,
+                "name": verifier_name,
+                "verdict": verdict.value,
+                "evidence": "the verifier returned no VerificationResult",
+            }
+        return {
+            "passed": False,
+            "name": result.name,
+            "verdict": verdict.value,
+            "evidence": MALFORMED_EVIDENCE_PROBLEM,
+            "rejected_result": result.to_dict(),
+        }
+    # PASSED/FAILED: `passed` really is a bool, so the result speaks for
+    # itself. The verdict travels with it anyway, so a later reader never
+    # has to re-derive it — re-derivation is the defect this repairs.
+    assert result is not None  # PASSED/FAILED are only reachable via a result
+    payload = result.to_dict()
+    payload["verdict"] = verdict.value
+    return payload
+
+
+def _verification_report_lines(
+    verdict: VerificationVerdict | None,
+    result: VerificationResult | None,
+) -> tuple[str, ...]:
+    """The report's account of verification, derived from the verdict alone.
+
+    Constitution rule 2 is about what a task may CLAIM, and a report is a
+    claim. Only `VerificationVerdict.PASSED` may be shown as a pass; a
+    rejected result is reported as rejected, with the reason, so nobody
+    reads "the suite passed" off evidence the kernel refused to accept.
+    """
+    if verdict is None:
+        return ("Not reached: the agent run did not succeed.",)
+    if verdict is VerificationVerdict.PASSED and result is not None:
+        return (f"{result.name}: PASSED",)
+    if verdict is VerificationVerdict.FAILED and result is not None:
+        return (f"{result.name}: FAILED",)
+    if result is not None:
+        return (
+            f"{result.name}: REJECTED — invalid evidence, no verdict recorded",
+            MALFORMED_EVIDENCE_PROBLEM,
+        )
+    return ("No verification evidence was produced; the task is not complete.",)
 
 
 def _report_status(task_state: TaskState,
@@ -1027,6 +1107,15 @@ class TaskEngine:
         # the two must not read alike in the report.
         evidence_missing = False
 
+        # The verdict the engine READ off whatever the verifier returned,
+        # or None while verification has not been reached. Every rendering
+        # downstream — ledger entry, report line, problems list — is
+        # derived from this ONE value. They used to each re-read `passed`
+        # for themselves, which is how a `passed` of `1` was refused a DONE
+        # by the authority and printed as a pass by the report of the same
+        # task, in the same object, seconds apart.
+        verdict: VerificationVerdict | None = None
+
         if cli_succeeded:
             task_sm.transition(TaskState.VERIFYING)
             # Typed `object` on purpose. `Verifier.run` DECLARES a
@@ -1037,6 +1126,7 @@ class TaskEngine:
             # the runtime check honest instead of dead code the type
             # checker deletes.
             produced: object = verifier.run(exec_root)
+            verdict = verification_verdict(produced)
             if isinstance(produced, VerificationResult):
                 verification_result = produced
             else:
@@ -1048,9 +1138,8 @@ class TaskEngine:
             if latest_run_id:
                 store.ledger_for(latest_run_id).append(
                     latest_run_id, "task.verification_result",
-                    verification_result.to_dict() if verification_result is not None
-                    else {"passed": False, "name": type(verifier).__name__,
-                          "evidence": "the verifier returned no VerificationResult"},
+                    _verification_ledger_payload(
+                        verification_result, verdict, type(verifier).__name__),
                 )
             # The engine ASKS; it does not decide. `complete()` re-examines
             # the very object handed to it and refuses anything that is not
@@ -1083,8 +1172,14 @@ class TaskEngine:
             if stderr_path.exists():
                 tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-2000:]
                 problems = (redact(tail),) if tail.strip() else ()
-        elif verification_result is not None and not verification_result.passed:
+        elif verdict is VerificationVerdict.FAILED and verification_result is not None:
             problems = (redact(verification_result.stderr_excerpt),)
+        elif verdict is VerificationVerdict.MALFORMED and verification_result is not None:
+            # Evidence was produced and REJECTED. Saying nothing here is
+            # what let the reproduction report a clean-looking PARTIAL
+            # with an empty problems list — the operator had no way to
+            # learn their verifier was the thing that was broken.
+            problems = (MALFORMED_EVIDENCE_PROBLEM,)
         elif evidence_missing:
             problems = (NO_EVIDENCE_PROBLEM,)
 
@@ -1094,13 +1189,7 @@ class TaskEngine:
             status=_report_status(task_sm.state, classifications),
             objective=objective,
             work_completed=(f"Executed {len(run_ids)} run attempt(s) via the Claude Code CLI runner.",),
-            verification=(
-                (f"{verification_result.name}: " + ("PASSED" if verification_result.passed else "FAILED"),)
-                if verification_result is not None
-                else ("No verification evidence was produced; the task is not complete.",)
-                if evidence_missing
-                else ("Not reached: the agent run did not succeed.",)
-            ),
+            verification=_verification_report_lines(verdict, verification_result),
             problems_encountered=problems,
             recommended_next_step=(
                 "None, task completed and verified." if task_sm.state == TaskState.COMPLETED

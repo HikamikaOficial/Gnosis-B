@@ -65,7 +65,12 @@ from ..kernel.integration import (
 from ..kernel.ordering import LandingCoordinator
 from ..kernel.policy import ApprovalStore, PolicyDecision, PolicyEngine
 from ..kernel.scheduler import ScheduleOutcome, TaskScheduler
-from ..kernel.verification import VerificationResult, Verifier
+from ..kernel.verification import (
+    VerificationResult,
+    VerificationVerdict,
+    Verifier,
+    verification_verdict,
+)
 from ..kernel.worktree import WorktreeError, WorktreeManager
 from ..runner.gated_runner import CredentialHeld, GatedAgentRunner, LaunchRefused
 from .brief_record import BriefRecordState, BriefRecordStore
@@ -734,7 +739,20 @@ def _verification_lines(implementation: TaskExecutionOutcome | None,
 
 
 def _verification_line(label: str, result: VerificationResult) -> str:
-    return f"{label} verification [{result.name}]: {'PASS' if result.passed else 'FAIL'}"
+    """One line of the Director's report, read through the shared verdict.
+
+    It used to be `'PASS' if result.passed else 'FAIL'`. That is the same
+    truthiness read the second F-34 review caught in the engine's report:
+    a `passed` of `1` is not a pass, and a report is a claim that must be
+    as strict as the gate. `REJECTED` is deliberately neither of the two
+    words a reader scans for.
+    """
+    verdict = verification_verdict(result)
+    shown = {
+        VerificationVerdict.PASSED: "PASS",
+        VerificationVerdict.FAILED: "FAIL",
+    }.get(verdict, "REJECTED (invalid evidence, no verdict recorded)")
+    return f"{label} verification [{result.name}]: {shown}"
 
 
 def _problem_lines(convergence: ConvergenceResult | None) -> tuple[str, ...]:
