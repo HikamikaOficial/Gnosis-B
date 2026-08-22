@@ -3,7 +3,7 @@
 **Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION; THE PROBE HAS A CALLER; MULTI-CREDENTIAL ROTATION
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
-**Last update:** 2026-08-20
+**Last update:** 2026-08-22 (F-34 closed; the stale lines below are F-19..F-32, still open)
 
 ## Kernel hardening (post-Phase -1)
 
@@ -270,7 +270,7 @@ addenda rather than carried silently. The two closed since: concurrent
 (L-0042) — and unpaced crash recovery. Rule 9 verified mechanically: the
 tree fingerprint was identical before and after the reviews.
 
-## Traceability audit, and F-34 — repaired four times, not closed (ADR-0025, 2026-08-22)
+## Traceability audit, and F-34 — repaired four times, CLOSED on the fourth review (ADR-0025, 2026-08-22)
 
 A read-only audit of the whole V1 surface — `docs/V1_TRACEABILITY_AUDIT.md`,
 frozen at commit `83ae84e` and never edited afterwards — produced 42
@@ -304,8 +304,8 @@ captured against a CLEAN code tree at `29d3666` (tree `cf7a2657`), with
 `f34-tree-binding.json` recording `content_fingerprint()` before and
 after the run.
 
-**Three independent reviews, three FAILs, and the finding is still
-open.** Round 1 (Codex, FAIL PARCIAL): the state machine itself walked
+**Four independent reviews: three FAILs, then a PASS.** Round 1 (Codex,
+FAIL PARCIAL): the state machine itself walked
 `VERIFYING -> COMPLETED` for anybody who asked, so the invariant was a
 property of one caller. Round 2 (FAIL PARCIAL): `state` and
 `completion_evidence` were public attributes, and the engine's report
@@ -337,15 +337,41 @@ a clean tree at `9c6064c` (tree `baca7d24`), with
 `f34-round3-tree-binding.json` recording `content_fingerprint()` strictly
 before and after the run.
 
-**F-34 is NOT marked closed.** It is repaired and evidenced; three
-consecutive independent reviews found a new reader of the same field, and
-this project's own rule is that a finding is not resolved because it
-looks resolved. It closes when an independent review returns without
-findings. L-0047 and L-0048 record why.
+**Round 4 (2026-08-22): PASS — and F-34 is CLOSED.** The fourth
+independent review read code `9c6064c` against evidence `f02e18e` and
+verified for itself, without accepting the author's transcript, that:
+both critical reproductions fail closed (a composite with a member
+returning `passed=1` produces `MalformedEvidence` and the engine finishes
+FAILED / PARTIAL with the problem recorded); an empty composite raises
+`EmptyCompositeError` at construction; convergence, integration, the
+pipeline and `cli_review` all decide on the strict verdict; and **no
+productive reader of `.passed` decides outside `verification_verdict()`**
+— the claim rounds 1, 2 and 3 each made and each got wrong at a different
+height, now checked and empty. 249 tests and 39 subtests, targeted,
+passed in the reviewer's own run. No new findings in scope.
+
+F-34 closes by the rule this project set for itself and then had to apply
+against its own earlier closure: a finding is resolved when an
+independent review returns without findings, not when it looks resolved.
+It is **1 of 43** — the frozen audit has 6 PASS items, 1 closed finding
+and **36 open**. L-0044..L-0048 record the mechanisms; the process change
+that made round 4 cheap is `scripts/mutation_check.py`, committed with
+its mutants as data so a reviewer re-runs the claim instead of reading
+it.
+
+**Not closed, and named so the closure of one row is not read as the
+closure of the surface around it:** F-36 (there is no `ProofPacket`),
+F-14..F-18 (`capture_evidence.py` still does not bind bytes — all four
+rounds worked around it with an external tree binding, and a workaround
+repeated four times is a finding, not a method), the `PYTHONUTF8=1`
+environment precondition that nothing in the repo enforces, and F-33 with
+the thirteen capabilities that remain correct as modules and unreachable
+as a program.
 
 **Scope discipline: F-34 only.** The other 36 open findings are
-untouched — 43 items in the frozen audit, of which 6 are PASS and not
-defects (F-06, F-09, F-11, F-29b, F-41, F-42). That
+untouched across all four passes — 43 items in the frozen audit, of which
+6 are PASS and not defects (F-06, F-09, F-11, F-29b, F-41, F-42) and 1 is
+now closed (F-34). That
 includes the documentation drift THIS FILE still carries
 (F-19..F-32: the stale 164-test line and mypy file count below, the
 resolved-vs-pending Codex contradiction, the `src/gnosis/` "empty
@@ -381,9 +407,11 @@ repaired: the storage is private behind read-only properties, and
 derive from. Six mutants captured, none survived. Evidence
 `.gnosis/evidence/20260822T162729Z/` — 822 passed (60 subtests) on a
 clean tree at `1591aa7` (tree `67d2bb9c`), mypy strict clean, ruff at the
-19-finding baseline with nothing added. **A THIRD independent
-review is outstanding — this unit is delivered for review, not declared
-closed.** Named and NOT repaired, as candidates for that review: the
+19-finding baseline with nothing added. A third independent review was
+outstanding at that point; it ran, returned FAIL CRÍTICO, and its repair
+and the fourth review's PASS are recorded above. Named and NOT repaired
+at the time, as candidates for that third review — all three were in fact
+repaired in `9c6064c` and verified by round 4: the
 same truthy read of `passed` remains in `kernel/convergence.py` (3
 sites), `kernel/integration.py` and `adapters/cli_review.py`, which are
 decision logic in other subsystems; none can forge a COMPLETED, but

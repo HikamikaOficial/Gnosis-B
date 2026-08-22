@@ -16,7 +16,7 @@
 `docs/V1_COMPLIANCE_MATRIX.md` is the LIVING matrix — a row changes only
 when an ADR with captured evidence backs it.
 
-- **F-34 repaired in four passes; awaiting a FOURTH independent review.**
+- **F-34 CLOSED (2026-08-22), fourth independent review PASS.**
   ADR-0025 (`29d3666`) closed the reachable production route; an
   independent Codex review returned **FAIL PARCIAL** because the state
   authority itself still admitted `VERIFYING -> COMPLETED` with no
@@ -48,8 +48,17 @@ when an ADR with captured evidence backs it.
   mutation check is now a committed script
   (`scripts/mutation_check.py`). Evidence
   `.gnosis/evidence/20260822T181937Z/` (874 passed, 60 subtests, clean
-  tree at `9c6064c`). **Next action: hand this unit to a FOURTH
-  independent review.** It is not closed until that returns.
+  tree at `9c6064c`). A **fourth** independent review then read code
+  `9c6064c` against evidence `f02e18e` and returned **PASS**: both
+  critical reproductions fail closed, the empty composite raises
+  `EmptyCompositeError` at construction, convergence, integration, the
+  pipeline and `cli_review` all decide on the strict verdict, and no
+  productive reader of `.passed` decides outside `verification_verdict()`
+  — verified by the reviewer's own run (249 tests, 39 subtests targeted),
+  not by the author's transcript. No new findings in scope. **F-34 is
+  closed**, by the rule that a finding closes when an independent review
+  returns without findings. **Next action: the next audit finding, by
+  direction** — nothing about F-34 remains to do.
 - **The three truthy readers round 2 deferred are now REPAIRED**, not
   deferred again: `kernel/convergence.py` (one verdict per round, the
   flip memo holds verdicts, malformed verification is a typed evidence
@@ -60,15 +69,23 @@ when an ADR with captured evidence backs it.
   them and deferring them was not enough.
 - **The count, so no living document repeats it wrong again:** the frozen
   audit holds **43 items** (F-01..F-42 plus F-29b). **6 are PASS** and are
-  not defects (F-06, F-09, F-11, F-29b, F-41, F-42); **0 are closed**;
-  **37 are open**, including F-34 itself, which is repaired and evidenced
-  but not closed — three consecutive independent reviews found a new
-  reader of the same field, and this project's rule is that a finding is
-  not resolved because it looks resolved. An earlier version of this file
-  said 41, which counted the PASS items and F-34 as work; the version
-  before this one said "1 closed (F-34)", which was true for what was
-  known then. Direction sets the order; nothing outside F-34 was touched
-  in any pass, deliberately.
+  not defects (F-06, F-09, F-11, F-29b, F-41, F-42); **1 is closed**
+  (F-34); **36 are open**. History of this count, because it has been
+  wrong twice: one version said 41, counting the PASS items and F-34 as
+  work; one said "1 closed (F-34)" before the third review reopened it;
+  one said "0 closed, 37 open", correct while F-34 was reopened. The live
+  count is **6 PASS · 1 closed · 36 open**. Direction sets the order;
+  nothing outside F-34 was touched in any of the four passes,
+  deliberately.
+
+- **What the closure does NOT cover**, named here so the next unit does
+  not inherit a false floor: **F-36** (no `ProofPacket`); **F-14..F-18**
+  (`capture_evidence.py` still records `git status` after the suite and
+  never imports `content_fingerprint()` — all four F-34 rounds worked
+  around it with an external tree binding, which makes the workaround a
+  finding rather than a method); the **`PYTHONUTF8=1` precondition** that
+  the suite depends on and nothing in the repo enforces; and **F-33** with
+  the thirteen capabilities still inert.
 
 The ones this project's own history says will cost the most:
 
@@ -108,8 +125,9 @@ cd "C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi"
 PYTHONUTF8=1 .venv/Scripts/python.exe scripts/capture_evidence.py
 ```
 
-Green baseline first (781 passed, mypy clean over 55 files, ruff at the
-19-finding baseline), then **whichever audit finding direction names**.
+Green baseline first (874 passed with 60 subtests as of `9c6064c`, mypy
+strict clean over 55 files, ruff at the 19-finding baseline), then
+**whichever audit finding direction names**.
 Do not batch them: the audit was produced one finding at a time and the
 repairs are cheaper to review the same way.
 

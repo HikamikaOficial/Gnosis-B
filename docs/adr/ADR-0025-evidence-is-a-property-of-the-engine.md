@@ -4,7 +4,24 @@
 - Date: 2026-08-22
 - Repairs: **F-34** (`docs/V1_TRACEABILITY_AUDIT.md`), the one finding the
   earlier independent reviews did not have.
-- Evidence, round 3 (this unit): `.gnosis/evidence/20260822T162729Z/` —
+- Status of the finding: **F-34 CLOSED** on 2026-08-22 by the FOURTH
+  independent review, which returned **PASS** with no findings in scope
+  over code `9c6064c` and evidence `f02e18e`. The rule this ADR set for
+  itself after round 3 — a finding closes when an independent review
+  returns without findings, not when it looks resolved — is the rule that
+  closes it. The fourth addendum is at the end of this file; the three
+  failed rounds before it are kept in full.
+- Evidence, capture 4 (the round-3 repair; the tree the fourth review
+  read): `.gnosis/evidence/20260822T181937Z/` — **874 passed** (60
+  subtests), mypy strict clean over 55 files, ruff at the 19-finding
+  baseline exactly (0 added). Captured against a CLEAN code tree at
+  commit `9c6064c`, tree `baca7d24`; `f34-round3-tree-binding.json`
+  records `content_fingerprint()` strictly before AND after the run.
+  Mutation transcript: `mutation-check.f34-round3.txt` (nine mutants,
+  none survived, produced by the committed `scripts/mutation_check.py`);
+  reproductions replayed: `reproduction-replay.f34-round3.txt`.
+- Evidence, capture 3 (the round-2 repair):
+  `.gnosis/evidence/20260822T162729Z/` —
   **822 passed** (60 subtests), mypy strict clean over 55 files, ruff at
   the 19-finding baseline exactly (0 added). Captured against a CLEAN
   code tree at commit `1591aa7`, tree
@@ -14,7 +31,7 @@
   pyproject.toml` was empty at both ends. Mutation transcript:
   `mutation-check.f34-round2.txt`; the two reproductions replayed against
   the repaired tree: `reproduction-replay.f34-round2.txt`.
-- Evidence, round 1: `.gnosis/evidence/20260822T005432Z/` — **781 passed** (12 subtests), mypy strict
+- Evidence, capture 1: `.gnosis/evidence/20260822T005432Z/` — **781 passed** (12 subtests), mypy strict
   clean over 55 files, ruff at the 19-finding baseline exactly. Captured
   against a CLEAN code tree at commit `29d3666`, tree
   `cf7a26577c4d1bdeca7829c0d83d330dbf0f65b6`; `f34-tree-binding.json` in
@@ -27,20 +44,28 @@
   (rewritten) and
   `tests/test_director_orchestrator.py::TestGovernedOrchestrator::test_governed_failure_fails_the_brief_without_aborting_the_batch`
   (provocation replaced).
-- Independent review: **TWO rounds, both FAIL PARCIAL.**
+- Independent review: **FOUR rounds — FAIL PARCIAL, FAIL PARCIAL,
+  FAIL CRÍTICO, PASS.**
   Round 1 (Codex, 2026-08-22) found the invariant was a property of one
   caller rather than of the state authority; repaired in `6c4859a`.
   Round 2 (2026-08-22) found the repaired authority still had a public
   `state` attribute, and the engine's REPORT still printing a pass for
-  evidence the authority had rejected; repaired in this unit. Both
-  addenda are below. A **third** independent review is outstanding: this
-  unit is delivered for it, not declared closed by it. The first version
-  of this ADR shipped self-reviewed and said so; L-0041 puts that channel
-  at roughly one finding in four, and two consecutive PARTIALs on the same
-  unit are what the missing three-quarters looks like.
+  evidence the authority had rejected; repaired in `1591aa7`.
+  Round 3 (2026-08-22, **FAIL CRÍTICO**) went around every guard:
+  `CompositeVerifier` laundered a malformed member into a well-formed
+  pass, and an empty composite passed on `all([])`; repaired in
+  `9c6064c`. Round 4 (2026-08-22) reviewed code `9c6064c` against
+  evidence `f02e18e`, reproduced the two critical cases as fail-closed,
+  found no remaining productive reader of `.passed` deciding outside
+  `verification_verdict()`, and returned **PASS** with no new findings in
+  scope. All four addenda are below. The first version of this ADR
+  shipped self-reviewed and said so; L-0041 puts that channel at roughly
+  one finding in four, and three consecutive adverse rounds on the same
+  two-line defect are what the missing three-quarters looks like.
 - Scope: **F-34 only.** Of the 43 items in the frozen audit, 6 are PASS
-  (F-06, F-09, F-11, F-29b, F-41, F-42) and 36 remain open and untouched.
-  Nothing here closes any of them.
+  and not defects (F-06, F-09, F-11, F-29b, F-41, F-42), **1 is closed —
+  F-34, by this ADR** — and **36 remain open and untouched**. Nothing
+  here closes any of those 36.
 
 ## Context
 
@@ -789,3 +814,90 @@ a clean transcript for an unguarded tree.
   `TestTheFixPromptTellsTheAgentWhichThingIsBroken`.
 - `tests/test_pipeline.py` — `TestABriefDoesNotCompleteOnMalformedEvidence`.
 - `tests/test_integration.py` — `TestMalformedEvidenceDoesNotLand`.
+
+## Fourth independent review addendum — 2026-08-22: **PASS**
+
+The unit was reviewed independently a fourth time and returned **PASS**.
+Code reviewed: `9c6064c`. Evidence reviewed: `f02e18e`. This is the
+verdict that closes F-34, and it is the first round of the four that
+found nothing.
+
+### What the review verified for itself
+
+The reviewer did not accept the author's transcript for any of it.
+
+- **The two critical reproductions of round 3 fail closed.**
+  `CompositeVerifier` with a member returning `passed=1` produces
+  `MalformedEvidence`, and the `TaskEngine` finishes FAILED / PARTIAL
+  with the problem recorded — not a COMPLETED with an empty problems
+  list.
+- **An empty `CompositeVerifier` raises `EmptyCompositeError`** at
+  construction, so there is no object left on which `.run()` could be
+  called and no `all([])` to be true about nothing.
+- **Convergence, integration, the pipeline and `cli_review` all decide
+  on the strict verdict.** These are the four subsystems round 2 named
+  and deferred and round 3 repaired; the fourth round checked them
+  rather than taking the repair on its word.
+- **No productive reader of `.passed` makes a decision outside
+  `verification_verdict()`.** This is the claim rounds 1, 2 and 3 each
+  made and each got wrong at a different height. It is the first time an
+  independent pass over the production surface has come back empty.
+- **249 tests and 39 subtests, targeted, pass in the reviewer's own
+  run**, and the committed bundle records 874 tests, 60 subtests, mypy
+  strict clean and ruff at the 19-finding baseline.
+
+No new findings within the scope of F-34.
+
+### What this closes, and what it does not
+
+**F-34 is closed.** `docs/V1_COMPLIANCE_MATRIX.md` records it as the
+first — and so far only — closed item of the 43 in the frozen audit: 6
+PASS, 1 closed, 36 open.
+
+Four limits are named here so that a closure of one finding is not read
+as a closure of the surface around it. None of them were in scope and
+none of them are repaired:
+
+- **F-36** — there is no `ProofPacket`. The evidence in this ADR is a
+  captured bundle plus a hand-written binding, which is stronger than
+  prose and weaker than a first-class artifact the kernel produces.
+- **F-14..F-18** — `capture_evidence.py` still does not bind bytes: it
+  records `git status` AFTER the suite and does not import
+  `content_fingerprint()`. All four rounds worked around this with an
+  external `f34-round*-tree-binding.json`. A workaround repeated four
+  times is a finding, not a method.
+- **PYTHONUTF8 fragility** — the suite is green on this workstation
+  because `PYTHONUTF8=1` is set (ADR-0001, L-0003). Without it one test
+  fails, identically at `9117b63`, so it is an environment precondition
+  and not something this unit introduced. It is also an environment
+  precondition that nothing in the repo enforces.
+- **F-33 and the inert capabilities** — thirteen of the twenty-two V1
+  capabilities are correct as modules and unreachable as a program.
+  Row 17 of the living matrix is now IA end to end; the rows around it
+  are not, and one reachable invariant does not make the system
+  reachable.
+
+### What four rounds cost, recorded once
+
+The defect was two lines. It took four independent rounds and four
+captures to close, and each round the repair was correct and applied one
+level below where the outcome is produced: one caller (round 1), the
+methods with the field left public (round 2), a single strict reader
+handed to an aggregator that could not carry its answer (round 3). The
+lessons are already written — L-0044 (an invariant enforced at one caller
+is a property of that caller), L-0045 (a lock on each door is not a
+wall), L-0046 (two independent readings of one field), L-0047 (an
+aggregator launders evidence when its carrier is narrower than its
+verdict), L-0048 (a named-and-deferred finding recurs, and an unverified
+reassurance is worse than silence).
+
+The process change that came out of round 3 is what made round 4 cheap
+to run: `scripts/mutation_check.py` is committed with its mutants as
+data, so the fourth reviewer could re-run the claim instead of reading a
+transcript. That is the shape the next unit's evidence should take —
+re-runnable by the reviewer, not attested by the author.
+
+Two rules held throughout and are worth stating plainly, because they are
+the only reason this finding is closed rather than believed closed: a
+reviewer does not modify what it judges, and a finding is not resolved
+because it looks resolved.

@@ -1,8 +1,10 @@
 # GNOSIS — Matriz V1 viva
 
-**Última actualización:** 2026-08-22 · **Unidad:** ADR-0025 + tres addenda
-de revisión independiente (FAIL PARCIAL, FAIL PARCIAL, **FAIL CRÍTICO**) —
-F-34 **NO cerrado**, pendiente de cuarta revisión
+**Última actualización:** 2026-08-22 · **Unidad:** ADR-0025 + cuatro
+addenda de revisión independiente (FAIL PARCIAL, FAIL PARCIAL,
+**FAIL CRÍTICO**, **PASS**) — F-34 **CERRADO** por la cuarta revisión,
+que volvió sin hallazgos sobre el código `9c6064c` y la evidencia
+`f02e18e`
 
 Esta es la matriz **viva**. `docs/V1_TRACEABILITY_AUDIT.md` es el
 diagnóstico congelado del 2026-08-22 y no se edita; cada hallazgo se
@@ -37,7 +39,7 @@ porque parezca resuelto.
 | 14 | review read-only | IA (SANDBOX_APPROX) | II | **II** | F-33 abierto |
 | 15 | rework acotado | IA | II | **II** | F-33 abierto |
 | 16 | proof packet | **A** — sin `ProofPacket`; `acceptance_criteria` sólo se pega al prompt | — | **A / DI** | F-36 abierto |
-| 17 | **rehusar DONE sin evidencia** | **IA** — la **autoridad de estados** lo impone: `transition()` rehúsa `COMPLETED` y `complete(verification)` valida un `VerificationResult` real; `execute_task` rehúsa sin verifier antes de lanzar nada | **IA** — `DirectorOrchestrator.run_pending` rehúsa antes de consumir el brief | **IA** ✅ | **F-34 reparado en cuatro pasadas, NO cerrado** — ADR-0025 + 3 addenda; la tercera revisión independiente devolvió FAIL CRÍTICO (`CompositeVerifier` convertía evidencia MALFORMED en `passed=True`, y `all([])` pasaba sin ejecutar nada). Se marcará cerrado cuando una revisión independiente vuelva sin hallazgos |
+| 17 | **rehusar DONE sin evidencia** | **IA** — la **autoridad de estados** lo impone: `transition()` rehúsa `COMPLETED` y `complete(verification)` valida un `VerificationResult` real; `execute_task` rehúsa sin verifier antes de lanzar nada; `MalformedEvidence` hace que "no hay veredicto" sea un tipo, y `CompositeVerifier` no puede fabricar un pase ni existir vacío | **IA** — `DirectorOrchestrator.run_pending` rehúsa antes de consumir el brief | **IA** ✅ | **F-34 CERRADO** — ADR-0025 + 4 addenda; la cuarta revisión independiente (2026-08-22) devolvió **PASS** sin hallazgos en alcance sobre el código `9c6064c` y la evidencia `f02e18e`. Cerrado por la regla que este documento se dio: un hallazgo se cierra cuando una revisión independiente vuelve sin hallazgos |
 | 18 | sobrevivir reinicio del kernel | IA | II | **II** | F-33 abierto |
 | 19 | recuperar tras crash de worker | IA | **II** — el llamante de `sweep()` es `WorkerSupervisor`, que nada construye | **II / DI** | F-35 abierto |
 | 20 | evitar bucles infinitos | P — breakers presentes; `max_briefs`/`wall_clock_s` por defecto `None`; sin "max same failure" | II | **P** | F-10 abierto |
@@ -46,6 +48,8 @@ porque parezca resuelto.
 
 **Resumen:** 1 capacidad alcanzable de extremo a extremo (nº17), 13
 inertes, 5 parciales, 3 ausentes. La única fila que ha cambiado es la 17.
+Que esa fila esté cerrada no hace alcanzable el sistema: las otras 21
+capacidades siguen exactamente donde estaban.
 
 > La primera versión de esta fila decía que `completion_is_evidenced` era
 > "el único autorizador". No lo era: `TaskStateMachine.transition()`
@@ -72,7 +76,7 @@ Sin cambios en esta unidad. Ver `docs/V1_TRACEABILITY_AUDIT.md` §Eje 2.
 | Invariante | Suite nombrada | Estado |
 |---|---|---|
 | NO LOST WORK | **A** | implicado en muchas pruebas, ninguna nombrada |
-| **NO INVALID DONE** | **presente** — `tests/test_no_invalid_done.py` (28 pruebas, 15 subtests) y `tests/test_state_machine.py` (21 pruebas, 9 subtests), de las cuales 12 son `TestCompletedIsEvidenceGated` | primera suite nombrada por un invariante (ADR-0025). Cubre la autorización de `COMPLETED` en la autoridad de estados **y** en el motor; **no** cubre pérdida de trabajo ni bucles |
+| **NO INVALID DONE** | **presente** — `tests/test_no_invalid_done.py` (82 pruebas, 39 subtests) y `tests/test_state_machine.py` (27 pruebas, 18 subtests), de las cuales 12 son `TestCompletedIsEvidenceGated`; recuento verificado en esta unidad, las cifras anteriores (28/15 y 21/9) eran de la primera pasada | primera suite nombrada por un invariante (ADR-0025). Cubre la autorización de `COMPLETED` en la autoridad de estados, en el motor, en el compuesto de verificadores y en el pipeline; **no** cubre pérdida de trabajo ni bucles |
 | NO STALE WRITE | **A** | implicado; mecánicamente sólido |
 | NO INFINITE LOOP | **A** | breakers presentes con defaults apagados |
 
@@ -84,13 +88,18 @@ siguen abiertas y F-13 no se declara cerrado.
 
 ## Hallazgos cerrados
 
-Ninguno todavía. F-34 fue marcado cerrado el 2026-08-22 y **se retira de
-esta sección**: tres revisiones independientes consecutivas encontraron
-un lector nuevo del mismo campo. La regla de esta tabla — "un hallazgo no
-se marca resuelto porque parezca resuelto" — se aplica también a los
-hallazgos que ya se marcaron.
+| Hallazgo | ADR | Cerrado | Veredicto que lo cierra |
+|---|---|---|---|
+| **F-34** — `COMPLETED` sin evidencia | ADR-0025 (+4 addenda) | 2026-08-22 | **cuarta revisión independiente: PASS**, sin hallazgos en alcance; código `9c6064c`, evidencia `f02e18e` |
 
-## F-34 — historial de reparación (abierto, pendiente de cuarta revisión)
+Uno de 43. F-34 ya fue marcado cerrado una vez, el 2026-08-22, y hubo que
+retirarlo de esta sección cuando tres revisiones independientes
+consecutivas encontraron un lector nuevo del mismo campo. Vuelve ahora
+por el único motivo que esta tabla admite: una revisión independiente que
+no encontró nada. El historial completo de los cuatro intentos se
+conserva abajo sin reescribir.
+
+## F-34 — historial de reparación (cerrado en la cuarta revisión)
 
 | Hallazgo | ADR | Fecha | Evidencia |
 |---|---|---|---|
@@ -98,19 +107,23 @@ hallazgos que ya se marcaron.
 | **F-34 (cierre incompleto)** — la autoridad de estados seguía admitiendo `VERIFYING → COMPLETED` sin evidencia; hallado por Codex, FAIL PARCIAL | ADR-0025 addendum | 2026-08-22 | `.gnosis/evidence/20260822T142519Z/` (800 passed, árbol limpio en `6c4859a`; dos mutantes capturados) |
 | **F-34 (segunda revisión)** — `state`/`completion_evidence` eran atributos públicos, y el informe imprimía `PASSED` para un `VerificationResult(passed=1)` que la autoridad acababa de rechazar; FAIL PARCIAL | ADR-0025 addendum 2 | 2026-08-22 | `.gnosis/evidence/20260822T162729Z/` (822 passed, árbol limpio en `1591aa7`; seis mutantes capturados) |
 | **F-34 (tercera revisión)** — `CompositeVerifier` lavaba evidencia MALFORMED (`all(r.passed …)` → `passed=True`) y un compuesto vacío pasaba con `all([])`; los tres lectores diferidos seguían vivos; **FAIL CRÍTICO** | ADR-0025 addendum 3 | 2026-08-22 | `.gnosis/evidence/20260822T181937Z/` (874 passed, árbol limpio en `9c6064c`; nueve mutantes capturados) |
+| **F-34 (cuarta revisión)** — las dos reproducciones críticas fallan cerradas, `CompositeVerifier` con un miembro `passed=1` produce `MalformedEvidence` y el motor termina FAILED/PARTIAL registrando el problema, el compuesto vacío lanza `EmptyCompositeError`, y no queda lector productivo de `.passed` que decida fuera de `verification_verdict()`; **PASS, sin hallazgos** | ADR-0025 addendum 4 | 2026-08-22 | revisada sobre código `9c6064c` y evidencia `f02e18e`; 249 pruebas y 39 subtests dirigidos verificados por el revisor; el bundle registra 874 pruebas, 60 subtests, mypy limpio y ruff en baseline |
 
 ## Hallazgos abiertos
 
 F-01, F-02, F-03, F-04, F-05, F-07, F-08, F-10, F-12, F-13, F-14, F-15,
-F-16, F-17, F-18, F-19…F-32, F-33, **F-34**, F-35, F-36, F-37, F-38,
-F-39, F-40.
+F-16, F-17, F-18, F-19…F-32, F-33, F-35, F-36, F-37, F-38, F-39, F-40.
 
 **Recuento, para que ningún documento vivo lo repita mal:** el diagnóstico
 congelado tiene **43 elementos** (F-01…F-42 más F-29b). De ellos **6 son
-PASS** y no son defectos (F-06, F-09, F-11, F-29b, F-41, F-42), **0 están
-cerrados** y **37 siguen abiertos** — los enumerados arriba más F-34, que
-vuelve a la lista tras la tercera revisión. Un recuento anterior decía
-"1 cerrado (F-34)"; era correcto para lo conocido entonces y falso ahora.
+PASS** y no son defectos (F-06, F-09, F-11, F-29b, F-41, F-42), **1 está
+cerrado** (F-34) y **36 siguen abiertos** — exactamente los enumerados
+arriba. Historial del recuento, porque ha estado mal dos veces: una
+versión dijo 41, contando los PASS y F-34 como trabajo; otra dijo
+"1 cerrado (F-34)" antes de que la tercera revisión lo reabriera; otra
+dijo "0 cerrados y 37 abiertos", correcto mientras F-34 estuvo reabierto.
+El recuento vivo es **6 PASS · 1 cerrado · 36 abiertos**.
 
-Ninguno de ellos se ha tocado en esta unidad. Los 15 hallazgos abiertos
-de las revisiones anteriores (`PROJECT_REPORT.md §8`) tampoco.
+Ninguno de los 36 se ha tocado en ninguna de las cuatro pasadas de F-34.
+Los 15 hallazgos abiertos de las revisiones anteriores
+(`PROJECT_REPORT.md §8`) tampoco.
