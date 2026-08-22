@@ -10,37 +10,57 @@
 8. Consider upstream bug reports (with operator approval): zmem Windows diagnostic crash; m3 `--database` provisioning gap.
 9. Operator decision: delete or relocate the unrelated `security-audit/` leftovers.
 
+## Current unit: the traceability audit
+
+`docs/V1_TRACEABILITY_AUDIT.md` (frozen at `83ae84e`) carries 42 findings.
+`docs/V1_COMPLIANCE_MATRIX.md` is the LIVING matrix — a row changes only
+when an ADR with captured evidence backs it.
+
+- **F-34 CLOSED** (ADR-0025, commit `29d3666`, evidence
+  `.gnosis/evidence/20260822T005432Z/`, 781 passed on a clean tree).
+- **41 findings open.** Direction sets the order; nothing else was
+  touched in that unit, deliberately.
+
+The ones this project's own history says will cost the most:
+
+1. **F-33 — no production entry point.** `GovernedPipeline` is the only
+   path that requires verification AND an independent review, and nothing
+   constructs it. Thirteen of twenty-two V1 capabilities are correct as
+   modules and unreachable as a program. Probably a milestone, not a
+   repair.
+2. **F-35 — `WorkAuthority.sweep()`'s only caller is `WorkerSupervisor`,
+   which nothing constructs.** The repair for "nothing calls it" was a
+   caller nothing reaches (L-0033, again). V1 nº19 is still inert.
+3. **F-07 / F-08 — the two DURABLE state planes validate nothing.**
+   `RunStore.update_state` and `BriefRecordStore.update` write any state
+   with no transition table; `RunStateMachine` has no production caller.
+   The only validated plane is the one that dies with the process.
+4. **F-14..F-18 — the evidence script does not bind bytes.**
+   `content_fingerprint()` already exists, is used in four production
+   modules, and `capture_evidence.py` does not import it; it also records
+   `git status` AFTER the suite. ADR-0025 worked around this with an
+   external `f34-tree-binding.json` rather than repairing it, because the
+   unit was scoped to F-34.
+5. **F-01..F-04 — there is no task DAG.** V1 nº2 and nº3 have no
+   implementation; `kernel/ordering.py` orders already-converged tasks
+   for landing, which is a different problem.
+6. **F-19..F-32 — documentation drift**, including contradictions inside
+   this very file (sections 1 and 2 below), the stale 164-test line in
+   `PROJECT_STATE.md`, and a `README.md` describing a project twenty ADRs
+   ago.
+
+Also still open, from the earlier reviews: the 15 findings listed in
+`PROJECT_REPORT.md §8`.
+
 ## Exact next command
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH" PYTHONUTF8=1
 cd "C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi"
-uv run --no-project --with pytest --with mypy --with ruff python scripts/capture_evidence.py
+PYTHONUTF8=1 .venv/Scripts/python.exe scripts/capture_evidence.py
 ```
 
-Green baseline first (760 passed, mypy clean, ruff at baseline), then
-**the seventeen findings the reviews left open**. They are listed at the
-end of each ADR addendum; the ones that matter most, in order:
+Green baseline first (781 passed, mypy clean over 55 files, ruff at the
+19-finding baseline), then **whichever audit finding direction names**.
+Do not batch them: the audit was produced one finding at a time and the
+repairs are cheaper to review the same way.
 
-~~1. Concurrent `recover()`~~ **DONE** — and the obvious fix, an atomic
-   `replace`, was wrong; see L-0042.
-~~2. A crash that was not a park resumes unpaced~~ **DONE.**
-3. **`_resolve_probe` is check-then-act** (ADR-0023) — a provider hold
-   placed between its read and its append is erased.
-4. **The credential is absent from the policy action identity**
-   (ADR-0024) — an operator approval for a seat launch is byte-identical
-   to the same launch on a metered key.
-5. **Cassettes and evidence store child streams unredacted** (ADR-0024).
-6. **Rotation provenance is never persisted** (ADR-0024).
-7. **Nothing in `src/` constructs a pool, a scheduler or a pipeline** —
-   no production entry point exists, so several HARD matrix rows are real
-   but inert. This is the largest structural gap and probably the next
-   milestone rather than a repair.
-
-**REVIEW DEBT: PAID, with a weaker channel.** ADR-0022/0023/0024 were
-reviewed 2026-08-21 by independent read-only agents in clean contexts,
-not by Codex (rate-limited, reset reported 2026-09-20). All three FAIL;
-47 findings, 28 repaired, 15 open. When Codex quota returns, re-run all
-three — a same-family reviewer shares blind spots a different model would
-not, and L-0041 now measures the self-review channel at roughly one
-finding in four.

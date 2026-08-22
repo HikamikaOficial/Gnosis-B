@@ -1,0 +1,38 @@
+MUTATION CHECK — F-34 / ADR-0025
+
+Open finding 15 of PROJECT_REPORT.md says a mutation check that leaves no
+captured output is testimony, not evidence. This is the output.
+
+Target    : src/gnosis/kernel/engine.py :: completion_is_evidenced
+Mutant    : return verification.passed if verification else True
+            (the exact expression the audit found at engine.py:976)
+Suite     : tests/test_no_invalid_done.py
+Commit    : 29d3666b1d11b258b2dd50c9d4cc6aebc994ec8b
+Tree      : cf7a26577c4d1bdeca7829c0d83d330dbf0f65b6
+Code dirty at start: ''
+----------------------------------------------------------------------
+
+=== MUTANT APPLIED — expected RED ===
+E       AssertionError: <TaskState.COMPLETED: 'COMPLETED'> != <TaskState.FAILED: 'FAILED'>
+
+tests\test_no_invalid_done.py:374: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_no_invalid_done.py::TestTheAuthorisingPredicate::test_a_truthy_passed_is_not_true
+FAILED tests/test_no_invalid_done.py::TestTheAuthorisingPredicate::test_absent_evidence_is_not_success
+SUBFAILED(impostor='str') tests/test_no_invalid_done.py::TestTheAuthorisingPredicate::test_something_that_is_not_a_verification_result_never_authorises
+SUBFAILED(impostor='int') tests/test_no_invalid_done.py::TestTheAuthorisingPredicate::test_something_that_is_not_a_verification_result_never_authorises
+SUBFAILED(impostor='bool') tests/test_no_invalid_done.py::TestTheAuthorisingPredicate::test_something_that_is_not_a_verification_result_never_authorises
+SUBFAILED(impostor='object') tests/test_no_invalid_done.py::TestTheAuthorisingPredicate::test_something_that_is_not_a_verification_result_never_authorises
+SUBFAILED(impostor='dict') tests/test_no_invalid_done.py::TestTheAuthorisingPredicate::test_something_that_is_not_a_verification_result_never_authorises
+SUBFAILED(impostor='_NotQuiteTrue') tests/test_no_invalid_done.py::TestTheAuthorisingPredicate::test_something_that_is_not_a_verification_result_never_authorises
+FAILED tests/test_no_invalid_done.py::TestNoInvalidDoneInTheEngine::test_a_successful_cli_with_no_evidence_cannot_complete
+FAILED tests/test_no_invalid_done.py::TestNoInvalidDoneInTheEngine::test_a_truthy_non_result_cannot_complete_either
+FAILED tests/test_no_invalid_done.py::TestNoInvalidDoneAtTheDirectorEntryPoint::test_a_verifier_that_produces_nothing_does_not_complete_a_brief
+11 failed, 16 passed, 3 subtests passed in 15.87s
+
+=== MUTANT REVERTED — expected GREEN ===
+.....................                                           [100%]
+21 passed, 9 subtests passed in 14.73s
+
+Code dirty at end: ''
+(empty means the mutant left no residue: the shipped code is byte-identical to 29d3666b1d11b258b2dd50c9d4cc6aebc994ec8b)

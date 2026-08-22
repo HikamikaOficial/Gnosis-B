@@ -270,6 +270,53 @@ addenda rather than carried silently. The two closed since: concurrent
 (L-0042) — and unpaced crash recovery. Rule 9 verified mechanically: the
 tree fingerprint was identical before and after the reviews.
 
+## Traceability audit, and F-34 closed (ADR-0025, 2026-08-22)
+
+A read-only audit of the whole V1 surface — `docs/V1_TRACEABILITY_AUDIT.md`,
+frozen at commit `83ae84e` and never edited afterwards — produced 42
+findings. It refuted two of `PROJECT_REPORT.md`'s own claims (the
+"repeated identical failure" and "no-diff loop" scenarios ARE tested;
+"invalid state transition" is tested too, but only on the one state plane
+that does not survive the process), and it found one defect no previous
+review had.
+
+**F-34.** The constitution's second rule — no task reaches DONE without
+evidence — was enforced inside `if authority is not None`. The default
+`DirectorOrchestrator` supplies no authority, so on the path D-018 calls
+"the path real briefs travel" the rule was off, and the transition read
+`verification_result.passed if verification_result else True`. That does
+not mean "no verifier configured"; it means ABSENCE OF EVIDENCE IS
+SUCCESS. Two lines produced a COMPLETED brief that had proved nothing.
+
+Now: `completion_is_evidenced` is the single authority for
+`TaskState.COMPLETED` and the one site that transitions to it calls
+nothing else; `execute_task` refuses a verifier-less task before it
+launches anything; `run_pending` refuses before it consumes a brief.
+`tests/test_no_invalid_done.py` is the first suite in this repo named
+after one of the four invariants, and the mutation check that proves it
+bites is CAPTURED (`mutation-check.f34.txt`) rather than asserted —
+restoring the old expression turns 11 tests red across all three heights.
+
+Evidence: `.gnosis/evidence/20260822T005432Z/` — **781 passed**, mypy
+strict clean over 55 files, ruff at the 19-finding baseline exactly,
+captured against a CLEAN code tree at `29d3666` (tree `cf7a2657`), with
+`f34-tree-binding.json` recording `content_fingerprint()` before and
+after the run.
+
+**Scope discipline: F-34 only.** The other 41 findings are open and
+untouched, including the documentation drift THIS FILE still carries
+(F-19..F-32: the stale 164-test line and mypy file count below, the
+resolved-vs-pending Codex contradiction, the `src/gnosis/` "empty
+scaffold" claim ADR-0002 already settled) and the absence of a production
+entry point (F-33). The living matrix is `docs/V1_COMPLIANCE_MATRIX.md`;
+this unit changed exactly one of its rows.
+
+**Independent review: NOT DONE.** Codex remains rate-limited (reset
+reported 2026-09-20) and direction reviews this unit itself over the
+synchronised folder. L-0041 measures the self-review channel at roughly
+one finding in four, so the claims above are the weaker kind of evidence
+and say so.
+
 ## Fixed locations
 
 - Project: `C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi`
