@@ -46,8 +46,10 @@ when an ADR with captured evidence backs it.
   `WorkIntegrator`, `cli_review` and `GovernedPipeline` each fail closed
   with a differentiable reason. Nine mutants, none survived, and the
   mutation check is now a committed script
-  (`scripts/mutation_check.py`). **Next action: hand this unit to a
-  FOURTH independent review.** It is not closed until that returns.
+  (`scripts/mutation_check.py`). Evidence
+  `.gnosis/evidence/20260822T181937Z/` (874 passed, 60 subtests, clean
+  tree at `9c6064c`). **Next action: hand this unit to a FOURTH
+  independent review.** It is not closed until that returns.
 - **The three truthy readers round 2 deferred are now REPAIRED**, not
   deferred again: `kernel/convergence.py` (one verdict per round, the
   flip memo holds verdicts, malformed verification is a typed evidence

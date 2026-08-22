@@ -1,0 +1,80 @@
+{
+  "adr": "ADR-0025",
+  "capture_command": [
+    "PYTHONUTF8=1",
+    ".venv/Scripts/python.exe",
+    "scripts/capture_evidence.py"
+  ],
+  "capture_command_deviation": "The documented command wraps this in `uv run --no-project --with pytest --with mypy --with ruff`. The project venv holds the same three tools and capture_evidence.py invokes them through sys.executable, so the gates run are identical. Same deviation, same reason, as rounds 1 and 2. PYTHONUTF8=1 is the documented workstation baseline (ADR-0001, L-0003); without it `tests/test_cli_review_adapters.py::TestCliReviewer::test_a_reviewer_is_caught_editing_a_file_with_an_accent_in_its_name` fails on this machine, and it fails identically at 9117b63, so it is an environment precondition rather than anything this unit changed.",
+  "code_paths_considered": [
+    "src",
+    "tests",
+    "scripts",
+    "pyproject.toml"
+  ],
+  "code_tree_clean_and_unchanged_throughout": true,
+  "finding": "F-34",
+  "mutation_check": {
+    "artifact": "mutation-check.f34-round3.txt",
+    "mutants": 9,
+    "note": "Run BEFORE the commit, against the same working tree that was then committed as 9c6064c, with one exception stated rather than implied: the convergence warning-ordering fix (moving the malformed-evidence warning after the fingerprint-unavailable check, so neither can suppress the other through the text of a message) was applied after the mutation run and before the commit. It touches no mutant target. `scripts/mutation_check.py` is committed so the check can be re-run against this exact tree.",
+    "script": "scripts/mutation_check.py",
+    "survived": 0
+  },
+  "post": {
+    "code_status_porcelain": "",
+    "content_fingerprint": {
+      "branch": "master",
+      "head_sha": "9c6064c65026559614ce68f99cc42294579f2ab0",
+      "is_repo": true,
+      "patch_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+      "status_sha256": "6cf8b9ea57d92e2d484b6b18b7a5437eab9758929c667bc7eb7ee9cb927d608a",
+      "untracked": {
+        ".gnosis/evidence/20260822T181937Z/SUMMARY.json": "2cdc5b2fd96a4acbc57842801f246f5fef0f603c85e2eaf9e7bb81a3a13bf8f8",
+        ".gnosis/evidence/20260822T181937Z/f34-round3-tree-binding.json": "5a5e36cf5e123b0751629376a56ea42924518ab178003df64234fe15c3d96512",
+        ".gnosis/evidence/20260822T181937Z/git-head.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        ".gnosis/evidence/20260822T181937Z/git-head.stdout.txt": "f1aa13d7aeedd933bbe75d2a2612097b85d1299735f9eed1146ac69f2203ca71",
+        ".gnosis/evidence/20260822T181937Z/git-status.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        ".gnosis/evidence/20260822T181937Z/git-status.stdout.txt": "f154ef79b3a6843ff14202a80dea14dcc5e9c89d5bb8ef3530099a0e33e235db",
+        ".gnosis/evidence/20260822T181937Z/mutation-check.f34-round3.txt": "c6e1843fbb4ba69ba1c256467acdfb0c5f96510a34fcf7f25f68210be11b3b7d",
+        ".gnosis/evidence/20260822T181937Z/mypy.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        ".gnosis/evidence/20260822T181937Z/mypy.stdout.txt": "dc59e70de5f5fecd7996e15e779a6c91157713cf2d57cbb672cf9ed79d619649",
+        ".gnosis/evidence/20260822T181937Z/pytest.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        ".gnosis/evidence/20260822T181937Z/pytest.stdout.txt": "7be4516dca672c01ef2414b32bda27e61f326eec38ee5f98a177180e5b3f5859",
+        ".gnosis/evidence/20260822T181937Z/reproduction-replay.f34-round3.txt": "3150fc5b5e3a6df62a8a839ac64eb4c50d9f8dbe84cf0bf2ed1b2dac6e6460ec",
+        ".gnosis/evidence/20260822T181937Z/ruff.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        ".gnosis/evidence/20260822T181937Z/ruff.stdout.txt": "2a458e8d106573d29bc865d39a9cc4cb83c77d0c6181441fbf05f5786d26a8a4",
+        ".stfolder/syncthing-folder-c9ceae.txt": "0cf037252917faaef03b3c68f4ae5d7311f2f4e1d4fd29cbaebe45dfcebff398",
+        "PROJECT_REPORT.md": "98f306634c9c837d081e72392a876027903b276b7dd88e8bff40585770f6c21b"
+      }
+    },
+    "head_sha": "9c6064c65026559614ce68f99cc42294579f2ab0",
+    "recorded_at": "2026-08-22T18:31:19.593972+00:00",
+    "tree_sha": "baca7d242282481e65f68f23046418214858faa7"
+  },
+  "pre": {
+    "code_status_porcelain": "",
+    "content_fingerprint": {
+      "branch": "master",
+      "head_sha": "9c6064c65026559614ce68f99cc42294579f2ab0",
+      "is_repo": true,
+      "patch_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+      "status_sha256": "a419ce2ecd74a3f6fa0f21290740238ed077af6f87c759fcc861d213a46140fc",
+      "untracked": {
+        ".stfolder/syncthing-folder-c9ceae.txt": "0cf037252917faaef03b3c68f4ae5d7311f2f4e1d4fd29cbaebe45dfcebff398",
+        "PROJECT_REPORT.md": "98f306634c9c837d081e72392a876027903b276b7dd88e8bff40585770f6c21b"
+      }
+    },
+    "head_sha": "9c6064c65026559614ce68f99cc42294579f2ab0",
+    "recorded_at": "2026-08-22T18:19:29.716267+00:00",
+    "tree_sha": "baca7d242282481e65f68f23046418214858faa7"
+  },
+  "pre_timing_note": "The `pre` snapshot was taken BEFORE capture_evidence.py was launched this round, unlike round 2 where it was seconds after. Both snapshots report an empty `git status --porcelain -- src tests scripts pyproject.toml`.",
+  "purpose": "Binds this evidence bundle to the exact CODE tree it ran against. capture_evidence.py records only HEAD and `git status --porcelain` (names, not bytes) and records them after the suite (F-14..F-18); this file is written around it without modifying it, because this unit repairs F-34 only.",
+  "reproduction_replay": {
+    "artifact": "reproduction-replay.f34-round3.txt",
+    "note": "The third review's two reproductions replayed against the repaired tree: the composite answers MalformedEvidence (verdict MALFORMED, no `passed` key in its serialization, the child's `passed: 1` kept under `children` for forensics) and the engine finishes FAILED/PARTIAL with a populated problems list; the empty composite raises EmptyCompositeError at construction, so no object exists on which `.run()` could be called."
+  },
+  "review_round": 3,
+  "verdict": "The suite ran against committed code at 9c6064c65026559614ce68f99cc42294579f2ab0 (tree baca7d242282481e65f68f23046418214858faa7), with no uncommitted change under src, tests, scripts or pyproject.toml before or after the run. 874 passed / 60 subtests, mypy strict clean over 55 source files, ruff at 19 findings against a baseline of 19."
+}

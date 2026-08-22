@@ -1,0 +1,18 @@
+REPRODUCTION 1 — CompositeVerifier('composite', [verifier returning passed=1])
+------------------------------------------------------------------------
+  composite type       = MalformedEvidence
+  verification_verdict = VerificationVerdict.MALFORMED
+  has a `passed` field = False
+  serialized keys      = ['children', 'name', 'reason', 'ts', 'verdict']
+  child raw `passed`   = [1]  (kept for forensics)
+  child verdicts       = ['MALFORMED']
+  final_task_state     = TaskState.FAILED
+  report.status        = ReportStatus.PARTIAL
+  verification         = ('composite: REJECTED — invalid evidence, no verdict recorded', "composite verifier 'composite' records no verdict: 1 of 1 member verifier(s) returned invalid evidence (malformed-child). A member that states no verdict cannot be aggregated into one: reading it as a pass is how F-34 recurred, and reading it as a failure would blame the work for a broken verifier. The evidence is invalid, so the task is not COMPLETED (constitution rule 2).")
+  problems_encountered = ("composite verifier 'composite' records no verdict: 1 of 1 member verifier(s) returned invalid evidence (malformed-child). A member that states no verdict cannot be aggregated into one: reading it as a pass is how F-34 recurred, and reading it as a failure would blame the work for a broken verifier. The evidence is invalid, so the task is not COMPLETED (constitution rule 2).",)
+  ledger passed/verdict= [(False, 'MALFORMED')]
+
+REPRODUCTION 2 — CompositeVerifier('empty', [])
+------------------------------------------------------------------------
+  EmptyCompositeError: CompositeVerifier 'empty' was given no verifiers to run. An empty composite reports on nothing: `all([])` is True, so it would answer PASSED having executed no check at all (constitution rule 2: no DONE without evidence).
+  no object exists on which `.run()` could be called

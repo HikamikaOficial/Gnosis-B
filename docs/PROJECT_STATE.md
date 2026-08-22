@@ -330,7 +330,12 @@ failure. `ConvergenceLoop`, `WorkIntegrator`, `cli_review` and
 `GovernedPipeline` each fail closed on MALFORMED with a differentiable
 reason. Nine mutants, none survived — and the mutation check is now a
 committed script (`scripts/mutation_check.py`) rather than a hand-made
-transcript, so the next reviewer can re-run it.
+transcript, so the next reviewer can re-run it. Evidence:
+`.gnosis/evidence/20260822T181937Z/` — **874 passed**, mypy strict clean
+over 55 files, ruff at the 19-finding baseline exactly, captured against
+a clean tree at `9c6064c` (tree `baca7d24`), with
+`f34-round3-tree-binding.json` recording `content_fingerprint()` strictly
+before and after the run.
 
 **F-34 is NOT marked closed.** It is repaired and evidenced; three
 consecutive independent reviews found a new reader of the same field, and

@@ -696,6 +696,44 @@ None survived; the tree was restored and re-verified green (203 passed).
 The script exits non-zero if any mutant survives or if the baseline is
 not green, so it cannot produce a clean transcript for an unguarded tree.
 
+### Evidence
+
+`.gnosis/evidence/20260822T181937Z/` — **874 passed, 60 subtests**
+(up from 822/60), mypy strict clean over 55 source files, ruff at **19
+findings against a baseline of 19**: this unit added no lint debt.
+Captured against a clean tree at `9c6064c` (tree `baca7d24`), with
+`f34-round3-tree-binding.json` recording `content_fingerprint()` before
+AND after the run — `git status --porcelain -- src tests scripts
+pyproject.toml` was empty at both ends, and unlike round 2 the `pre`
+snapshot was taken strictly BEFORE the capture was launched.
+
+The bundle carries three artifacts beyond the gate transcripts:
+
+- `mutation-check.f34-round3.txt` — nine mutants, none survived.
+- `reproduction-replay.f34-round3.txt` — the review's two reproductions
+  replayed against the repaired tree. The composite answers
+  `MalformedEvidence` (`verdict` MALFORMED, no `passed` key in its
+  serialization at all, the child's `passed: 1` kept under `children`)
+  and the engine finishes `TaskState.FAILED` / `ReportStatus.PARTIAL`
+  with a populated problems list naming the member that broke it; the
+  empty composite raises `EmptyCompositeError` at construction, so there
+  is no object left on which `.run()` could be called.
+- `f34-round3-tree-binding.json` — the binding described above.
+
+Two things about the run are stated rather than implied. The mutation
+check ran before the commit against the same working tree, with one
+later change: the convergence warning-ordering fix — moving the
+malformed-evidence warning after the fingerprint-unavailable check, so
+neither can suppress the other through the text of a message — was
+applied after the mutation run and before the commit. It touches no
+mutant target, and `scripts/mutation_check.py` is committed so the check
+can be re-run against the exact committed tree. And the suite is run with
+`PYTHONUTF8=1`, this workstation's documented baseline (ADR-0001,
+L-0003): without it, `tests/test_cli_review_adapters.py::TestCliReviewer::`
+`test_a_reviewer_is_caught_editing_a_file_with_an_accent_in_its_name`
+fails on this machine — and fails identically at `9117b63`, so it is an
+environment precondition and not anything this unit changed.
+
 ### What this says about the process, a third time
 
 The pattern across three rounds is now legible enough to name. Round 1

@@ -1,0 +1,78 @@
+{
+  "all_passed": false,
+  "captured_at": "2026-08-22T18:30:47.154061+00:00",
+  "gates_clean": true,
+  "non_zero_exits": [
+    "ruff"
+  ],
+  "python": "3.12.14",
+  "results": [
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "tests/",
+        "-q"
+      ],
+      "duration_s": 668.58,
+      "exit_code": 0,
+      "name": "pytest",
+      "tail": "874 passed, 60 subtests passed in 667.54s (0:11:07)"
+    },
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "mypy",
+        "src/gnosis"
+      ],
+      "duration_s": 0.52,
+      "exit_code": 0,
+      "name": "mypy",
+      "tail": "Success: no issues found in 55 source files"
+    },
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "ruff",
+        "check",
+        "src/gnosis",
+        "tests",
+        "--no-cache",
+        "--output-format=concise"
+      ],
+      "duration_s": 0.19,
+      "exit_code": 1,
+      "lint_baseline": 19,
+      "lint_findings": 19,
+      "name": "ruff",
+      "tail": "No fixes available (6 hidden fixes can be enabled with the `--unsafe-fixes` option).",
+      "verdict": "known backlog, not above baseline"
+    },
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "duration_s": 0.05,
+      "exit_code": 0,
+      "name": "git-head",
+      "tail": "9c6064c65026559614ce68f99cc42294579f2ab0"
+    },
+    {
+      "argv": [
+        "git",
+        "status",
+        "--porcelain"
+      ],
+      "duration_s": 0.08,
+      "exit_code": 0,
+      "name": "git-status",
+      "tail": "?? PROJECT_REPORT.md"
+    }
+  ],
+  "verdict": "within baseline; see non_zero_exits"
+}
