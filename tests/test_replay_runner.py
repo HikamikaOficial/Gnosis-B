@@ -6,6 +6,7 @@ Everything else is a property of that path.
 """
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -17,6 +18,7 @@ from gnosis.kernel.engine import TaskEngine
 from gnosis.kernel.git_evidence import content_fingerprint
 from gnosis.kernel.replay import InteractionStore, ReplayMiss, ReplayMode
 from gnosis.kernel.run_store import RunStore
+from gnosis.kernel.verification import CommandVerifier
 from gnosis.runner.capture import ExecutionResult
 from gnosis.runner.claude_cli_runner import ClaudeCodeCLIRunner, McpRunnerConfig
 from gnosis.runner.replay_runner import (
@@ -29,6 +31,15 @@ from gnosis.runner.replay_runner import (
 from gnosis.runner.retry import RetryPolicy
 
 _FAST_RETRY = RetryPolicy(max_attempts=1, backoff_base_s=0.01, backoff_factor=2.0, max_backoff_s=0.02)
+
+# Every task now needs deterministic verification to reach COMPLETED: the
+# engine refuses a verifier-less run before it launches anything, and
+# `completion_is_evidenced` refuses the transition without a passing
+# result (F-34). This is REAL verification — a child process and the exit
+# code the OS reports — not a stand-in that says "passed" without looking,
+# which is the fixture mistake L-0013 was earned on.
+_PASSING_VERIFIER = CommandVerifier(
+    "always-pass", [sys.executable, "-c", "raise SystemExit(0)"])
 
 
 class _ScriptedRunner:
@@ -291,7 +302,7 @@ class TestBriefReplayEndToEnd(_ReplayRunnerTestCase):
         recording = self._orchestrator(
             ReplayingCLIRunner(InteractionStore(self.cassette, ReplayMode.RECORD), inner=live))
         self._drop_brief(recording, "BRIEF-REC")
-        recorded = recording.run_pending()
+        recorded = recording.run_pending(verifier=_PASSING_VERIFIER)
         self.assertEqual(live.calls, 1)
         self.assertEqual(
             recording.records.get("BRIEF-REC").state, BriefRecordState.COMPLETED.value)
@@ -309,7 +320,7 @@ class TestBriefReplayEndToEnd(_ReplayRunnerTestCase):
                 retry_policy=_FAST_RETRY),
         )
         self._drop_brief(replaying, "BRIEF-REC")
-        replayed = replaying.run_pending()
+        replayed = replaying.run_pending(verifier=_PASSING_VERIFIER)
 
         self.assertEqual(
             replaying.records.get("BRIEF-REC").state, BriefRecordState.COMPLETED.value)
@@ -443,7 +454,7 @@ class TestFailuresAndCorruption(_ReplayRunnerTestCase):
                               source=BriefSource.MANUAL)
         (orchestrator.inbox.layout.inbox / "B1.json").write_text(
             json.dumps(brief.to_dict()), encoding="utf-8")
-        outcomes = orchestrator.run_pending()
+        outcomes = orchestrator.run_pending(verifier=_PASSING_VERIFIER)
         self.assertTrue(outcomes[0].accepted)
         self.assertTrue(self.cassette.exists())
 

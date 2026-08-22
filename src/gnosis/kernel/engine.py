@@ -54,6 +54,13 @@ from .verification import VerificationResult, Verifier
 from .worktree import WorktreeError, WorktreeHandle, WorktreeManager
 
 AGENT_RUN_INTERVENTION_POINT = "before_agent_run"
+# What an operator is told when a run produced no verification evidence at
+# all. Distinct from "verification failed", which is evidence.
+NO_EVIDENCE_PROBLEM = (
+    "The verifier returned no VerificationResult, so this run produced no "
+    "verification evidence. The task is not COMPLETED: absence of evidence "
+    "is not success (constitution rule 2)."
+)
 # The mode the CLI runner actually defaults to. Stated as a constant so
 # the value the rules are shown cannot drift from the value used.
 DEFAULT_PERMISSION_MODE = "plan"
@@ -243,6 +250,37 @@ def agent_launch_snapshot(
     )
 
 
+def completion_is_evidenced(verification: VerificationResult | None) -> bool:
+    """The single authority for `TaskState.COMPLETED`. Nothing else decides.
+
+    Constitution rule 2: no task reaches DONE without evidence. This
+    function is where that stops being a sentence and becomes a
+    predicate, and it lives at the lowest point that can authorise the
+    transition rather than at each caller — a guarantee every caller has
+    to remember is a guarantee that lasts until the first caller who does
+    not (F-34, and the same shape as L-0035).
+
+    What it refuses, and why each refusal is load-bearing:
+
+    - **`None`.** The predecessor of this function read
+      ``verification_result.passed if verification_result else True``,
+      which converted "nobody checked" into "it passed". Absence of
+      evidence is not success; it is the absence of the only thing that
+      could authorise a DONE, and a bare CLI exit code is the agent's own
+      opinion of its work.
+    - **Anything that is not a `VerificationResult`.** `Verifier` is an
+      ABC but a duck-typed one costs nothing to pass, and a stand-in that
+      returns `None` — or a truthy object — must not be able to mint a
+      DONE the kernel cannot read. Typing is not enforcement (L-0039).
+    - **A `passed` that is not exactly `True`.** `bool` IS an `int` in
+      Python, so `1`, a non-empty string and every other truthy value
+      would pass a bare check. The taxonomy already had to learn this for
+      exit codes (`failures.py`); the same care applies to the flag that
+      closes a task.
+    """
+    return isinstance(verification, VerificationResult) and verification.passed is True
+
+
 def _report_status(task_state: TaskState,
                    classifications: Sequence[FailureClassification]) -> ReportStatus:
     """Give an escalation its own channel.
@@ -423,7 +461,14 @@ class TaskEngine:
         objective: str,
         prompt: str,
         repo_path: Path,
-        verifier: Verifier | None = None,
+        # REQUIRED, and deliberately without a default. A default of None
+        # is what let the ungoverned path reach COMPLETED on a bare exit
+        # code (F-34): the parameter announced that verification was
+        # optional, and every caller that took it at its word produced an
+        # unevidenced DONE. Removing the default makes mypy name each
+        # omission at the call site instead of letting it surface as a
+        # green run that proved nothing.
+        verifier: Verifier,
         timeout_s: float = 1800.0,
         cancellation_token: CancellationToken | None = None,
         mcp: McpRunnerConfig | None = None,
@@ -443,6 +488,26 @@ class TaskEngine:
         # credential behaviour this engine has always had.
         launch_env: Mapping[str, str] | None = None,
     ) -> TaskExecutionOutcome:
+        # FAIL CLOSED FIRST, before anything is spent. This check used to
+        # live inside `if authority is not None`, which made "no DONE
+        # without evidence" a property of GOVERNED runs rather than of the
+        # engine — and the default DirectorOrchestrator supplies no
+        # authority, so the constitution's most absolute rule was off by
+        # default on the path real briefs travel (F-34).
+        #
+        # It is the first statement in the method on purpose: no claim is
+        # acquired, no worktree is minted, no policy verdict is spent and
+        # above all no agent is launched for work that could never
+        # legitimately complete. Refusing here is free; refusing after the
+        # child has run costs a launch and leaves a half-finished task.
+        if verifier is None:
+            raise ValueError(
+                "TaskEngine.execute_task requires a verifier: a task reaches "
+                "COMPLETED only on deterministic verification evidence "
+                "(constitution rule 2). A bare CLI exit code is the agent's "
+                "own opinion of its work, not a check of it."
+            )
+
         # Two-plane ownership (Directive 4 / ADR-0006): when a WorkAuthority
         # is supplied, this engine invocation must hold the durable claim
         # and the live lease for the task, and re-proves both before every
@@ -454,16 +519,6 @@ class TaskEngine:
         if authority is not None:
             if not worker_id:
                 raise ValueError("worker_id is required when a WorkAuthority is supplied")
-            if verifier is None:
-                # Resolving a claim is the durable DONE, and the
-                # constitution is absolute: no DONE without evidence. A
-                # bare CLI exit code is not evidence (Codex review,
-                # INVALID DONE finding). Callers must choose a verifier
-                # consciously — even a cheap one — or run ungoverned.
-                raise ValueError(
-                    "a WorkAuthority-governed task requires a verifier: "
-                    "claims resolve to DONE only on verification evidence"
-                )
             grant = authority.acquire(task_id, worker_id, ttl_s=lease_ttl_s)
             if cancellation_token is None:
                 # Deposition detected mid-run cancels the child process
@@ -679,7 +734,11 @@ class TaskEngine:
         objective: str,
         prompt: str,
         repo_path: Path,
-        verifier: Verifier | None,
+        # Non-optional here too: `execute_task` has already refused a
+        # missing one, and leaving the type nullable downstream would
+        # reintroduce the branch that decided what to do when nobody
+        # checked.
+        verifier: Verifier,
         timeout_s: float,
         cancellation_token: CancellationToken | None,
         mcp: McpRunnerConfig | None,
@@ -964,16 +1023,47 @@ class TaskEngine:
         cli_succeeded = bool(last_result and last_result.succeeded)
         verification_result: VerificationResult | None = None
 
+        # Whether the verifier produced nothing readable. Distinct from
+        # "it failed": a failing verifier IS evidence and its excerpt is
+        # worth reporting, while a verifier that returned no
+        # VerificationResult left the task with no evidence at all, and
+        # the two must not read alike in the report.
+        evidence_missing = False
+
         if cli_succeeded:
             task_sm.transition(TaskState.VERIFYING)
-            if verifier is not None:
-                verification_result = verifier.run(exec_root)
-                if latest_run_id:
-                    store.ledger_for(latest_run_id).append(
-                        latest_run_id, "task.verification_result", verification_result.to_dict(),
-                    )
-            verification_passed = verification_result.passed if verification_result else True
-            task_sm.transition(TaskState.COMPLETED if verification_passed else TaskState.FAILED)
+            # Typed `object` on purpose. `Verifier.run` DECLARES a
+            # VerificationResult, and mypy therefore proves the branch
+            # below unreachable — which is precisely the assumption
+            # L-0039 says not to rely on: a duck-typed verifier satisfies
+            # no ABC and mypy cannot see it. Widening the annotation makes
+            # the runtime check honest instead of dead code the type
+            # checker deletes.
+            produced: object = verifier.run(exec_root)
+            if isinstance(produced, VerificationResult):
+                verification_result = produced
+            else:
+                # A duck-typed verifier that answers with anything else
+                # collected no evidence. It is recorded as such rather
+                # than coerced into a verdict nobody gave — the same rule
+                # the convergence loop applies to an unreadable review.
+                evidence_missing = True
+            if latest_run_id:
+                store.ledger_for(latest_run_id).append(
+                    latest_run_id, "task.verification_result",
+                    verification_result.to_dict() if verification_result is not None
+                    else {"passed": False, "name": type(verifier).__name__,
+                          "evidence": "the verifier returned no VerificationResult"},
+                )
+            # THE authorisation point for a DONE, and the only one. The
+            # predicate is a named function so that restoring the old
+            # `... if verification_result else True` is a visible edit to
+            # a documented invariant rather than a one-word change inside
+            # an expression (F-34).
+            task_sm.transition(
+                TaskState.COMPLETED if completion_is_evidenced(verification_result)
+                else TaskState.FAILED
+            )
         else:
             task_sm.transition(TaskState.FAILED)
 
@@ -993,6 +1083,8 @@ class TaskEngine:
                 problems = (redact(tail),) if tail.strip() else ()
         elif verification_result is not None and not verification_result.passed:
             problems = (redact(verification_result.stderr_excerpt),)
+        elif evidence_missing:
+            problems = (NO_EVIDENCE_PROBLEM,)
 
         report = EngineerReport(
             task_id=task_id,
@@ -1002,7 +1094,10 @@ class TaskEngine:
             work_completed=(f"Executed {len(run_ids)} run attempt(s) via the Claude Code CLI runner.",),
             verification=(
                 (f"{verification_result.name}: " + ("PASSED" if verification_result.passed else "FAILED"),)
-                if verification_result else ("No verifier supplied.",)
+                if verification_result is not None
+                else ("No verification evidence was produced; the task is not complete.",)
+                if evidence_missing
+                else ("Not reached: the agent run did not succeed.",)
             ),
             problems_encountered=problems,
             recommended_next_step=(

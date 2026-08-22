@@ -7,6 +7,7 @@ and a restart actually sees it.
 """
 import json
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -37,10 +38,16 @@ from gnosis.kernel.scheduler import (
     holds_summary,
 )
 from gnosis.kernel.state_machine import RunState
+from gnosis.kernel.verification import CommandVerifier
 from gnosis.runner.capture import ExecutionResult
 from gnosis.runner.retry import RetryPolicy
 
 _FAST_RETRY = RetryPolicy(max_attempts=1, backoff_base_s=0.01, backoff_factor=2.0, max_backoff_s=0.02)
+
+# A real deterministic check — a child process and the exit code the OS
+# reports — because a task cannot reach COMPLETED without one (F-34).
+_PASSING_VERIFIER = CommandVerifier(
+    "always-pass", [sys.executable, "-c", "raise SystemExit(0)"])
 
 
 class _Runner:
@@ -101,6 +108,11 @@ class _SchedulerTestCase(unittest.TestCase):
         )
 
     def _submit(self, scheduler, task_id="TASK-1", **kwargs):
+        # Verification is no longer optional anywhere: the engine refuses
+        # a verifier-less task before it launches (F-34). Scheduler tests
+        # are about the HOLD plane, so they supply a real cheap check
+        # rather than opting out of the evidence rule.
+        kwargs.setdefault("verifier", _PASSING_VERIFIER)
         return scheduler.submit(
             task_id=task_id, objective="Demo", prompt="do it",
             repo_path=self.repo, **kwargs,

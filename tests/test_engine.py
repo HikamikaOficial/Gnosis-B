@@ -35,6 +35,15 @@ from gnosis.runner.retry import RetryPolicy
 
 _FAST_RETRY = RetryPolicy(max_attempts=3, backoff_base_s=0.01, backoff_factor=2.0, max_backoff_s=0.02)
 
+# Every task now needs deterministic verification to reach COMPLETED: the
+# engine refuses a verifier-less run before it launches anything, and
+# `completion_is_evidenced` refuses the transition without a passing
+# result (F-34). This is REAL verification — a child process and the exit
+# code the OS reports — not a stand-in that says "passed" without looking,
+# which is the fixture mistake L-0013 was earned on.
+_PASSING_VERIFIER = CommandVerifier(
+    "always-pass", [sys.executable, "-c", "raise SystemExit(0)"])
+
 
 class _FakeCliRunner:
     """Duck-types ClaudeCodeCLIRunner.run() without shelling out to claude,
@@ -77,6 +86,7 @@ class TestTaskEngine(unittest.TestCase):
         engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
         outcome = engine.execute_task(
             task_id="TASK-1", objective="Demo", prompt="do it", repo_path=self.repo,
+            verifier=_PASSING_VERIFIER,
         )
         self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
         self.assertEqual(len(outcome.run_ids), 1)
@@ -89,6 +99,7 @@ class TestTaskEngine(unittest.TestCase):
         )
         outcome = engine.execute_task(
             task_id="TASK-2", objective="Demo", prompt="do it", repo_path=self.repo,
+            verifier=_PASSING_VERIFIER,
         )
         self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
         self.assertEqual(len(outcome.run_ids), 3)
@@ -100,6 +111,7 @@ class TestTaskEngine(unittest.TestCase):
         )
         outcome = engine.execute_task(
             task_id="TASK-3", objective="Demo", prompt="do it", repo_path=self.repo,
+            verifier=_PASSING_VERIFIER,
         )
         self.assertEqual(outcome.final_task_state, TaskState.FAILED)
         self.assertEqual(len(outcome.run_ids), 3)
@@ -119,6 +131,7 @@ class TestTaskEngine(unittest.TestCase):
         engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
         outcome = engine.execute_task(
             task_id="TASK-MCP", objective="Demo", prompt="do it", repo_path=self.repo, mcp=cfg,
+            verifier=_PASSING_VERIFIER,
         )
         events = self.store.ledger_for(outcome.run_ids[-1]).read_all()
         started = next(e for e in events if e.event_type == "run.attempt_started")
@@ -128,6 +141,7 @@ class TestTaskEngine(unittest.TestCase):
         engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
         outcome = engine.execute_task(
             task_id="TASK-NOMCP", objective="Demo", prompt="do it", repo_path=self.repo,
+            verifier=_PASSING_VERIFIER,
         )
         events = self.store.ledger_for(outcome.run_ids[-1]).read_all()
         started = next(e for e in events if e.event_type == "run.attempt_started")
@@ -137,6 +151,7 @@ class TestTaskEngine(unittest.TestCase):
         engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
         outcome = engine.execute_task(
             task_id="TASK-5", objective="Demo", prompt="do it", repo_path=self.repo,
+            verifier=_PASSING_VERIFIER,
         )
         git_dir = self.store.paths_for(outcome.run_ids[-1]).git_dir
         self.assertTrue((git_dir / "pre.json").exists())
@@ -178,6 +193,7 @@ class TestFailureTaxonomyWiring(unittest.TestCase):
         engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
         outcome = engine.execute_task(
             task_id="TASK-CLS", objective="Demo", prompt="do it", repo_path=self.repo,
+            verifier=_PASSING_VERIFIER,
         )
         events = self.store.ledger_for(outcome.run_ids[-1]).read_all()
         classified = next(e for e in events if e.event_type == "run.attempt_classified")
@@ -196,6 +212,7 @@ class TestFailureTaxonomyWiring(unittest.TestCase):
         )
         outcome = engine.execute_task(
             task_id="TASK-RL", objective="Demo", prompt="do it", repo_path=self.repo,
+            verifier=_PASSING_VERIFIER,
         )
         self.assertEqual(outcome.classification.failure.value, "RATE_LIMITED")
         self.assertEqual(len(outcome.run_ids), 1)  # parked, not retried 3x
@@ -211,6 +228,7 @@ class TestFailureTaxonomyWiring(unittest.TestCase):
         )
         outcome = engine.execute_task(
             task_id="TASK-PARK", objective="Demo", prompt="do it", repo_path=self.repo,
+            verifier=_PASSING_VERIFIER,
         )
         meta = self.store.read_meta(outcome.run_ids[-1])
         self.assertEqual(meta.state, RunState.RATE_LIMITED.value)
@@ -240,6 +258,7 @@ class TestFailureTaxonomyWiring(unittest.TestCase):
         )
         outcome = engine.execute_task(
             task_id="TASK-ESC", objective="Demo", prompt="do it", repo_path=self.repo,
+            verifier=_PASSING_VERIFIER,
         )
         self.assertEqual(outcome.classification.failure.value, "UNCLASSIFIED")
         self.assertEqual(outcome.report.status, ReportStatus.ESCALATION_REQUIRED)
@@ -251,6 +270,7 @@ class TestFailureTaxonomyWiring(unittest.TestCase):
         )
         outcome = engine.execute_task(
             task_id="TASK-RETRY", objective="Demo", prompt="do it", repo_path=self.repo,
+            verifier=_PASSING_VERIFIER,
         )
         self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
         self.assertEqual(len(outcome.run_ids), 3)
@@ -291,6 +311,7 @@ class TestPolicyGate(unittest.TestCase):
             task_id="TASK-POL", objective="Demo", prompt="do it",
             repo_path=self.repo, policy=policy, approvals=approvals,
             policy_actor="agent://worker-a",
+            verifier=_PASSING_VERIFIER,
         )
 
     def test_allow_lets_the_run_proceed_and_records_the_verdict(self):
@@ -367,6 +388,7 @@ class TestPolicyGate(unittest.TestCase):
             task_id="TASK-POL", objective="Demo", prompt="do something ELSE",
             repo_path=self.repo, policy=policy, approvals=approvals,
             policy_actor="agent://worker-a",
+            verifier=_PASSING_VERIFIER,
         )
         self.assertEqual(other.final_task_state, TaskState.ESCALATED)
         self.assertEqual(other.report.status, ReportStatus.ESCALATION_REQUIRED)
@@ -395,6 +417,7 @@ class TestPolicyGate(unittest.TestCase):
             repo_path=self.repo, policy=self._engine_with(capture),
             mcp=McpRunnerConfig(config_paths=("tools/dangerous.json",)),
             policy_actor="agent://worker-a",
+            verifier=_PASSING_VERIFIER,
         )
         intent = seen[0].intent
         self.assertTrue(intent.has_flag("--mcp-config"))
@@ -419,6 +442,7 @@ class TestPolicyGate(unittest.TestCase):
             task_id="TASK-POL", objective="Demo", prompt="do it", repo_path=self.repo,
             policy=self._engine_with(lambda s: RuleOutcome(Verdict.DENY, "security:no")),
             worktrees=worktrees, policy_actor="agent://worker-a",
+            verifier=_PASSING_VERIFIER,
         )
         self.assertFalse(worktrees.planned_path("TASK-POL").exists())
         branches = subprocess.run(
@@ -445,6 +469,7 @@ class TestPolicyGate(unittest.TestCase):
             task_id="TASK-POL", objective="Demo", prompt="do it", repo_path=self.repo,
             policy=self._engine_with(lambda s: RuleOutcome(Verdict.DENY, "security:no")),
             worktrees=worktrees, policy_actor="agent://worker-a",
+            verifier=_PASSING_VERIFIER,
         )
         self.assertTrue((Path(handle.path) / "prior_work.txt").exists())
 
@@ -464,6 +489,7 @@ class TestPolicyGate(unittest.TestCase):
             policy=self._engine_with(lambda s: RuleOutcome(Verdict.DENY, "security:no")),
             code_intelligence=provider, focus_symbols=["compute"],
             policy_actor="agent://worker-a",
+            verifier=_PASSING_VERIFIER,
         )
         self.assertEqual(runner.calls, 0)
         self.assertEqual(provider.index_calls, [])    # no subprocess at all
@@ -487,6 +513,7 @@ class TestPolicyGate(unittest.TestCase):
             policy=self._engine_with(capture),
             code_intelligence=_FakeCodeIntelligenceProvider(), focus_symbols=["compute"],
             policy_actor="agent://worker-a",
+            verifier=_PASSING_VERIFIER,
         )
         self.assertEqual(seen, ["pre_context", "final_prompt"])
 
@@ -526,6 +553,7 @@ class TestPolicyGate(unittest.TestCase):
                 policy=self._engine_with(capture),
                 mcp=McpRunnerConfig(config_paths=(str(config),)),
                 policy_actor="agent://worker-a",
+                verifier=_PASSING_VERIFIER,
             )
 
         run()
@@ -588,6 +616,7 @@ class TestPolicyGate(unittest.TestCase):
             task_id="TASK-POL", objective="Demo", prompt="do it", repo_path=self.repo,
             worktrees=worktrees, policy_actor="agent://worker-a",
             policy=self._engine_with(lambda s: RuleOutcome(Verdict.DENY, "security:no")),
+            verifier=_PASSING_VERIFIER,
         )
         self.assertFalse(worktrees.exists("TASK-POL"))
         self.assertFalse(worktrees.planned_path("TASK-POL").exists())
@@ -617,6 +646,7 @@ class TestPolicyGate(unittest.TestCase):
             task_id="TASK-POL", objective="Demo", prompt="do it", repo_path=self.repo,
             worktrees=worktrees, policy=self._engine_with(capture),
             policy_actor="agent://worker-a",
+            verifier=_PASSING_VERIFIER,
         )
         planned = str(worktrees.planned_path("TASK-POL"))
         self.assertEqual(seen[0].context["exec_root"], planned)
@@ -639,6 +669,7 @@ class TestPolicyGate(unittest.TestCase):
         engine.execute_task(
             task_id="TASK-POL", objective="Demo", prompt="do it", repo_path=self.repo,
             policy=self._engine_with(capture), policy_actor="agent://worker-a",
+            verifier=_PASSING_VERIFIER,
         )
         self.assertIn("attempt_2", seen)
 
@@ -658,6 +689,7 @@ class TestPolicyGate(unittest.TestCase):
         outcome = engine.execute_task(
             task_id="TASK-POL", objective="Demo", prompt="do it", repo_path=self.repo,
             policy=self._engine_with(deny_after_first), policy_actor="agent://worker-a",
+            verifier=_PASSING_VERIFIER,
         )
         self.assertEqual(runner.calls, 1)          # attempt 2 never launched
         self.assertEqual(outcome.classification.reason_code, "security:revoked")
@@ -683,6 +715,7 @@ class TestPolicyGate(unittest.TestCase):
             task_id="TASK-POL", objective="Demo", prompt="do it", repo_path=self.repo,
             mcp=McpRunnerConfig(config_paths=(str(config),)),
             policy=self._engine_with(capture), policy_actor="agent://worker-a",
+            verifier=_PASSING_VERIFIER,
         )
         self.assertNotEqual(fingerprints[0], fingerprints[-1])
 
@@ -703,6 +736,7 @@ class TestPolicyGate(unittest.TestCase):
                 task_id="TASK-POL", objective="Demo", prompt="do it",
                 repo_path=self.repo, policy=self._engine_with(capture),
                 policy_actor="agent://worker-a",
+                verifier=_PASSING_VERIFIER,
             )
 
         run_once()
@@ -726,6 +760,7 @@ class TestPolicyGate(unittest.TestCase):
             policy=self._engine_with(lambda s: RuleOutcome(Verdict.ALLOW, "ok:seen")),
             code_intelligence=_FakeCodeIntelligenceProvider(), focus_symbols=["compute"],
             policy_actor="agent://worker-a",
+            verifier=_PASSING_VERIFIER,
         )
         events = self.store.ledger_for(outcome.run_ids[-1]).read_all()
         decisions = [e for e in events if e.event_type == "policy.decision"]
@@ -750,6 +785,7 @@ class TestPolicyGate(unittest.TestCase):
         outcome = engine.execute_task(
             task_id="TASK-UNGOVERNED", objective="Demo", prompt="do it",
             repo_path=self.repo,
+            verifier=_PASSING_VERIFIER,
         )
         events = [e.event_type for e in self.store.ledger_for(outcome.run_ids[-1]).read_all()]
         self.assertIn("policy.ungoverned", events)
@@ -761,6 +797,7 @@ class TestPolicyGate(unittest.TestCase):
         engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
         outcome = engine.execute_task(
             task_id="TASK-FREE", objective="Demo", prompt="do it", repo_path=self.repo,
+            verifier=_PASSING_VERIFIER,
         )
         self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
         events = [e.event_type for e in self.store.ledger_for(outcome.run_ids[-1]).read_all()]
@@ -912,15 +949,22 @@ class TestTaskEngineWorkAuthority(unittest.TestCase):
         self.assertIsNone(self.leases.current("task/TASK-AUTH"))
 
     def test_verifier_required_with_authority(self):
-        # No DONE without evidence: an authority-governed run without a
-        # verifier is refused at entry (Codex review, INVALID DONE).
+        # No DONE without evidence: a run without a verifier is refused at
+        # entry (Codex review, INVALID DONE). The refusal used to be
+        # conditional on `authority is not None`, which made the rule a
+        # property of governed runs rather than of the engine (F-34) — it
+        # is now unconditional, and this test keeps the governed half of
+        # the guarantee pinned: refused BEFORE the claims plane is
+        # touched, so nothing has to be recovered.
         engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
         with self.assertRaises(ValueError):
             engine.execute_task(
                 task_id="TASK-AUTH", objective="Demo", prompt="do it",
                 repo_path=self.repo, authority=self.authority, worker_id="worker-a",
+                verifier=None,
             )
         self.assertIsNone(self.claims.get("TASK-AUTH"))  # nothing was claimed
+        self.assertIsNone(self.leases.current("task/TASK-AUTH"))  # and no lease
 
     def test_worker_id_required_with_authority(self):
         engine = TaskEngine(run_store=self.store, cli_runner=_FakeCliRunner(["succeed"]))
@@ -1197,6 +1241,7 @@ class TestTaskEngineWorktreeIsolation(unittest.TestCase):
         outcome = engine.execute_task(
             task_id="TASK-FREE", objective="Demo", prompt="do it", repo_path=self.repo,
             worktrees=self.worktrees,
+            verifier=_PASSING_VERIFIER,
         )
         self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
         handle = self.worktrees.load_handle("TASK-FREE")
@@ -1452,6 +1497,7 @@ class TestTaskEngineCodeIntelligence(unittest.TestCase):
         engine = TaskEngine(run_store=self.store, cli_runner=cli)
         outcome = engine.execute_task(
             task_id="TASK-CI-0", objective="Demo", prompt="do it", repo_path=self.repo,
+            verifier=_PASSING_VERIFIER,
         )
         self.assertEqual(cli.prompts_seen, ["do it"])
         events = self.store.ledger_for(outcome.run_ids[-1]).read_all()
@@ -1464,6 +1510,7 @@ class TestTaskEngineCodeIntelligence(unittest.TestCase):
         engine.execute_task(
             task_id="TASK-CI-1", objective="Demo", prompt="do it", repo_path=self.repo,
             code_intelligence=provider, focus_symbols=["entrypoint"],
+            verifier=_PASSING_VERIFIER,
         )
         self.assertEqual(len(cli.prompts_seen), 1)
         self.assertIn("relevant context for entrypoint", cli.prompts_seen[0])
@@ -1477,6 +1524,7 @@ class TestTaskEngineCodeIntelligence(unittest.TestCase):
         outcome = engine.execute_task(
             task_id="TASK-CI-2", objective="Demo", prompt="do it", repo_path=self.repo,
             code_intelligence=provider, focus_symbols=["entrypoint", "helper"],
+            verifier=_PASSING_VERIFIER,
         )
         run_id = outcome.run_ids[-1]
         events = self.store.ledger_for(run_id).read_all()
@@ -1498,6 +1546,7 @@ class TestTaskEngineCodeIntelligence(unittest.TestCase):
         outcome = engine.execute_task(
             task_id="TASK-CI-3", objective="Demo", prompt="do it", repo_path=self.repo,
             code_intelligence=provider, focus_symbols=["entrypoint"],
+            verifier=_PASSING_VERIFIER,
         )
         self.assertEqual(outcome.final_task_state, TaskState.COMPLETED)
         self.assertEqual(cli.prompts_seen, ["do it"])  # no context to prepend, provider was down
@@ -1514,6 +1563,7 @@ class TestTaskEngineCodeIntelligence(unittest.TestCase):
         engine.execute_task(
             task_id="TASK-CI-4", objective="Demo", prompt="do it", repo_path=self.repo,
             code_intelligence=provider, focus_symbols=["entrypoint", "broken_symbol"],
+            verifier=_PASSING_VERIFIER,
         )
         self.assertIn("relevant context for entrypoint", cli.prompts_seen[0])
         self.assertNotIn("relevant context for broken_symbol", cli.prompts_seen[0])
@@ -1525,6 +1575,7 @@ class TestTaskEngineCodeIntelligence(unittest.TestCase):
         engine.execute_task(
             task_id="TASK-CI-5", objective="Demo", prompt="do it", repo_path=self.repo,
             code_intelligence=provider, focus_symbols=["entrypoint"],
+            verifier=_PASSING_VERIFIER,
         )
         self.assertIn("may be stale", cli.prompts_seen[0])
 
@@ -1537,6 +1588,7 @@ class TestTaskEngineCodeIntelligence(unittest.TestCase):
         outcome = engine.execute_task(
             task_id="TASK-CI-6", objective="Demo", prompt="do it", repo_path=self.repo,
             code_intelligence=provider, focus_symbols=["entrypoint"],
+            verifier=_PASSING_VERIFIER,
         )
         self.assertEqual(len(outcome.run_ids), 3)
         self.assertEqual(provider.explore_calls, ["entrypoint"])  # gathered once, not per retry
@@ -1553,6 +1605,7 @@ class TestTaskEngineCodeIntelligence(unittest.TestCase):
         outcome = engine.execute_task(
             task_id="TASK-CI-7", objective="Demo", prompt="do it", repo_path=self.repo,
             code_intelligence=provider, focus_symbols=["entrypoint"], max_context_chars=5,
+            verifier=_PASSING_VERIFIER,
         )
         run_id = outcome.run_ids[-1]
         events = self.store.ledger_for(run_id).read_all()

@@ -57,6 +57,11 @@ class DirectorOrchestrator:
         repo_path: Path,
         task_engine: TaskEngine | None = None,
         prompt_builder: Callable[[DirectorBrief], str] | None = None,
+        # The default verifier for every brief this orchestrator runs.
+        # `run_pending` may still be handed one per call; what neither can
+        # do is leave both unset and still execute, because a brief that
+        # completes on a bare exit code is an unevidenced DONE (F-34).
+        verifier: Verifier | None = None,
         authority: WorkAuthority | None = None,
         worker_id: str | None = None,
         worktrees: WorktreeManager | None = None,
@@ -75,6 +80,7 @@ class DirectorOrchestrator:
         # decision left to the caller; default is a simple, literal
         # rendering good enough for M1 plumbing tests.
         self.prompt_builder = prompt_builder or _default_prompt_builder
+        self.verifier = verifier
         # Governed mode (ADR-0006..0008 follow-up): when a WorkAuthority is
         # configured, every brief execution runs under a fenced grant (the
         # engine enforces the verifier-required evidence gate) and, when a
@@ -124,6 +130,24 @@ class DirectorOrchestrator:
         self.policy_actor = policy_actor or worker_id
 
     def run_pending(self, verifier: Verifier | None = None) -> list[IngestOutcome]:
+        # Refuse BEFORE consuming anything. The engine already refuses a
+        # verifier-less task, but by then the brief has been claimed out
+        # of the inbox and has a durable record, so the refusal costs work
+        # that has to be recovered. Asking here means an unverifiable
+        # configuration cannot take a brief out of circulation at all.
+        #
+        # This is defence in depth, not the guarantee: the guarantee is
+        # `completion_is_evidenced` in the engine, at the lowest point
+        # that can authorise a DONE. A rule enforced only where callers
+        # remember to enforce it is documentation (L-0035).
+        effective_verifier = verifier if verifier is not None else self.verifier
+        if effective_verifier is None:
+            raise ValueError(
+                "DirectorOrchestrator.run_pending requires a verifier: a brief "
+                "cannot report COMPLETED on a bare CLI exit code (constitution "
+                "rule 2). Pass one to run_pending(), or give the orchestrator a "
+                "default at construction. No brief has been consumed."
+            )
         outcomes: list[IngestOutcome] = []
         for path in self.inbox.list_pending():
             claim = self.inbox.claim(path)
@@ -132,10 +156,11 @@ class DirectorOrchestrator:
                 continue
             # An accepted claim always carries a brief; cast is a typing-only
             # no-op that tells mypy what ClaimResult.accepted guarantees.
-            outcomes.append(self._execute_brief(cast(DirectorBrief, claim.brief), verifier=verifier))
+            outcomes.append(self._execute_brief(
+                cast(DirectorBrief, claim.brief), verifier=effective_verifier))
         return outcomes
 
-    def _execute_brief(self, brief: DirectorBrief, verifier: Verifier | None) -> IngestOutcome:
+    def _execute_brief(self, brief: DirectorBrief, verifier: Verifier) -> IngestOutcome:
         task_id = new_task_id()
         self.records.create(brief.brief_id, task_id, BriefRecordState.ASSIGNED)
         self.records.update(brief.brief_id, state=BriefRecordState.IN_PROGRESS)

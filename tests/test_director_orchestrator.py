@@ -27,6 +27,15 @@ from gnosis.runner.retry import RetryPolicy
 
 _FAST_RETRY = RetryPolicy(max_attempts=2, backoff_base_s=0.01, backoff_factor=2.0, max_backoff_s=0.02)
 
+# Every task now needs deterministic verification to reach COMPLETED: the
+# engine refuses a verifier-less run before it launches anything, and
+# `completion_is_evidenced` refuses the transition without a passing
+# result (F-34). This is REAL verification — a child process and the exit
+# code the OS reports — not a stand-in that says "passed" without looking,
+# which is the fixture mistake L-0013 was earned on.
+_PASSING_VERIFIER = CommandVerifier(
+    "always-pass", [sys.executable, "-c", "raise SystemExit(0)"])
+
 
 class _FakeCliRunner:
     def __init__(self, outcomes):
@@ -83,7 +92,7 @@ class TestDirectorOrchestrator(unittest.TestCase):
         self._drop_brief(_make_brief("BRIEF-1"))
         orch = self._orchestrator(outcomes=["succeed"])
 
-        outcomes = orch.run_pending()
+        outcomes = orch.run_pending(verifier=_PASSING_VERIFIER)
 
         self.assertEqual(len(outcomes), 1)
         self.assertTrue(outcomes[0].accepted)
@@ -99,7 +108,7 @@ class TestDirectorOrchestrator(unittest.TestCase):
         self._drop_brief(_make_brief("BRIEF-1"))
         orch = self._orchestrator(outcomes=["fail", "fail"])
 
-        orch.run_pending()
+        orch.run_pending(verifier=_PASSING_VERIFIER)
 
         record = orch.records.get("BRIEF-1")
         self.assertEqual(record.state, BriefRecordState.FAILED.value)
@@ -112,13 +121,13 @@ class TestDirectorOrchestrator(unittest.TestCase):
         )
         orch = DirectorOrchestrator(self.director_root, self.run_store, self.repo, task_engine=engine)
 
-        first_pass = orch.run_pending()
+        first_pass = orch.run_pending(verifier=_PASSING_VERIFIER)
         self.assertEqual(len(first_pass), 1)
         self.assertTrue(first_pass[0].accepted)
 
         # Re-drop the exact same brief_id (simulating a re-sent brief).
         self._drop_brief(brief)
-        second_pass = orch.run_pending()
+        second_pass = orch.run_pending(verifier=_PASSING_VERIFIER)
 
         self.assertEqual(len(second_pass), 1)
         self.assertFalse(second_pass[0].accepted)
@@ -247,6 +256,21 @@ class TestGovernedOrchestrator(unittest.TestCase):
         # Deposition / workspace failure / precondition violations are
         # EXPECTED in governed mode: the brief must end FAILED and visible,
         # and the rest of the batch must still run (adversarial review).
+        #
+        # This test used to provoke the engine by withholding a verifier.
+        # That route is gone: `run_pending` now refuses a verifier-less
+        # batch before consuming anything (F-34), so a missing verifier
+        # can no longer reach the engine at all. The behaviour under test
+        # is unchanged and still worth pinning, so the provocation moved
+        # to another precondition of the same class — a WorktreeManager
+        # rooted on a DIFFERENT repository than the one the brief names,
+        # which the engine refuses rather than silently executing,
+        # verifying and reporting against the wrong tree.
+        foreign_repo = self.root / "foreign"
+        foreign_repo.mkdir()
+        subprocess.run(["git", "init"], cwd=foreign_repo, check=True, capture_output=True)
+        mismatched = WorktreeManager(foreign_repo, self.root / "foreign-worktrees")
+
         self._drop_brief("BRIEF-GOV-BAD")
         self._drop_brief("BRIEF-GOV-OK")
         orch = DirectorOrchestrator(
@@ -257,11 +281,9 @@ class TestGovernedOrchestrator(unittest.TestCase):
                 retry_policy=_FAST_RETRY,
             ),
             authority=self.authority, worker_id="orchestrator-1",
-            worktrees=self.worktrees,
+            worktrees=mismatched,
         )
-        # No verifier: the engine's evidence gate refuses every governed
-        # brief with ValueError, the batch must survive it.
-        outcomes = orch.run_pending()
+        outcomes = orch.run_pending(verifier=self.verifier)
         self.assertEqual(len(outcomes), 2)
         self.assertTrue(all(o.accepted for o in outcomes))
         self.assertTrue(all("execution failed" in o.reason for o in outcomes))
@@ -326,7 +348,7 @@ class TestPolicyGatedOrchestrator(unittest.TestCase):
             policy=_point(lambda s: RuleOutcome(Verdict.DENY, "security:frozen")),
             policy_actor="agent://worker-a",
         )
-        outcomes = orch.run_pending()
+        outcomes = orch.run_pending(verifier=_PASSING_VERIFIER)
 
         self.assertEqual(runner.calls, 0)
         self.assertTrue(outcomes[0].accepted)   # the brief was handled...
@@ -346,7 +368,7 @@ class TestPolicyGatedOrchestrator(unittest.TestCase):
             runner,
             policy=_point(lambda s: RuleOutcome(Verdict.ALLOW, "ok:permitted")),
         )
-        orch.run_pending()
+        orch.run_pending(verifier=_PASSING_VERIFIER)
         self.assertEqual(runner.calls, 1)
         self.assertEqual(
             orch.records.get("BRIEF-POL-2").state, BriefRecordState.COMPLETED.value)
@@ -365,7 +387,7 @@ class TestPolicyGatedOrchestrator(unittest.TestCase):
         )
         self._drop_brief("BRIEF-BOOM")
         self._drop_brief("BRIEF-AFTER")
-        outcomes = orch.run_pending()
+        outcomes = orch.run_pending(verifier=_PASSING_VERIFIER)
 
         self.assertEqual(len(outcomes), 2)           # the batch survived
         record = orch.records.get("BRIEF-BOOM")
@@ -382,7 +404,7 @@ class TestPolicyGatedOrchestrator(unittest.TestCase):
     def test_a_report_is_never_visible_half_written(self):
         self._drop_brief("BRIEF-ATOMIC")
         orch = self._orchestrator(_FakeCliRunner(["succeed"]))
-        outcomes = orch.run_pending()
+        outcomes = orch.run_pending(verifier=_PASSING_VERIFIER)
         task_id = outcomes[0].task_id
         # No temp file survives, and the JSON parses as a whole document.
         leftovers = list(orch.inbox.layout.outbox.glob("*.tmp"))
