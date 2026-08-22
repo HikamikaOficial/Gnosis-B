@@ -1,0 +1,54 @@
+MUTATION CHECK — F-14, evidence binds bytes
+========================================================================
+targeted suite: tests/test_evidence_binding.py tests/test_git_evidence.py
+
+BASELINE (repair in place): exit=0  38 passed, 5 subtests passed in 45.37s
+
+MF1: the tree's identity is `git status --porcelain` again — a state and a name, never a content
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed in 1.26s
+  verdict: CAUGHT
+
+MF2: the before/after comparison is removed: two different fingerprints bind anyway
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 8 passed in 8.84s
+  verdict: CAUGHT
+
+MF3: an unavailable identity binds: a probe that could not answer reads as agreement
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 9 passed in 8.86s
+  verdict: CAUGHT
+
+MF4: the post fingerprint is taken BEFORE the checks, so the capture describes a tree nothing ran against
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 14 passed in 16.25s
+  verdict: CAUGHT
+
+MF5: the bundle is staged inside the repository again, so the evidence appears in its own post fingerprint
+  files:  scripts/capture_evidence.py
+  result: exit=1  1 failed, 32 passed in 43.93s
+  verdict: CAUGHT
+
+MF6: an untracked file whose bytes could not be read is still called an identified tree
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 7 passed in 6.79s
+  verdict: CAUGHT
+
+MF7: a failed git probe is accepted as an identity
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 4 passed in 6.90s
+  verdict: CAUGHT
+
+MF8: the summary reports a pass for evidence the binding refused (ADR-0025 round 2, transplanted onto this surface)
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 14 passed in 17.08s
+  verdict: CAUGHT
+
+MF9: a capture with no checks is allowed to report a result
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 12 passed in 13.43s
+  verdict: CAUGHT
+
+RESTORED: exit=0  38 passed, 5 subtests passed in 47.22s
+
+mutants: 9  survived/aborted: 0

@@ -13,8 +13,14 @@
 - Mutation check: `scripts/mutation_check_f14.py` — **nine mutants, none
   survived**, declared as data so a reviewer re-runs the claim rather
   than reading it.
-- Evidence: captured in the commit that follows this one, against the
-  clean tree this commit creates. See §Evidence.
+- Evidence: `.gnosis/evidence/20260822T212531Z/` — **910 passed, 62
+  subtests**, mypy strict clean over 56 source files, ruff at **19
+  findings against a baseline of 19** (0 added). Captured against a CLEAN
+  tree at commit `985023c`, tree
+  `75cb37715c2040fdc65c56c04ee552fb4f9bbb46`. This is the first bundle in
+  the project whose own `SUMMARY.json` states the identity of the tree it
+  ran against: `320dfc5ccebe8904194c78c474af7f1295d637f92f27805ae33555c520fcbf7c`,
+  before and after, `BOUND`, drift empty.
 - Scope: F-14 only. Of the 43 items in the frozen audit, 6 are PASS, 1 is
   closed (F-34) and 36 are open. This unit closes none of them — F-14
   included, which remains open pending review.
@@ -206,9 +212,65 @@ bytes.
 
 ## Evidence
 
-Captured in the commit that follows this one, bound to the clean tree
-this commit creates. The bundle carries, beyond the gate transcripts, the
-mutation transcript and a reproduction transcript for F-14 itself.
+`.gnosis/evidence/20260822T212531Z/` — **910 passed, 62 subtests**, mypy
+strict clean over 56 source files, ruff at 19 findings against a baseline
+of 19. Captured against a clean tree at `985023c` (tree `75cb3771`), and
+for the first time the binding is INSIDE the bundle rather than written
+around it by hand:
+
+```json
+"tree_identity": {
+  "binding": "BOUND", "identical": true, "drift": [],
+  "pre":  { "digest": "320dfc5ccebe8904…fcbf7c", "fingerprint": { … } },
+  "post": { "digest": "320dfc5ccebe8904…fcbf7c", "fingerprint": { … } }
+}
+```
+
+Both fingerprints are complete in the file: HEAD `985023c…`, branch,
+`status_sha256`, `patch_sha256`, and the two untracked entries
+(`.stfolder/syncthing-folder-c9ceae.txt`, `PROJECT_REPORT.md`) with a
+sha256 each and no content anywhere. `exit_code` 0 with `all_passed`
+false and `gates_clean` true — ruff exited 1 at exactly the baseline,
+which is `WITHIN_LINT_BASELINE` and not a failure.
+
+**On the subtest count**, because a reviewer comparing it to F-34's 60
+will notice: 910 = 874 + the 36 new tests, and 62 = 60 + 2. The new file
+contributes 5 subtests when the working tree has 5 untracked entries and
+2 when it has 2 — `test_every_untracked_entry_is_represented_by_a_digest`
+runs one subtest per untracked path, and at capture time the tree held
+only the two pre-existing ones. The number is data-dependent by design;
+the test asserts a property of whatever is actually there.
+
+Beyond the gate transcripts the bundle carries three artifacts, all three
+added to the published directory AFTER the capture returned — the capture
+writes only its own transcripts and `SUMMARY.json`, and that file is
+exactly as produced:
+
+- `mutation-check.f14.txt` — nine mutants, none survived. Produced by the
+  committed `scripts/mutation_check_f14.py`, so the claim can be re-run.
+- `reproduction.f14.txt` — F-14 reproduced against the repaired tree and
+  the repair exercised: two dirty trees with an identical `git status`,
+  an identical `git diff --stat` and an identical OLD bundle digest
+  (`ae106a23…` for both) produce two DIFFERENT content identities
+  (`fd7d6ce4…` / `d04ea2cf…`); an untracked file's path is in the payload
+  and its bytes are not; a tracked file touched mid-check gives
+  `TREE_MUTATED` / exit 2 with `checks_all_zero_exit` still true and
+  `all_passed` false; an untracked file touched mid-check names itself in
+  the drift; a broken probe gives `IDENTITY_UNAVAILABLE` / exit 3 with
+  zero checks run and the side-effect file absent; and a bundle staged
+  inside the tree refuses its own capture.
+- `reproduce_f14.py` — the script that produced it, so the transcript is
+  re-runnable rather than quotable. It also echoes its own source at the
+  end of the transcript.
+
+The mutation check ran against the same working tree as the commit,
+before it, and `scripts/mutation_check_f14.py` is committed so a reviewer
+can re-run it against the exact committed tree.
+
+The suite is run with `PYTHONUTF8=1`, this workstation's documented
+baseline (ADR-0001, L-0003). Without it,
+`tests/test_cli_review_adapters.py` fails on a filename with an accent —
+an environment precondition, not anything this unit changed.
 
 **The baseline was not green when this unit started, and it is not
 because of this unit.** The full suite at `aea62b0` returned **1 failed,
