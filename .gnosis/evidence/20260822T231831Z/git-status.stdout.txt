@@ -1,0 +1,3 @@
+?? .gnosis/evidence/20260822T225826Z/
+?? .stfolder/
+?? PROJECT_REPORT.md

@@ -1,0 +1,173 @@
+{
+  "all_passed": false,
+  "boundary": {
+    "allowed_events": 14,
+    "allowed_writes": [
+      ".gnosis-capture-barrier",
+      ".git/",
+      ".pytest_cache/",
+      ".mypy_cache/",
+      ".ruff_cache/",
+      "__pycache__"
+    ],
+    "authority": "the write stream, not a comparison of endpoints: a change that undoes itself before the second fingerprint is still a change",
+    "covered_files": 703,
+    "machinery_events": 32,
+    "machinery_note": "writes under .git/ are counted, not judged: git updates its own index while merely reading the tree, and .git is not a covered input. Tamper-evidence for the machinery itself is F-17 and is not repaired here",
+    "mechanism": "ReadDirectoryChangesW(recursive)",
+    "observed_events": 56,
+    "reason": null,
+    "verdict": "CLEAN",
+    "violations": []
+  },
+  "bundle_staged_outside_repo": true,
+  "captured_at": "2026-08-22T23:37:58.123821+00:00",
+  "checks_all_zero_exit": false,
+  "checks_verdict": "WITHIN_BASELINE",
+  "evidence_valid": true,
+  "exit_code": 0,
+  "gates_clean": true,
+  "non_zero_exits": [
+    "ruff"
+  ],
+  "python": "3.12.14",
+  "results": [
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "tests/",
+        "-q"
+      ],
+      "duration_s": 1157.92,
+      "exit_code": 0,
+      "name": "pytest",
+      "outcome": "PASSED",
+      "tail": "930 passed, 73 subtests passed in 1151.79s (0:19:11)"
+    },
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "mypy",
+        "src/gnosis"
+      ],
+      "duration_s": 5.81,
+      "exit_code": 0,
+      "name": "mypy",
+      "outcome": "PASSED",
+      "tail": "Success: no issues found in 57 source files"
+    },
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "ruff",
+        "check",
+        "src/gnosis",
+        "tests",
+        "--no-cache",
+        "--output-format=concise"
+      ],
+      "duration_s": 0.52,
+      "exit_code": 1,
+      "lint_baseline": 19,
+      "lint_findings": 19,
+      "name": "ruff",
+      "outcome": "WITHIN_LINT_BASELINE",
+      "tail": "No fixes available (6 hidden fixes can be enabled with the `--unsafe-fixes` option).",
+      "verdict": "known backlog, not above baseline"
+    },
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "duration_s": 0.12,
+      "exit_code": 0,
+      "name": "git-head",
+      "outcome": "PASSED",
+      "tail": "92e76c37a24a3b9d63bfcc106a054d31c1801be3"
+    },
+    {
+      "argv": [
+        "git",
+        "status",
+        "--porcelain"
+      ],
+      "duration_s": 0.14,
+      "exit_code": 0,
+      "name": "git-status",
+      "outcome": "PASSED",
+      "tail": "?? PROJECT_REPORT.md"
+    }
+  ],
+  "tree_identity": {
+    "binding": "BOUND",
+    "blind_spot": "git-ignored files are not enumerated by content_fingerprint (build caches, .venv, the ignored parts of .gnosis/)",
+    "covers": "from immediately before the first check to immediately after the last one; the bundle is published afterwards and is deliberately not part of the identified tree",
+    "drift": [],
+    "identical": true,
+    "post": {
+      "available": true,
+      "digest": "274f45959969d73ba47aede62ca42360dfdafc4c2b4676a0a3557d774d68384b",
+      "fingerprint": {
+        "branch": "master",
+        "head_sha": "92e76c37a24a3b9d63bfcc106a054d31c1801be3",
+        "is_repo": true,
+        "patch_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        "status_sha256": "4a23c0b76cf34759dcb7c50ce8cdd912206216f39980c9b04abf4ad7752ec8d8",
+        "untracked": {
+          ".gnosis/evidence/20260822T225826Z/SUMMARY.json": "b0d5cceb4ecd6d5475dfd54790007e2038dd2ca098dae08d6f2a1b8893e7dd6a",
+          ".gnosis/evidence/20260822T225826Z/git-head.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+          ".gnosis/evidence/20260822T225826Z/git-head.stdout.txt": "0c897af62743328cbb8b87d6662b8f95aad7d7a6383a6fcd120a7a006580d735",
+          ".gnosis/evidence/20260822T225826Z/git-status.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+          ".gnosis/evidence/20260822T225826Z/git-status.stdout.txt": "a18c47fac78db7f8d3ec519e9eb76a69d742364c9c6290d3297b07e19e872048",
+          ".gnosis/evidence/20260822T225826Z/mypy.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+          ".gnosis/evidence/20260822T225826Z/mypy.stdout.txt": "f224a4ff730c09e28fddb1bd4371048795bb9264a0682225ddb8f78fff519844",
+          ".gnosis/evidence/20260822T225826Z/pytest.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+          ".gnosis/evidence/20260822T225826Z/pytest.stdout.txt": "aeb096233d33f2d5a43dbba0756b38059a8d62240d8bd82dc0525ae9fb69192f",
+          ".gnosis/evidence/20260822T225826Z/ruff.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+          ".gnosis/evidence/20260822T225826Z/ruff.stdout.txt": "2a458e8d106573d29bc865d39a9cc4cb83c77d0c6181441fbf05f5786d26a8a4",
+          ".stfolder/syncthing-folder-c9ceae.txt": "0cf037252917faaef03b3c68f4ae5d7311f2f4e1d4fd29cbaebe45dfcebff398",
+          "PROJECT_REPORT.md": "98f306634c9c837d081e72392a876027903b276b7dd88e8bff40585770f6c21b"
+        }
+      },
+      "reason": null,
+      "ts": "2026-08-22T23:37:58.023341+00:00"
+    },
+    "pre": {
+      "available": true,
+      "digest": "274f45959969d73ba47aede62ca42360dfdafc4c2b4676a0a3557d774d68384b",
+      "fingerprint": {
+        "branch": "master",
+        "head_sha": "92e76c37a24a3b9d63bfcc106a054d31c1801be3",
+        "is_repo": true,
+        "patch_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        "status_sha256": "4a23c0b76cf34759dcb7c50ce8cdd912206216f39980c9b04abf4ad7752ec8d8",
+        "untracked": {
+          ".gnosis/evidence/20260822T225826Z/SUMMARY.json": "b0d5cceb4ecd6d5475dfd54790007e2038dd2ca098dae08d6f2a1b8893e7dd6a",
+          ".gnosis/evidence/20260822T225826Z/git-head.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+          ".gnosis/evidence/20260822T225826Z/git-head.stdout.txt": "0c897af62743328cbb8b87d6662b8f95aad7d7a6383a6fcd120a7a006580d735",
+          ".gnosis/evidence/20260822T225826Z/git-status.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+          ".gnosis/evidence/20260822T225826Z/git-status.stdout.txt": "a18c47fac78db7f8d3ec519e9eb76a69d742364c9c6290d3297b07e19e872048",
+          ".gnosis/evidence/20260822T225826Z/mypy.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+          ".gnosis/evidence/20260822T225826Z/mypy.stdout.txt": "f224a4ff730c09e28fddb1bd4371048795bb9264a0682225ddb8f78fff519844",
+          ".gnosis/evidence/20260822T225826Z/pytest.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+          ".gnosis/evidence/20260822T225826Z/pytest.stdout.txt": "aeb096233d33f2d5a43dbba0756b38059a8d62240d8bd82dc0525ae9fb69192f",
+          ".gnosis/evidence/20260822T225826Z/ruff.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+          ".gnosis/evidence/20260822T225826Z/ruff.stdout.txt": "2a458e8d106573d29bc865d39a9cc4cb83c77d0c6181441fbf05f5786d26a8a4",
+          ".stfolder/syncthing-folder-c9ceae.txt": "0cf037252917faaef03b3c68f4ae5d7311f2f4e1d4fd29cbaebe45dfcebff398",
+          "PROJECT_REPORT.md": "98f306634c9c837d081e72392a876027903b276b7dd88e8bff40585770f6c21b"
+        }
+      },
+      "reason": null,
+      "ts": "2026-08-22T23:18:32.357984+00:00"
+    },
+    "primitive": "gnosis.kernel.git_evidence.content_fingerprint",
+    "reason": null
+  },
+  "verdict": "within baseline; see non_zero_exits"
+}

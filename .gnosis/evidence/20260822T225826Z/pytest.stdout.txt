@@ -1,0 +1,65 @@
+........................................................................ [  7%]
+........................................................................ [ 15%]
+........................................................................ [ 23%]
+.............................................................................................................................................. [ 38%]
+........................................................................ [ 46%]
+......................................................................................................... [ 57%]
+........................................................................ [ 65%]
+........................................................................ [ 73%]
+........................................................................ [ 80%]
+............................................................ [ 87%]
+............................................................F.. [ 93%]
+........................................................                 [100%]
+================================== FAILURES ===================================
+_ TestRepairsFromTheIndependentReview.test_a_brief_is_not_re_offered_forever __
+
+self = <tests.test_work_queue.TestRepairsFromTheIndependentReview testMethod=test_a_brief_is_not_re_offered_forever>
+
+    def test_a_brief_is_not_re_offered_forever(self):
+        # Rule 8. `release` returns work to pending and `drain` re-offers
+        # it immediately; the per-brief budget does NOT bound that,
+        # because parking launches nothing and spends nothing.
+        queue = self._short_lived(max_attempts=3)
+        queue.enqueue(_brief("BRIEF-1"))
+        for _ in range(3):
+            work = queue.claim("worker-a")
+            self.assertIsNotNone(work)
+>           queue.release(work, reason="parked")
+
+tests\test_work_queue.py:234: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\gnosis\director\work_queue.py:364: in release
+    self.authority.release(work.grant)
+src\gnosis\kernel\claims.py:400: in release
+    self.assert_current(grant)
+src\gnosis\kernel\claims.py:373: in assert_current
+    self.leases.assert_current(task_resource(grant.task_id), grant.lease.lease_id)
+src\gnosis\kernel\lease.py:195: in assert_current
+    return self._current_locked(state, resource, lease_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <gnosis.kernel.lease.LeaseStore object at 0x000002AB49B055E0>
+state = {'last_tokens': {'task/BRIEF-1': 1}, 'leases': {'task/BRIEF-1': {'expires_at': 1787440557.479836, 'fencing_token': 1, 'holder': 'worker-a', 'issued_at': 1787440557.429836, ...}}, 'schema_version': 1}
+resource = 'task/BRIEF-1', lease_id = 'LEASE-8e6de79ef82a'
+
+    def _current_locked(self, state: dict[str, Any], resource: str, lease_id: str) -> Lease:
+        raw = state["leases"].get(resource)
+        if raw is None:
+            raise StaleLeaseError(f"No live lease for resource '{resource}'")
+        lease = Lease.from_dict(raw)
+        if lease.lease_id != lease_id:
+            raise StaleLeaseError(
+                f"Lease {lease_id} for resource '{resource}' was superseded "
+                f"(current: {lease.lease_id}, token {lease.fencing_token})"
+            )
+        if lease.expires_at <= float(self._clock()):
+>           raise StaleLeaseError(
+                f"Lease {lease_id} for resource '{resource}' has expired"
+            )
+E           gnosis.kernel.lease.StaleLeaseError: Lease LEASE-8e6de79ef82a for resource 'task/BRIEF-1' has expired
+
+src\gnosis\kernel\lease.py:222: StaleLeaseError
+=========================== short test summary info ===========================
+FAILED tests/test_work_queue.py::TestRepairsFromTheIndependentReview::test_a_brief_is_not_re_offered_forever
+1 failed, 929 passed, 62 subtests passed in 1122.16s (0:18:42)

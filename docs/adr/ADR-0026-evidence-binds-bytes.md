@@ -435,6 +435,66 @@ None survived; the tree was restored and re-verified green. MF12 is the
 review's finding put back verbatim: with it in place the change → read →
 restore tests all report valid evidence again.
 
+### Evidence
+
+Two bundles, both committed, because hiding the red one would be the same
+kind of dishonesty this whole finding is about.
+
+**`.gnosis/evidence/20260822T231831Z/` — the capture this addendum
+stands on.** 930 passed, 73 subtests, mypy strict clean over 57 source
+files, ruff at 19 findings against a baseline of 19. Clean tree at
+`92e76c3`. `binding` BOUND with pre and post digest
+`274f45959969d73ba47aede62ca42360dfdafc4c2b4676a0a3557d774d68384b`, and
+`boundary` CLEAN over a 19-minute suite: **56 events observed, 0
+violations**, 32 of them machinery (`.git/`) and 14 allowed, over 703
+covered files. `exit_code` 0 with `all_passed` false and `gates_clean`
+true, because ruff sits at the baseline.
+
+Two numbers move for reasons worth stating rather than leaving a reviewer
+to reconcile. The subtest count is 73 rather than 62 because
+`test_every_untracked_entry_is_represented_by_a_digest` runs one subtest
+per untracked path and the tree held thirteen at that moment. And the
+identity's untracked map includes the eleven files of the bundle below,
+which were on disk and uncommitted when this capture ran: the digest
+describes the working tree that was actually checked, which is the point.
+
+**`.gnosis/evidence/20260822T225826Z/` — the same commit, one flaky test
+red.** 1 failed, 929 passed. `binding` BOUND, `boundary` CLEAN (57 events,
+0 violations), `evidence_valid` **true**, `exit_code` **1**. It is kept
+because it is the clearest demonstration in the repository that the four
+axes are independent: the tree was identified, the interval was observed
+quiet, and the code was red. The bundle is exactly as the capture
+produced it; nothing was added to it.
+
+The failure is the pre-existing flaky family recorded in the first
+delivery, and it is now characterised rather than sighted:
+`tests/test_work_queue.py::_short_lived()` sets `default_ttl_s=0.05`, and
+**eight tests across two classes** call it. The ones that need the lease
+to still be alive race a 50 ms wall-clock budget across several
+file-locked JSON round-trips, while their neighbours sleep 150 ms
+precisely so it expires. Two different tests in that family have now
+failed this way —
+`TestACrashedWorkerLosesNothing::test_recovery_never_takes_a_brief_from_a_live_worker`
+at `aea62b0` (1 failure in 5 runs in isolation) and
+`TestRepairsFromTheIndependentReview::test_a_brief_is_not_re_offered_forever`
+here (**3 failures in 8 runs** in isolation). It is a timing defect in
+the tests, not in the queue, it predates this unit, and it is left alone
+because repairing it means editing `tests/` in a unit scoped to F-14.
+
+Beyond the gate transcripts the green bundle carries three artifacts,
+added to the published directory after the capture returned:
+
+- `mutation-check.f14-round2.txt` — thirteen mutants, none survived.
+- `reproduction.f14-aba.txt` — the review's finding reproduced against
+  the repaired tree, eleven cases, each printing BOTH answers. The
+  endpoint column reads `BOUND identical=True` in every transient case —
+  that IS the finding — while the interval column reads `INPUTS_MUTATED`
+  and the capture exits 4. It also shows the two fail-closed paths
+  (exit 5), the two no-false-positive paths (exit 0), a stable run, and
+  the raw event stream in which one write and its undo both appear.
+- `reproduce_f14_aba.py` — the script that produced it, which echoes its
+  own source into the transcript.
+
 ### What this does not close, stated rather than implied
 
 - **F-14 is still OPEN**, pending a second independent review. The first
