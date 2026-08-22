@@ -1,0 +1,45 @@
+MUTATION CHECK — F-34 (state authority) / ADR-0025 addendum
+
+Open finding 15 of PROJECT_REPORT.md says a mutation check that leaves no
+captured output is testimony, not evidence. This is the output.
+
+Suites   : tests/test_state_machine.py tests/test_no_invalid_done.py
+Commit   : 6c4859afbe972b1537afe0c5c082f15285654eb7
+Tree     : 47373003a4e7d077f209896de47879aa6f3a6327
+Code dirty at start: ''
+
+Two mutants. The first is the finding the independent Codex review
+raised (FAIL PARCIAL): remove the evidence gate from transition() and
+the state machine walks VERIFYING -> COMPLETED again. The second is the
+original F-34 regression, re-checked at its new home in state_machine.py.
+======================================================================
+
+### MUTANT: transition() no longer refuses EVIDENCE_GATED_STATES
+--- expected RED ---
+
+tests\test_no_invalid_done.py:201: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_state_machine.py::TestCompletedIsEvidenceGated::test_an_unevidenced_completion_is_still_an_illegal_transition
+FAILED tests/test_state_machine.py::TestCompletedIsEvidenceGated::test_the_generic_transition_can_never_reach_completed
+FAILED tests/test_state_machine.py::TestCompletedIsEvidenceGated::test_the_reproduction_from_the_independent_review_now_fails
+FAILED tests/test_no_invalid_done.py::TestTheStateAuthorityRefusesUnevidencedCompletion::test_the_direct_transition_to_completed_is_refused
+4 failed, 45 passed, 24 subtests passed in 14.89s
+
+### MUTANT: completion_is_evidenced returns 'verification.passed if verification else True'
+--- expected RED ---
+SUBFAILED(impostor='str') tests/test_no_invalid_done.py::TestTheStateAuthorityRefusesUnevidencedCompletion::test_an_impostor_is_refused_by_the_authority
+SUBFAILED(impostor='int') tests/test_no_invalid_done.py::TestTheStateAuthorityRefusesUnevidencedCompletion::test_an_impostor_is_refused_by_the_authority
+SUBFAILED(impostor='bool') tests/test_no_invalid_done.py::TestTheStateAuthorityRefusesUnevidencedCompletion::test_an_impostor_is_refused_by_the_authority
+SUBFAILED(impostor='object') tests/test_no_invalid_done.py::TestTheStateAuthorityRefusesUnevidencedCompletion::test_an_impostor_is_refused_by_the_authority
+SUBFAILED(impostor='dict') tests/test_no_invalid_done.py::TestTheStateAuthorityRefusesUnevidencedCompletion::test_an_impostor_is_refused_by_the_authority
+SUBFAILED(impostor='_NotQuiteTrue') tests/test_no_invalid_done.py::TestTheStateAuthorityRefusesUnevidencedCompletion::test_an_impostor_is_refused_by_the_authority
+FAILED tests/test_no_invalid_done.py::TestTheStateAuthorityRefusesUnevidencedCompletion::test_none_is_refused_by_the_authority
+23 failed, 44 passed, 6 subtests passed in 15.23s
+
+### BOTH MUTANTS REVERTED — expected GREEN
+................................................ [ 97%]
+.                                                                        [100%]
+49 passed, 24 subtests passed in 14.78s
+
+Code dirty at end: ''
+(empty means neither mutant left residue: shipped code is byte-identical to 6c4859afbe972b1537afe0c5c082f15285654eb7)

@@ -303,19 +303,27 @@ captured against a CLEAN code tree at `29d3666` (tree `cf7a2657`), with
 `f34-tree-binding.json` recording `content_fingerprint()` before and
 after the run.
 
-**Scope discipline: F-34 only.** The other 41 findings are open and
-untouched, including the documentation drift THIS FILE still carries
+**Scope discipline: F-34 only.** The other 36 open findings are
+untouched — 43 items in the frozen audit, of which 6 are PASS and not
+defects (F-06, F-09, F-11, F-29b, F-41, F-42) and 1 is closed. That
+includes the documentation drift THIS FILE still carries
 (F-19..F-32: the stale 164-test line and mypy file count below, the
 resolved-vs-pending Codex contradiction, the `src/gnosis/` "empty
 scaffold" claim ADR-0002 already settled) and the absence of a production
 entry point (F-33). The living matrix is `docs/V1_COMPLIANCE_MATRIX.md`;
 this unit changed exactly one of its rows.
 
-**Independent review: NOT DONE.** Codex remains rate-limited (reset
-reported 2026-09-20) and direction reviews this unit itself over the
-synchronised folder. L-0041 measures the self-review channel at roughly
-one finding in four, so the claims above are the weaker kind of evidence
-and say so.
+**Independent review: DONE, verdict FAIL PARCIAL (Codex, 2026-08-22).**
+The reachable production route was genuinely closed. What was NOT closed
+— and what ADR-0025 and the V1 matrix both overdeclared — is that the
+invariant sat at the lowest point authorising COMPLETED: a bare
+`TaskStateMachine` still walked `VERIFYING -> COMPLETED` with no evidence,
+and `test_happy_path` asserted that it did. `6c4859a` moves the gate into
+the state authority: `transition()` refuses `COMPLETED` outright and
+`complete(verification)` validates a real `VerificationResult`, never a
+caller-supplied flag. Evidence `.gnosis/evidence/20260822T142519Z/` —
+800 passed on a clean tree at `6c4859a`, two mutants captured. See
+ADR-0025's addendum and L-0044.
 
 ## Fixed locations
 

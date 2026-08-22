@@ -17,12 +17,16 @@
   (rewritten) and
   `tests/test_director_orchestrator.py::TestGovernedOrchestrator::test_governed_failure_fails_the_brief_without_aborting_the_batch`
   (provocation replaced).
-- Independent review: **NOT DONE.** Codex is rate-limited (reset reported
-  2026-09-20) and direction has reserved the review of this unit for
-  itself, over the synchronised folder. This ADR ships self-reviewed and
-  says so; L-0041 measures that channel at roughly one finding in four.
-- Scope: **F-34 only.** F-01..F-33 and F-35..F-42 are untouched and
-  remain open. Nothing here closes them.
+- Independent review: **DONE 2026-08-22 by Codex, verdict FAIL PARCIAL.**
+  The reachable production defect was genuinely closed; the claim that
+  the invariant lived at the lowest point that authorises COMPLETED was
+  false, and is corrected below. See the addendum, and commit `6c4859a`
+  for the repair. The first version of this ADR shipped self-reviewed and
+  said so; L-0041 puts that channel at roughly one finding in four, and
+  this is what the missing three-quarters looks like.
+- Scope: **F-34 only.** Of the 43 items in the frozen audit, 6 are PASS
+  (F-06, F-09, F-11, F-29b, F-41, F-42) and 36 remain open and untouched.
+  Nothing here closes any of them.
 
 ## Context
 
@@ -120,10 +124,16 @@ inbox, no `BriefRecord` is created and nothing has to be recovered. A
 `verifier` may now also be given at construction, so an operator can
 configure evidence once rather than remembering it per call.
 
-This is **defence in depth, not the guarantee**. Requirement: the
-guarantee lives at the lowest point that can authorise a DONE. It does —
-in `completion_is_evidenced`. If a future caller bypasses the
-orchestrator entirely, the engine still refuses.
+This is **defence in depth, not the guarantee**. If a future caller
+bypasses the orchestrator entirely, the engine still refuses.
+
+> **CORRECTED 2026-08-22.** This section originally continued: *"the
+> guarantee lives at the lowest point that can authorise a DONE. It does
+> — in `completion_is_evidenced`."* That was false when it was written.
+> `completion_is_evidenced` was a function the ENGINE called;
+> `TaskStateMachine.transition()` still walked `VERIFYING -> COMPLETED`
+> for any caller at all. The guarantee lived one level above the thing
+> that produces the outcome. See the addendum.
 
 ### A verifier that answers nothing is recorded, not coerced
 
@@ -202,3 +212,97 @@ transcript is beside the evidence bundle as
 - `tests/test_engine.py`, `tests/test_director_orchestrator.py`,
   `tests/test_replay_runner.py`, `tests/test_scheduler.py` — fixtures
   supply real verification.
+
+---
+
+## Independent review addendum — Codex, 2026-08-22: **FAIL PARCIAL**
+
+The first version of this ADR shipped self-reviewed and said so. Direction
+ran an independent Codex review over the synchronised folder and it
+returned **FAIL PARCIAL**: the concrete F-34 route was closed and the
+suite passed, but the order had required the invariant at the **lowest
+point that authorises COMPLETED**, and this ADR had not put it there.
+
+### The finding, reproduced
+
+```python
+sm = TaskStateMachine()
+sm.transition(TaskState.PLANNED)
+sm.transition(TaskState.IN_PROGRESS)
+sm.transition(TaskState.VERIFYING)
+sm.transition(TaskState.COMPLETED)     # -> COMPLETED, no evidence anywhere
+```
+
+`TASK_TRANSITIONS` listed `VERIFYING -> COMPLETED` and `transition()`
+walked it for anyone who asked. `completion_is_evidenced` was therefore
+never "the single authority for `TaskState.COMPLETED`" as the section
+above claimed — it was the guard that **the current production caller
+happened to carry**. Every sentence in this ADR asserting otherwise was
+an overdeclaration, and the V1 matrix inherited it.
+
+Worse, the suite AGREED with the defect:
+`tests/test_state_machine.py::TestTaskStateMachine::test_happy_path`
+ended with `sm.transition(TaskState.COMPLETED)` and asserted it worked.
+A test that asserts the wrong answer is not missing coverage; it is
+coverage pointing the wrong way, and it is why a green run said nothing
+about this.
+
+### What the review did NOT overturn
+
+The reachable production defect was genuinely closed and stayed closed:
+`TaskEngine.execute_task` still refuses a verifier-less task before it
+launches anything, `DirectorOrchestrator.run_pending` still refuses
+before consuming a brief, and every F-34 test still passes. The verdict
+was PARTIAL for exactly that reason.
+
+### The repair (commit `6c4859a`)
+
+The invariant is now a property of `kernel/state_machine.py`:
+
+- **`EVIDENCE_GATED_STATES`** — today `{COMPLETED}`. `transition()`
+  refuses every target in it, raising `UnevidencedCompletionError`.
+  `FAILED` and `CANCELLED` stay open on purpose: nobody has an incentive
+  to forge a task that did not finish.
+- **`complete(verification)`** is the only route to COMPLETED, and it
+  takes the `VerificationResult` **itself, never a boolean**. A flag
+  computed by the caller moves the decision back to the caller, which is
+  precisely the arrangement that just failed. The object is re-examined
+  by `completion_is_evidenced`, so a caller that miscomputed — or never
+  computed — is refused rather than believed.
+- **Evidence authorises the claim, not skipping the graph.**
+  `complete()` still consults `TASK_TRANSITIONS`, so a passing result
+  cannot carry a task that never verified into COMPLETED.
+- **A machine cannot be CONSTRUCTED in COMPLETED.** Without this the
+  guarantee carries an asterisk, and an unwritten asterisk is what this
+  whole unit is repairing.
+- **`completion_is_evidenced` moved** from `engine.py` to
+  `state_machine.py`, beside the authority that applies it, and is
+  re-exported so existing imports keep working. The engine now ASKS and
+  handles the refusal; it no longer decides.
+- **`UnevidencedCompletionError` subclasses `IllegalTransitionError`**,
+  so anything already catching illegal transitions keeps failing closed,
+  and it carries the same `allowed next:` tail (Directive 3).
+
+Two tests changed rather than being adjusted around:
+`test_happy_path` now goes through the only door there is, and
+`test_illegal_transition_error_carries_allowed_next` uses an edge that is
+illegal for GRAPH reasons, because COMPLETED is now refused for EVIDENCE
+reasons before the table is consulted — a different verdict that has its
+own test.
+
+### Mutation check
+
+Two mutants, both captured in `mutation-check.f34.txt`:
+
+| Mutant | Result |
+|---|---|
+| Remove the `EVIDENCE_GATED_STATES` guard from `transition()` | **4 tests red** |
+| Restore `return verification.passed if verification else True` | **23 tests red** |
+
+### What this correction says about the process
+
+The claim "the single authority" was checked against the path I had
+written, not against the object the sentence named. That is L-0044, and
+it is the second time in two units that a superlative in a document was
+weaker than the code under it. The self-review channel did not catch it;
+an independent reviewer reproduced it in four lines.

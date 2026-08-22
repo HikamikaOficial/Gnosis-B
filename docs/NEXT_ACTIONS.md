@@ -16,10 +16,18 @@
 `docs/V1_COMPLIANCE_MATRIX.md` is the LIVING matrix — a row changes only
 when an ADR with captured evidence backs it.
 
-- **F-34 CLOSED** (ADR-0025, commit `29d3666`, evidence
-  `.gnosis/evidence/20260822T005432Z/`, 781 passed on a clean tree).
-- **41 findings open.** Direction sets the order; nothing else was
-  touched in that unit, deliberately.
+- **F-34 CLOSED** — in two passes. ADR-0025 (`29d3666`) closed the
+  reachable production route; an independent Codex review returned **FAIL
+  PARCIAL** because the state authority itself still admitted
+  `VERIFYING -> COMPLETED` with no evidence, and `6c4859a` closed that.
+  Evidence `.gnosis/evidence/20260822T142519Z/` (800 passed on a clean
+  tree, two mutants captured).
+- **The count, so no living document repeats it wrong again:** the frozen
+  audit holds **43 items** (F-01..F-42 plus F-29b). **6 are PASS** and are
+  not defects (F-06, F-09, F-11, F-29b, F-41, F-42); **1 is closed**
+  (F-34); **36 are open.** An earlier version of this file said 41, which
+  counted the PASS items and F-34 as work. Direction sets the order;
+  nothing outside F-34 was touched in either pass, deliberately.
 
 The ones this project's own history says will cost the most:
 

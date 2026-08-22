@@ -1,0 +1,62 @@
+{
+  "adr": "ADR-0025",
+  "capture_command": [
+    "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+    "scripts/capture_evidence.py"
+  ],
+  "capture_command_deviation": "The documented command wraps this in `uv run --no-project --with pytest --with mypy --with ruff`. That form was attempted first and killed on wall-clock before writing anything. The project venv holds the same three tools and capture_evidence.py invokes them through sys.executable, so the gates run are identical.",
+  "capture_exit_code": 0,
+  "code_paths_considered": [
+    "src",
+    "tests",
+    "scripts",
+    "pyproject.toml"
+  ],
+  "code_tree_clean_and_unchanged_throughout": true,
+  "finding": "F-34",
+  "post": {
+    "code_status_porcelain": "",
+    "content_fingerprint": {
+      "branch": "master",
+      "head_sha": "6c4859afbe972b1537afe0c5c082f15285654eb7",
+      "is_repo": true,
+      "patch_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+      "status_sha256": "ef34b7db53040e57c1156ceff5ae10d31d76d3b0fa21637010ca4fabd407dc64",
+      "untracked": {
+        ".gnosis/evidence/20260822T142519Z/SUMMARY.json": "0aa37478ac367c6361818af37b73cafffbe5cc61ca8c48f24df63db701c220f0",
+        ".gnosis/evidence/20260822T142519Z/git-head.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        ".gnosis/evidence/20260822T142519Z/git-head.stdout.txt": "94aad61f465e1b0c8f8192a45bf6138db3097f82a37c2d145a79305031f3414e",
+        ".gnosis/evidence/20260822T142519Z/git-status.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        ".gnosis/evidence/20260822T142519Z/git-status.stdout.txt": "eed90ac127c2441c4a3499e56a8d2a1abcede3cf5c0eac88489054fa0ea03bcb",
+        ".gnosis/evidence/20260822T142519Z/mypy.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        ".gnosis/evidence/20260822T142519Z/mypy.stdout.txt": "dc59e70de5f5fecd7996e15e779a6c91157713cf2d57cbb672cf9ed79d619649",
+        ".gnosis/evidence/20260822T142519Z/pytest.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        ".gnosis/evidence/20260822T142519Z/pytest.stdout.txt": "c9c45238f9b8510452c3c60656af72c11d861dd0638fa2b8ace4e46b071c8a04",
+        ".gnosis/evidence/20260822T142519Z/ruff.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        ".gnosis/evidence/20260822T142519Z/ruff.stdout.txt": "d28d09d45ab011078be13ab126a985618fa5071a33361faeb7a4f6b912b53696",
+        ".stfolder/syncthing-folder-c9ceae.txt": "0cf037252917faaef03b3c68f4ae5d7311f2f4e1d4fd29cbaebe45dfcebff398",
+        "PROJECT_REPORT.md": "98f306634c9c837d081e72392a876027903b276b7dd88e8bff40585770f6c21b"
+      }
+    },
+    "head_sha": "6c4859afbe972b1537afe0c5c082f15285654eb7",
+    "tree_sha": "47373003a4e7d077f209896de47879aa6f3a6327"
+  },
+  "pre": {
+    "code_status_porcelain": "",
+    "content_fingerprint": {
+      "branch": "master",
+      "head_sha": "6c4859afbe972b1537afe0c5c082f15285654eb7",
+      "is_repo": true,
+      "patch_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+      "status_sha256": "a419ce2ecd74a3f6fa0f21290740238ed077af6f87c759fcc861d213a46140fc",
+      "untracked": {
+        ".stfolder/syncthing-folder-c9ceae.txt": "0cf037252917faaef03b3c68f4ae5d7311f2f4e1d4fd29cbaebe45dfcebff398",
+        "PROJECT_REPORT.md": "98f306634c9c837d081e72392a876027903b276b7dd88e8bff40585770f6c21b"
+      }
+    },
+    "head_sha": "6c4859afbe972b1537afe0c5c082f15285654eb7",
+    "tree_sha": "47373003a4e7d077f209896de47879aa6f3a6327"
+  },
+  "purpose": "Binds this evidence bundle to the exact CODE tree it ran against. capture_evidence.py records only HEAD and `git status --porcelain` (names, not bytes) and records them after the suite (F-14/F-16); this file is written around it without modifying it, because this unit repairs F-34 only.",
+  "verdict": "The suite ran against committed code at 6c4859afbe972b1537afe0c5c082f15285654eb7 (tree 47373003a4e7d077f209896de47879aa6f3a6327), with no uncommitted change under src/, tests/, scripts/ or pyproject.toml before or after the run."
+}

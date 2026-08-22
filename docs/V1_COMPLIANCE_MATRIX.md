@@ -1,6 +1,7 @@
 # GNOSIS — Matriz V1 viva
 
-**Última actualización:** 2026-08-22 · **Unidad:** ADR-0025 (repara F-34)
+**Última actualización:** 2026-08-22 · **Unidad:** ADR-0025 + su addendum de
+revisión independiente (Codex, FAIL PARCIAL) — cierra F-34
 
 Esta es la matriz **viva**. `docs/V1_TRACEABILITY_AUDIT.md` es el
 diagnóstico congelado del 2026-08-22 y no se edita; cada hallazgo se
@@ -35,7 +36,7 @@ porque parezca resuelto.
 | 14 | review read-only | IA (SANDBOX_APPROX) | II | **II** | F-33 abierto |
 | 15 | rework acotado | IA | II | **II** | F-33 abierto |
 | 16 | proof packet | **A** — sin `ProofPacket`; `acceptance_criteria` sólo se pega al prompt | — | **A / DI** | F-36 abierto |
-| 17 | **rehusar DONE sin evidencia** | **IA** — `completion_is_evidenced` es el único autorizador de `TaskState.COMPLETED`; `execute_task` rehúsa sin verifier antes de lanzar nada | **IA** — `DirectorOrchestrator.run_pending` rehúsa antes de consumir el brief | **IA** ✅ | **F-34 CERRADO — ADR-0025** |
+| 17 | **rehusar DONE sin evidencia** | **IA** — la **autoridad de estados** lo impone: `transition()` rehúsa `COMPLETED` y `complete(verification)` valida un `VerificationResult` real; `execute_task` rehúsa sin verifier antes de lanzar nada | **IA** — `DirectorOrchestrator.run_pending` rehúsa antes de consumir el brief | **IA** ✅ | **F-34 CERRADO — ADR-0025 + addendum** |
 | 18 | sobrevivir reinicio del kernel | IA | II | **II** | F-33 abierto |
 | 19 | recuperar tras crash de worker | IA | **II** — el llamante de `sweep()` es `WorkerSupervisor`, que nada construye | **II / DI** | F-35 abierto |
 | 20 | evitar bucles infinitos | P — breakers presentes; `max_briefs`/`wall_clock_s` por defecto `None`; sin "max same failure" | II | **P** | F-10 abierto |
@@ -43,8 +44,12 @@ porque parezca resuelto.
 | 22 | preservar integridad Git | IA | II | **II** | F-33 abierto |
 
 **Resumen:** 1 capacidad alcanzable de extremo a extremo (nº17), 13
-inertes, 5 parciales, 3 ausentes. La única fila que cambió en esta unidad
-es la 17.
+inertes, 5 parciales, 3 ausentes. La única fila que ha cambiado es la 17.
+
+> La primera versión de esta fila decía que `completion_is_evidenced` era
+> "el único autorizador". No lo era: `TaskStateMachine.transition()`
+> aceptaba `COMPLETED` de cualquiera. Corregido tras la revisión
+> independiente de Codex (FAIL PARCIAL). La lección está en L-0044.
 
 ---
 
@@ -66,7 +71,7 @@ Sin cambios en esta unidad. Ver `docs/V1_TRACEABILITY_AUDIT.md` §Eje 2.
 | Invariante | Suite nombrada | Estado |
 |---|---|---|
 | NO LOST WORK | **A** | implicado en muchas pruebas, ninguna nombrada |
-| **NO INVALID DONE** | **presente** — `tests/test_no_invalid_done.py`, 21 pruebas + 6 subtests | primera suite nombrada por un invariante (ADR-0025). Cubre la autorización de `COMPLETED`; **no** cubre pérdida de trabajo ni bucles |
+| **NO INVALID DONE** | **presente** — `tests/test_no_invalid_done.py` (28 pruebas, 15 subtests) y `tests/test_state_machine.py` (21 pruebas, 9 subtests), de las cuales 12 son `TestCompletedIsEvidenceGated` | primera suite nombrada por un invariante (ADR-0025). Cubre la autorización de `COMPLETED` en la autoridad de estados **y** en el motor; **no** cubre pérdida de trabajo ni bucles |
 | NO STALE WRITE | **A** | implicado; mecánicamente sólido |
 | NO INFINITE LOOP | **A** | breakers presentes con defaults apagados |
 
@@ -81,11 +86,17 @@ siguen abiertas y F-13 no se declara cerrado.
 | Hallazgo | ADR | Fecha | Evidencia |
 |---|---|---|---|
 | **F-34** — `COMPLETED` sin evidencia alcanzable desde el punto de entrada por defecto | ADR-0025 | 2026-08-22 | `.gnosis/evidence/20260822T005432Z/` (781 passed, árbol limpio en `29d3666`) |
+| **F-34 (cierre incompleto)** — la autoridad de estados seguía admitiendo `VERIFYING → COMPLETED` sin evidencia; hallado por Codex, FAIL PARCIAL | ADR-0025 addendum | 2026-08-22 | `.gnosis/evidence/20260822T142519Z/` (800 passed, árbol limpio en `6c4859a`; dos mutantes capturados) |
 
 ## Hallazgos abiertos
 
 F-01, F-02, F-03, F-04, F-05, F-07, F-08, F-10, F-12, F-13, F-14, F-15,
 F-16, F-17, F-18, F-19…F-32, F-33, F-35, F-36, F-37, F-38, F-39, F-40.
+
+**Recuento, para que ningún documento vivo lo repita mal:** el diagnóstico
+congelado tiene **43 elementos** (F-01…F-42 más F-29b). De ellos **6 son
+PASS** y no son defectos (F-06, F-09, F-11, F-29b, F-41, F-42), **1 está
+cerrado** (F-34) y **36 siguen abiertos** — los enumerados arriba.
 
 Ninguno de ellos se ha tocado en esta unidad. Los 15 hallazgos abiertos
 de las revisiones anteriores (`PROJECT_REPORT.md §8`) tampoco.
