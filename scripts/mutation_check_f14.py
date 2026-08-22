@@ -11,6 +11,11 @@ before/after comparison that never compares, a broken probe that reads as
 "nothing changed", a bundle written into the tree it is measuring, and a
 summary that reports a pass for evidence the binding refused.
 
+MF10..MF13 are the first independent review's finding: two equal
+fingerprints prove two instants, not the interval between them. Each of
+those four restores a version in which a check can change a file, read
+the change and put the original bytes back without the capture noticing.
+
     PYTHONUTF8=1 .venv/Scripts/python.exe scripts/mutation_check_f14.py
 
 Writes the transcript to stdout and, with `--out <path>`, to a file an
@@ -92,14 +97,18 @@ MUTANTS: list[Mutant] = [
         "MF4", "the post fingerprint is taken BEFORE the checks, so the "
                "capture describes a tree nothing ran against",
         [(CAPTURE,
-          """    if pre.available:
-        for command in commands:
-            results.append(_run_check(repo, command, staging, lint_baseline))
-        post = identity(repo)""",
-          """    if pre.available:
-        post = identity(repo)
-        for command in commands:
-            results.append(_run_check(repo, command, staging, lint_baseline))""")],
+          """        if pre.available:
+            covered = covered_paths(repo)
+            env = check_environment(scratch)
+            for command in commands:
+                results.append(_run_check(repo, command, staging, lint_baseline, env))
+            post = identity(repo)""",
+          """        if pre.available:
+            covered = covered_paths(repo)
+            env = check_environment(scratch)
+            post = identity(repo)
+            for command in commands:
+                results.append(_run_check(repo, command, staging, lint_baseline, env))""")],
     ),
     Mutant(
         "MF5", "the bundle is staged inside the repository again, so the "
@@ -145,6 +154,48 @@ MUTANTS: list[Mutant] = [
           "    if not commands:\n        raise EmptyCaptureError(",
           "    if commands and not commands:\n        raise EmptyCaptureError(")],
     ),
+    # MF10..MF13 are the first independent review's finding: two equal
+    # fingerprints do not prove the interval between them. Each of these
+    # restores a version in which a change that undoes itself passes.
+    Mutant(
+        "MF10", "an observed write to a covered input is not a violation, "
+                "so a change that undoes itself passes",
+        [(CAPTURE,
+          """    verdict = (ObservationVerdict.INPUTS_MUTATED if violations
+               else ObservationVerdict.CLEAN)""",
+          "    verdict = ObservationVerdict.CLEAN")],
+    ),
+    Mutant(
+        "MF11", "an observation that could have missed something is "
+                "accepted as if it had seen nothing",
+        [(CAPTURE,
+          """    if not observation.available or not observation.complete:
+        return Boundary(
+            ObservationVerdict.UNOBSERVED, observation.mechanism,""",
+          """    if False:
+        return Boundary(
+            ObservationVerdict.UNOBSERVED, observation.mechanism,""")],
+    ),
+    Mutant(
+        "MF12", "validity goes back to the binding alone: equal endpoints "
+                "are enough again (the reviewed defect, restored)",
+        [(CAPTURE,
+          """        return (self.binding.verdict is BindingVerdict.BOUND
+                and self.boundary.verdict is ObservationVerdict.CLEAN)""",
+          "        return self.binding.verdict is BindingVerdict.BOUND")],
+    ),
+    Mutant(
+        "MF13", "a path that appears and disappears inside the run is not "
+                "judged, so create-read-delete is invisible again",
+        [(CAPTURE,
+          """    ignored = _git_ignored(repo, sorted(unknown))
+    for path, action in sorted(unknown.items()):
+        if path in ignored:
+            allowed_count += 1
+        else:
+            violations.append(f"{action}: {path}")""",
+          "    allowed_count += len(unknown)")],
+    ),
 ]
 
 
@@ -168,7 +219,7 @@ def main() -> int:
         print(text, flush=True)
         lines.append(text)
 
-    say("MUTATION CHECK — F-14, evidence binds bytes")
+    say("MUTATION CHECK — F-14, evidence binds bytes over an observed interval")
     say("=" * 72)
     say(f"targeted suite: {' '.join(SUITE)}")
     say()

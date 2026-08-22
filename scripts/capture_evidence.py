@@ -23,12 +23,22 @@ the evidence does not turn up in its own post fingerprint.
 
     PYTHONUTF8=1 .venv/Scripts/python.exe scripts/capture_evidence.py
 
+Equal endpoints were not enough either, and an independent review said so
+by reproducing it: a check that changes a file, reads it and restores the
+original bytes leaves both fingerprints identical. So the interval has
+its own authority — a write observer streams every change under the tree
+while the checks run, and a change that undoes itself is still a change.
+
+    PYTHONUTF8=1 .venv/Scripts/python.exe scripts/capture_evidence.py
+
 Exit codes are distinct on purpose:
 
-    0  bound, and the gates are clean or within the recorded lint baseline
-    1  bound, and a check failed (or lint debt rose above the baseline)
-    2  the tree changed during the capture — the transcript is unattributable
+    0  bound and observed clean; gates clean or within the lint baseline
+    1  a check failed (or lint debt rose above the baseline)
+    2  the two fingerprints differ — the transcript is unattributable
     3  the tree's identity could not be taken — the probe is broken
+    4  a covered input was written during the run, endpoints notwithstanding
+    5  the interval could not be observed — no mechanism, or an incomplete one
 """
 from __future__ import annotations
 
@@ -52,6 +62,22 @@ from gnosis.kernel.evidence_capture import (  # noqa: E402
 
 EVIDENCE_ROOT = REPO / ".gnosis" / "evidence"
 LINT_BASELINE = REPO / ".gnosis" / "state" / "lint_baseline.json"
+
+# Places inside the tree a check may legitimately write. Kept short on
+# purpose: everything a check writes that CAN be redirected is redirected
+# out of the tree entirely (see `check_environment`), so this list is
+# what is left rather than a convenience. `.git/` is here because git
+# updates its index while reading the tree, and `.git` is not a covered
+# input — content_fingerprint does not hash it. The cache directories are
+# belt and braces: they are redirected and git-ignored already, and
+# naming them keeps a reader from having to derive that.
+ALLOWED_WRITES: tuple[str, ...] = (
+    ".git/",
+    ".pytest_cache/",
+    ".mypy_cache/",
+    ".ruff_cache/",
+    "__pycache__",
+)
 
 COMMANDS: list[CheckCommand] = [
     CheckCommand("pytest", (sys.executable, "-m", "pytest", "tests/", "-q")),
@@ -94,11 +120,16 @@ def staging_root() -> Path:
 def main() -> int:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     staging = staging_root()
+    # The checks' caches go here, beside the bundle and outside the repo,
+    # so nothing legitimate has to be forgiven inside the tree.
+    scratch = staging.parent / f"{staging.name}.scratch"
     try:
-        capture = run_capture(REPO, COMMANDS, staging, lint_baseline=lint_baseline())
+        capture = run_capture(REPO, COMMANDS, staging, lint_baseline=lint_baseline(),
+                              allowed_writes=ALLOWED_WRITES, scratch=scratch)
         out_dir = publish_bundle(staging, EVIDENCE_ROOT / stamp)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+        shutil.rmtree(scratch, ignore_errors=True)
 
     print(json.dumps(dict(capture.summary), indent=2, sort_keys=True))
     print(f"\nevidence: {out_dir.relative_to(REPO)}")

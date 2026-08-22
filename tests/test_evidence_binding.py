@@ -13,23 +13,30 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
 from gnosis.kernel.evidence_capture import (
+    EXIT_BOUNDARY_UNAVAILABLE,
     EXIT_CHECKS_FAILED,
     EXIT_IDENTITY_UNAVAILABLE,
+    EXIT_INPUTS_MUTATED,
     EXIT_OK,
     EXIT_TREE_MUTATED,
     BindingVerdict,
+    Boundary,
     Capture,
     CheckCommand,
     CheckOutcome,
     ChecksVerdict,
     EmptyCaptureError,
+    ObservationVerdict,
     TreeIdentity,
     bind_tree,
     count_lint_findings,
@@ -39,6 +46,11 @@ from gnosis.kernel.evidence_capture import (
     run_capture,
 )
 from gnosis.kernel.git_evidence import content_fingerprint
+from gnosis.kernel.write_observer import (
+    Observation,
+    UnavailableObserver,
+    create_write_observer,
+)
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -529,15 +541,359 @@ class TestTheRepositorysOwnUntrackedFilesAreCovered(unittest.TestCase):
 
 class TestCaptureIsADataclassNotAFlag(unittest.TestCase):
     def test_evidence_valid_is_derived_from_the_binding(self):
+        # Changed by the first independent review, and only here: the
+        # capture now needs a boundary as well as a binding, because
+        # equal endpoints were exactly the defect. The assertion below is
+        # the same one, with the second half it was missing.
         capture = Capture(
             bind_tree(TreeIdentity(True, "d", {}), TreeIdentity(True, "d", {})),
-            (), ChecksVerdict.ALL_CLEAN, Path("."), {}, EXIT_OK)
+            (), ChecksVerdict.ALL_CLEAN, Path("."), {}, EXIT_OK, _clean_boundary())
         self.assertTrue(capture.evidence_valid)
 
         mutated = Capture(
             bind_tree(TreeIdentity(True, "d", {}), TreeIdentity(True, "e", {})),
-            (), ChecksVerdict.ALL_CLEAN, Path("."), {}, EXIT_TREE_MUTATED)
+            (), ChecksVerdict.ALL_CLEAN, Path("."), {}, EXIT_TREE_MUTATED,
+            _clean_boundary())
         self.assertFalse(mutated.evidence_valid)
+
+    def test_a_bound_capture_over_an_unobserved_interval_is_not_valid(self):
+        unobserved = Boundary(
+            ObservationVerdict.UNOBSERVED, "none", 0, 0, (), 0, (),
+            reason="no write observer")
+        capture = Capture(
+            bind_tree(TreeIdentity(True, "d", {}), TreeIdentity(True, "d", {})),
+            (), ChecksVerdict.ALL_CLEAN, Path("."), {}, EXIT_BOUNDARY_UNAVAILABLE,
+            unobserved)
+        self.assertFalse(capture.evidence_valid)
+
+
+def _clean_boundary() -> Boundary:
+    return Boundary(ObservationVerdict.CLEAN, "test", 0, 0, (), 0, ())
+
+
+class _FixedObserver:
+    """An observer that reports whatever the test needs it to report."""
+
+    def __init__(self, observation: Observation) -> None:
+        self._observation = observation
+        self.started = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def stop(self) -> Observation:
+        return self._observation
+
+
+def _script(*lines: str) -> CheckCommand:
+    return CheckCommand("check", (sys.executable, "-c", "\n".join(lines)))
+
+
+def _change_read_restore(target: str) -> CheckCommand:
+    """The reproduction: mutate, read the mutation, put everything back.
+
+    Bytes, size and timestamps are all restored, so every sampled
+    comparison — the two fingerprints included — sees a tree that never
+    moved.
+    """
+    return _script(
+        "import os",
+        f"p = r'{target}'",
+        "st = os.stat(p)",
+        "original = open(p, 'rb').read()",
+        "open(p, 'wb').write(b'TAMPERED-DURING-THE-CHECK\\n')",
+        "assert open(p, 'rb').read() == b'TAMPERED-DURING-THE-CHECK\\n'",
+        "open(p, 'wb').write(original)",
+        "os.utime(p, (st.st_atime, st.st_mtime))",
+    )
+
+
+class TestATransientChangeIsStillAChange(unittest.TestCase):
+    """The first independent review of ADR-0026, reproduced and closed.
+
+    Every test here checks the SAME two things: that the endpoints agree
+    (so the previous implementation would have called it valid) and that
+    the capture refuses anyway.
+    """
+
+    def _assert_caught(self, capture, expect_path: str):
+        self.assertIs(capture.binding.verdict, BindingVerdict.BOUND,
+                      "the endpoints must agree, or this proves nothing")
+        self.assertIs(capture.boundary.verdict, ObservationVerdict.INPUTS_MUTATED)
+        self.assertFalse(capture.evidence_valid)
+        self.assertFalse(capture.summary["all_passed"])
+        self.assertEqual(capture.exit_code, EXIT_INPUTS_MUTATED)
+        self.assertIn("INVALID EVIDENCE", capture.summary["verdict"])
+        self.assertTrue(
+            any(expect_path in violation for violation in capture.boundary.violations),
+            f"{expect_path} not named in {capture.boundary.violations}")
+
+    def test_a_clean_tracked_file_changed_read_and_restored_is_caught(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            capture = run_capture(repo, [_change_read_restore("a.txt")], root / "staging")
+            self._assert_caught(capture, "a.txt")
+
+    def test_an_already_dirty_tracked_file_changed_read_and_restored_is_caught(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            (repo / "a.txt").write_text("dirty before the capture\n", encoding="utf-8")
+            capture = run_capture(repo, [_change_read_restore("a.txt")], root / "staging")
+            self._assert_caught(capture, "a.txt")
+
+    def test_an_untracked_file_changed_read_and_restored_is_caught(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            (repo / "u.txt").write_text("untracked\n", encoding="utf-8")
+            capture = run_capture(repo, [_change_read_restore("u.txt")], root / "staging")
+            self._assert_caught(capture, "u.txt")
+
+    def test_an_untracked_file_created_read_and_deleted_is_caught(self):
+        # In neither fingerprint: it did not exist at the start and does
+        # not exist at the end. Only the stream ever saw it.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            capture = run_capture(repo, [_script(
+                "import os",
+                "open('ghost.txt', 'w', encoding='utf-8').write('here\\n')",
+                "assert open('ghost.txt', encoding='utf-8').read() == 'here\\n'",
+                "os.remove('ghost.txt')",
+            )], root / "staging")
+            self._assert_caught(capture, "ghost.txt")
+
+    def test_an_external_change_that_restores_itself_before_the_end_is_caught(self):
+        # Nothing the check did: another process on the machine. The
+        # handshake keeps it deterministic instead of racing a sleep.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            ready, go = root / "ready", root / "go"
+            check = _script(
+                "import os, time",
+                f"open(r'{ready}', 'w').close()",
+                f"while not os.path.exists(r'{go}'):",
+                "    time.sleep(0.01)",
+            )
+
+            def meddle():
+                while not ready.exists():
+                    time.sleep(0.01)
+                target = repo / "a.txt"
+                stat = target.stat()
+                original = target.read_bytes()
+                target.write_bytes(b"TAMPERED-FROM-OUTSIDE\n")
+                target.write_bytes(original)
+                os.utime(target, (stat.st_atime, stat.st_mtime))
+                go.write_text("go", encoding="utf-8")
+
+            meddler = threading.Thread(target=meddle)
+            meddler.start()
+            try:
+                capture = run_capture(repo, [check], root / "staging")
+            finally:
+                go.write_text("go", encoding="utf-8")
+                meddler.join(timeout=30)
+            self._assert_caught(capture, "a.txt")
+
+    def test_a_stable_run_still_produces_valid_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            (repo / "a.txt").write_text("dirty but still\n", encoding="utf-8")
+            (repo / "u.txt").write_text("untracked but still\n", encoding="utf-8")
+
+            capture = run_capture(repo, [_script("print('quiet')")], root / "staging")
+
+            self.assertIs(capture.binding.verdict, BindingVerdict.BOUND)
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
+            self.assertEqual(capture.boundary.violations, ())
+            self.assertTrue(capture.evidence_valid)
+            self.assertEqual(capture.exit_code, EXIT_OK)
+            self.assertTrue(capture.summary["all_passed"])
+
+    def test_an_authorised_output_created_and_removed_is_not_a_violation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            check = _script(
+                "import os",
+                "os.makedirs('build-output', exist_ok=True)",
+                "open('build-output/report.txt', 'w', encoding='utf-8').write('x\\n')",
+                "os.remove('build-output/report.txt')",
+                "os.rmdir('build-output')",
+            )
+            capture = run_capture(repo, [check], root / "staging",
+                                  allowed_writes=("build-output/",))
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
+            self.assertTrue(capture.evidence_valid)
+            self.assertGreater(capture.boundary.allowed_events, 0)
+
+    def test_the_same_write_without_the_authorisation_is_a_violation(self):
+        # The allow-list is what makes the difference, not the file name.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            check = _script(
+                "import os",
+                "os.makedirs('build-output', exist_ok=True)",
+                "open('build-output/report.txt', 'w', encoding='utf-8').write('x\\n')",
+                "os.remove('build-output/report.txt')",
+                "os.rmdir('build-output')",
+            )
+            capture = run_capture(repo, [check], root / "staging")
+            self._assert_caught(capture, "build-output/report.txt")
+
+    def test_a_git_ignored_cache_written_during_a_check_is_not_a_violation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            (repo / ".gitignore").write_text(".mypy_cache/\n", encoding="utf-8")
+            _git(repo, "add", ".gitignore")
+            _git(repo, "commit", "-m", "ignore the cache")
+
+            check = _script(
+                "import os",
+                "os.makedirs('.mypy_cache', exist_ok=True)",
+                "open('.mypy_cache/data.json', 'w', encoding='utf-8').write('{}\\n')",
+            )
+            capture = run_capture(repo, [check], root / "staging")
+
+            self.assertIs(capture.binding.verdict, BindingVerdict.BOUND)
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
+            self.assertTrue(capture.evidence_valid)
+
+    def test_writes_to_git_itself_are_counted_not_judged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            capture = run_capture(repo, [_script("pass")], root / "staging")
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
+            self.assertGreater(capture.boundary.machinery_events, 0,
+                               "git updates its index while reading the tree")
+
+
+class TestTheBoundaryFailsClosed(unittest.TestCase):
+    def test_an_unavailable_observer_invalidates_the_capture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            capture = run_capture(
+                repo, [_script("pass")], root / "staging",
+                observer=lambda _: _FixedObserver(
+                    Observation(False, False, (), "none", "no observer on this platform")))
+
+            self.assertIs(capture.binding.verdict, BindingVerdict.BOUND)
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.UNOBSERVED)
+            self.assertFalse(capture.evidence_valid)
+            self.assertEqual(capture.exit_code, EXIT_BOUNDARY_UNAVAILABLE)
+            self.assertIn("no observer on this platform", capture.summary["verdict"])
+
+    def test_an_incomplete_observation_invalidates_the_capture(self):
+        # The kernel dropped events. Seeing none of them is not seeing none.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            capture = run_capture(
+                repo, [_script("pass")], root / "staging",
+                observer=lambda _: _FixedObserver(Observation(
+                    True, False, (), "ReadDirectoryChangesW(recursive)",
+                    "the change buffer overflowed; events were lost")))
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.UNOBSERVED)
+            self.assertFalse(capture.evidence_valid)
+            self.assertEqual(capture.exit_code, EXIT_BOUNDARY_UNAVAILABLE)
+            self.assertFalse(capture.summary["gates_clean"])
+
+    def test_an_empty_stream_from_a_trustworthy_observer_is_clean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            capture = run_capture(
+                repo, [_script("pass")], root / "staging",
+                observer=lambda _: _FixedObserver(
+                    Observation(True, True, (), "test", None)))
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
+            self.assertTrue(capture.evidence_valid)
+
+    def test_the_six_situations_have_six_exit_codes(self):
+        self.assertEqual(
+            len({EXIT_OK, EXIT_CHECKS_FAILED, EXIT_TREE_MUTATED,
+                 EXIT_IDENTITY_UNAVAILABLE, EXIT_INPUTS_MUTATED,
+                 EXIT_BOUNDARY_UNAVAILABLE}), 6)
+
+    def test_the_bundle_records_the_boundary_beside_the_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            capture = run_capture(repo, [_script("pass")], root / "staging")
+            written = json.loads(
+                (capture.bundle / "SUMMARY.json").read_text(encoding="utf-8"))
+
+            boundary = written["boundary"]
+            self.assertEqual(boundary["verdict"], "CLEAN")
+            self.assertIn("ReadDirectoryChangesW", boundary["mechanism"])
+            self.assertIn("undoes itself", boundary["authority"])
+            self.assertGreater(boundary["covered_files"], 0)
+
+
+class TestTheWriteObserverItself(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "ReadDirectoryChangesW is Windows-only")
+    def test_a_change_that_undoes_itself_is_still_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a.txt").write_text("original\n", encoding="utf-8")
+            stat = (root / "a.txt").stat()
+
+            observer = create_write_observer(root)
+            observer.start()
+            (root / "a.txt").write_bytes(b"TAMPERED\n")
+            (root / "a.txt").write_bytes(b"original\n")
+            os.utime(root / "a.txt", (stat.st_atime, stat.st_mtime))
+            observation = observer.stop()
+
+            self.assertTrue(observation.available)
+            self.assertTrue(observation.complete)
+            self.assertTrue(observation.trustworthy)
+            self.assertTrue(any(event.path == "a.txt" for event in observation.events))
+            # And the tree really is byte-identical again.
+            self.assertEqual((root / "a.txt").read_bytes(), b"original\n")
+
+    @unittest.skipUnless(sys.platform == "win32", "ReadDirectoryChangesW is Windows-only")
+    def test_a_quiet_directory_reports_a_trustworthy_empty_stream(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a.txt").write_text("original\n", encoding="utf-8")
+            observer = create_write_observer(root)
+            observer.start()
+            (root / "a.txt").read_bytes()
+            observation = observer.stop()
+
+            self.assertTrue(observation.trustworthy)
+            self.assertFalse([event for event in observation.events
+                              if not event.path.startswith(".gnosis-capture-barrier")])
+
+    @unittest.skipUnless(sys.platform == "win32", "ReadDirectoryChangesW is Windows-only")
+    def test_the_barrier_is_removed_after_the_stream_is_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            observer = create_write_observer(root)
+            observer.start()
+            observer.stop()
+            self.assertFalse((root / ".gnosis-capture-barrier").exists())
+
+    def test_an_observer_that_was_never_armed_never_says_nothing_happened(self):
+        observation = UnavailableObserver("no mechanism here").stop()
+        self.assertFalse(observation.available)
+        self.assertFalse(observation.complete)
+        self.assertFalse(observation.trustworthy)
+        self.assertEqual(observation.events, ())
 
 
 if __name__ == "__main__":

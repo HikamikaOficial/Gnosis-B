@@ -1,7 +1,8 @@
 # GNOSIS — Matriz V1 viva
 
-**Última actualización:** 2026-08-22 · **Unidad:** ADR-0026 — **F-14
-reparado, NO cerrado**, entregado para primera revisión independiente.
+**Última actualización:** 2026-08-23 · **Unidad:** ADR-0026 + primera
+revisión independiente (**FAIL CRÍTICO**, reparada) — **F-14 sigue
+ABIERTO**, entregado para una segunda revisión independiente.
 Unidad anterior: ADR-0025 + cuatro addenda (FAIL PARCIAL, FAIL PARCIAL,
 **FAIL CRÍTICO**, **PASS**) — F-34 **CERRADO** por la cuarta revisión,
 sin hallazgos sobre el código `9c6064c` y la evidencia `f02e18e`
@@ -118,7 +119,8 @@ lo que costó F-34.
 
 | Hallazgo | ADR | Fecha | Estado | Evidencia |
 |---|---|---|---|---|
-| **F-14** — la evidencia capturada no identifica de forma vinculante los bytes probados: `git status` es estado y nombre, nunca contenido | ADR-0026 | 2026-08-22 | **reparado, sin revisar** | ver §Evidencia del ADR; 36 pruebas y 5 subtests dirigidos; nueve mutantes, ninguno sobrevive (`scripts/mutation_check_f14.py`) |
+| **F-14** — la evidencia capturada no identifica de forma vinculante los bytes probados: `git status` es estado y nombre, nunca contenido | ADR-0026 | 2026-08-22 | reparado; **primera revisión independiente: FAIL CRÍTICO** | 36 pruebas, nueve mutantes; el vínculo probaba los extremos, no el intervalo |
+| **F-14 (primera revisión)** — dos huellas iguales no demuestran estabilidad: una comprobación que cambia un fichero, lee el cambio y restaura los bytes, el tamaño y las fechas devolvía `evidence_valid: true`. Cambio transitorio (ABA) | ADR-0026 addendum 1 | 2026-08-23 | **reparado, pendiente de segunda revisión** | observador de escrituras (`ReadDirectoryChangesW`) armado antes de la huella previa y cerrado tras una barrera de entrega; 56 pruebas y 3 subtests; trece mutantes, ninguno sobrevive |
 
 Qué hace la reparación: `probe_tree_identity()` envuelve
 `content_fingerprint()` — HEAD, el parche contra él y el sha256 de cada
@@ -129,6 +131,15 @@ captura no es evidencia y lo dice, hayan pasado las pruebas o no. El
 bundle se construye fuera del repositorio y se publica después de la
 huella final, para que la evidencia no aparezca en su propia huella.
 
+Y, tras la primera revisión: **el intervalo tiene su propia autoridad.**
+Un observador de escrituras se arma antes de la huella previa y se cierra
+después de la posterior, detrás de una barrera de entrega que demuestra
+que la cola del flujo llegó. Un cambio que se deshace a sí mismo sigue
+siendo un cambio (`INPUTS_MUTATED`, salida 4); un flujo que pudo perder
+algo — desbordamiento, barrera no observada, mecanismo ausente — no es
+«no pasó nada» (`UNOBSERVED`, salida 5). `evidence_valid` es ahora la
+conjunción: extremos iguales **y** intervalo observado limpio.
+
 **Solapamiento observado con F-15…F-18, que NO se marcan reparados:**
 F-15 (la primitiva existía sin usarse) — este script ya la usa, que era
 la corrección sugerida, pero el hallazgo abarca la superficie de
@@ -138,7 +149,11 @@ pero la lista de comandos sigue igual y `git-status.stdout.txt` sigue
 siendo un artefacto posterior a la suite; F-17 (tamper-evidence) —
 `SUMMARY.json` ya contiene HEAD, el digest de status y las dos
 identidades completas, pero **no hay hash-chain ni firma**, que es de lo
-que trata F-17; F-18 (deriva de evidencia) — intacto.
+que trata F-17; F-18 (deriva de evidencia) — intacto. El addendum añade un solapamiento
+más, también sin reclamar: las escrituras bajo `.git/` se **cuentan** y no
+se juzgan, porque git reescribe su índice al leer el árbol; un gancho
+instalado durante la captura queda fuera de esta frontera y dentro de
+F-17, que sigue abierto.
 
 ## Hallazgos abiertos
 

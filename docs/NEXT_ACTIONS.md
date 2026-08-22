@@ -72,9 +72,26 @@ when an ADR with captured evidence backs it.
   (2), identity unavailable (3), lint debt within the recorded baseline
   (0, and not a failure). The bundle is built outside the repository and
   published after the post fingerprint, so it cannot appear in its own
-  identity. 36 tests, 5 subtests; nine mutants, none survived
-  (`scripts/mutation_check_f14.py`). **Next action: hand this unit to an
-  independent review.** It is not closed until that returns.
+  identity.
+
+- **First independent review (Codex, 2026-08-23): FAIL CRÍTICO — equal
+  endpoints are not a stable interval.** A check that changed a covered
+  file, read the change and restored the bytes, size and timestamps
+  produced `evidence_valid: true`: two fingerprints prove two instants,
+  and the checks run between them. None of the 36 tests could have caught
+  it, because every mutation they make is still visible at the post
+  fingerprint. Repaired: `kernel/write_observer.py` streams every change
+  under the tree (`ReadDirectoryChangesW`), armed BEFORE the pre
+  fingerprint and closed AFTER the post one behind a delivery barrier —
+  a written marker the observer must SEE, since notifications arrive in
+  order and a timer is exactly what the finding refuted. A covered input
+  written during the run is `INPUTS_MUTATED` (exit 4) whatever the
+  endpoints say; a stream that overflowed or could not be armed is
+  `UNOBSERVED` (exit 5), never "nothing happened". Caches are redirected
+  out of the tree rather than forgiven inside it. 56 tests, 3 subtests;
+  thirteen mutants, none survived. **Next action: hand this unit to a
+  SECOND independent review.** It is not closed until one returns without
+  findings.
 
 - **Observed overlap with F-15..F-18, none of them marked repaired:**
   F-15's suggested correction is what this script now does, but the
@@ -83,6 +100,9 @@ when an ADR with captured evidence backs it.
   is unchanged and `git-status.stdout.txt` is still post-suite; F-17 now
   has HEAD, the status digest and both identities inside `SUMMARY.json`
   and still has **no hash chain and no signature**; F-18 is untouched.
+  The addendum adds one more, also unclaimed: writes under `.git/` are
+  counted and not judged, so a hook installed mid-capture is outside this
+  boundary and inside F-17's.
 
 - **A pre-existing flaky test, found while checking the baseline and
   deliberately not repaired here:**
@@ -163,8 +183,10 @@ PYTHONUTF8=1 .venv/Scripts/python.exe scripts/capture_evidence.py
 ```
 
 That script now fails closed rather than producing an unattributable
-transcript: exit 2 if the tree moved during the capture, exit 3 if its
-identity could not be taken. Baseline as of ADR-0026: **874 tests and 60
+transcript: exit 2 if the endpoints differ, exit 3 if the identity could
+not be taken, exit 4 if a covered input was written during the run even
+though the endpoints agree, exit 5 if the interval could not be observed
+completely. Baseline as of ADR-0026: **874 tests and 60
 subtests when the flaky work-queue test cooperates** (873 + 1 flaky
 failure otherwise — see above), mypy strict clean over 56 source files,
 ruff at the 19-finding baseline. Then **whichever audit finding direction

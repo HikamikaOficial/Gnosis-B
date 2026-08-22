@@ -3,15 +3,20 @@
 - Status: ACCEPTED
 - Date: 2026-08-22
 - Repairs: **F-14** (`docs/V1_TRACEABILITY_AUDIT.md`) — and F-14 only.
-- Independent review: **OUTSTANDING.** This unit is delivered for review,
-  not declared closed by it. F-14 stays OPEN in
-  `docs/V1_COMPLIANCE_MATRIX.md` until an independent pass returns
-  without findings. That is the rule ADR-0025 had to learn three times,
-  and it applies to a repair that looks clean on its first pass exactly
-  as much as to one that does not.
-- Tests: `tests/test_evidence_binding.py` — 36 tests, 5 subtests.
-- Mutation check: `scripts/mutation_check_f14.py` — **nine mutants, none
-  survived**, declared as data so a reviewer re-runs the claim rather
+- Independent review, round 1 (Codex, 2026-08-23): **FAIL CRÍTICO** — the
+  two fingerprints proved the endpoints and not the interval between
+  them, so a check that changed a file, read the change and restored the
+  original bytes produced `evidence_valid: true`. Repaired in the
+  addendum below. **A second independent review is OUTSTANDING**; F-14
+  stays OPEN in `docs/V1_COMPLIANCE_MATRIX.md` until one returns without
+  findings. The rule ADR-0025 had to learn three times applies to a
+  repair that looks clean on its first pass exactly as much as to one
+  that does not — and this one did.
+- Tests: `tests/test_evidence_binding.py` — **56 tests, 3 subtests**
+  (36 in the first delivery, 20 added by the addendum).
+- Mutation check: `scripts/mutation_check_f14.py` — **thirteen mutants,
+  none survived** (nine from the first delivery, four added by the
+  addendum), declared as data so a reviewer re-runs the claim rather
   than reading it.
 - Evidence: `.gnosis/evidence/20260822T212531Z/` — **910 passed, 62
   subtests**, mypy strict clean over 56 source files, ruff at **19
@@ -305,3 +310,148 @@ change to `tests/` that no F-14 evidence should be carrying.
   same targeted suite.
 - `tests/test_evidence_binding.py` — new, named after the property rather
   than the module, as `tests/test_no_invalid_done.py` is.
+
+## First independent review addendum — Codex, 2026-08-23: **FAIL CRÍTICO**
+
+The delivery above was reviewed independently and returned FAIL CRÍTICO.
+The identity is right at both ends and the derivation is right; the claim
+built on them is not. Two fingerprints prove the tree was the same at two
+instants. They prove nothing about the interval between them, and the
+interval is where the checks run.
+
+### The finding, reproduced
+
+```python
+# a check that changes a covered file, reads the change, and puts it back
+st = os.stat("a.txt"); original = open("a.txt","rb").read()
+open("a.txt","wb").write(b"TAMPERED"); assert open("a.txt","rb").read() == b"TAMPERED"
+open("a.txt","wb").write(original); os.utime("a.txt", (st.st_atime, st.st_mtime))
+
+# -> binding=BOUND  identical=true  evidence_valid=true  all_passed=true  exit=0
+```
+
+Bytes, size, status and timestamps all restored, so every endpoint
+comparison agrees — correctly. The suite did not run against the bytes
+the bundle names; it ran against `TAMPERED` for part of the interval and
+the bundle says otherwise. This is the ABA problem, and the previous 36
+tests could not have caught it: every mutation they make stays visible
+until the post fingerprint, so all of them are detected by an endpoint
+comparison and none of them exercises change → read → restore.
+
+The reviewer was also right about what does not fix it. Polling, `mtime`,
+`git status` and a third fingerprint are all samples of a moment, and a
+transient change lives between moments. Sampling harder narrows the
+window; it never closes it.
+
+### The repair — the interval gets its own authority
+
+**`kernel/write_observer.py`** streams every change under the tree from
+`ReadDirectoryChangesW`, watching recursively, filtering on file name,
+directory name, attributes, size, last write, creation and security. The
+kernel queues a notification for each change from the moment the first
+read is issued, so a write and its undo both appear. Attributes are in
+the filter because clearing a read-only bit in order to write is itself
+a change worth seeing.
+
+Two ways the stream can lie by omission are treated as loudly as a
+violation:
+
+- **Overflow.** If changes arrive faster than they are drained the kernel
+  drops the queue and returns a zero-length read. Events were lost; the
+  observation is INCOMPLETE and the capture fails closed.
+- **The undelivered tail.** Waiting "long enough" after the last check is
+  a timer, and a timer is what was just proved insufficient. `stop()`
+  instead writes a barrier file into the watched tree and blocks until it
+  OBSERVES that barrier. Notifications are delivered in order, so seeing
+  the barrier proves every earlier change was already delivered. If the
+  barrier never arrives, the observation is incomplete and the capture
+  fails closed. The barrier is this module's only write: it lives in
+  `.gnosis-capture-barrier/`, is removed in a `finally`, and is always an
+  allowed path.
+
+**The order in `run_capture` is the argument.** The observer is armed
+FIRST, so the pre fingerprint is itself inside the observed window; the
+checks run; the post fingerprint is taken while the observer is still
+running; only then is the stream closed behind the barrier. The
+unobserved windows are the instant before arming and the instant after
+the barrier, and nothing runs in either.
+
+**Two new outcomes, two new exit codes**, because the operator response
+differs again:
+
+| Situation | Recorded as | Exit |
+|---|---|---|
+| a covered input was written during the run | `INPUTS_MUTATED` | 4 |
+| the interval could not be observed, or not completely | `UNOBSERVED` | 5 |
+
+`UNOBSERVED` outranks `INPUTS_MUTATED` for the same reason
+`IDENTITY_UNAVAILABLE` outranks `TREE_MUTATED`: not knowing is worse than
+knowing. `evidence_valid` is now the conjunction — the endpoints agree
+AND the interval was observed clean. Either half alone is what the review
+just refuted.
+
+**Classification, and how a legitimate cache stops being a false
+positive.** Everything a check writes that CAN be redirected is
+redirected out of the tree: `PYTHONPYCACHEPREFIX`, `MYPY_CACHE_DIR`,
+`RUFF_CACHE_DIR` and `PYTEST_ADDOPTS=-p no:cacheprovider` all point at a
+scratch directory beside the bundle and outside the repository. What is
+left is judged by rule, in this order: a path in the covered set is a
+violation; a path under `.git/` is COUNTED as a machinery event and not
+judged, because git rewrites its index while merely reading the tree; a
+path under an explicitly allowed prefix is allowed; a directory's own
+timestamp event is allowed, since its entries produce their own events;
+anything else is checked in one batch against git's ignore rules, and a
+path git does not ignore is a violation. That last clause is what catches
+a file created and deleted inside the run — it is in neither fingerprint,
+and only the stream ever saw it. `git check-ignore` classifies paths the
+stream already produced; it is never asked what changed.
+
+### One existing test changed, and only one
+
+`test_evidence_valid_is_derived_from_the_binding` asserted that a BOUND
+binding is sufficient for `evidence_valid`. That assertion is the defect,
+stated as a test, so it could not survive the repair intact. Its
+construction now passes a boundary and its assertion is the same one with
+the half it was missing; a companion test asserts the negative case — a
+BOUND binding over an unobserved interval is NOT valid. The other 35 pass
+unedited, and the nine original mutants all still bite. MF4's anchor text
+was updated because the code it names moved; the mutant is the same.
+
+### Mutation check
+
+Thirteen mutants now, run by `scripts/mutation_check_f14.py`. Targeted
+suite `tests/test_evidence_binding.py` + `tests/test_git_evidence.py`;
+baseline **58 passed / 3 subtests**.
+
+| Mutant | Result |
+|---|---|
+| MF1..MF9 (the first delivery's nine, unchanged in meaning) | **red** |
+| MF10 an observed write to a covered input is not a violation | **red** |
+| MF11 an observation that could have missed something is accepted | **red** |
+| MF12 validity goes back to the binding alone — the reviewed defect, restored | **red** |
+| MF13 a path that appears and disappears inside the run is not judged | **red** |
+
+None survived; the tree was restored and re-verified green. MF12 is the
+review's finding put back verbatim: with it in place the change → read →
+restore tests all report valid evidence again.
+
+### What this does not close, stated rather than implied
+
+- **F-14 is still OPEN**, pending a second independent review. The first
+  one found this in a unit that had 36 tests, nine mutants and a clean
+  self-review.
+- **F-15..F-18 remain open and untouched by this addendum.** The overlap
+  recorded in the first delivery is unchanged, with one addition: writes
+  under `.git/` are counted and not judged, so a check that installs a
+  hook or rewrites a ref is outside this boundary. That is precisely
+  F-17's subject (`tamper_fingerprint` exists and covers hooks and
+  config) and it is not repaired here.
+- **The mechanism is Windows-only.** On any other platform
+  `create_write_observer` returns an observer that reports itself
+  unavailable, so a capture there exits 5 and produces no valid evidence.
+  Fail-closed, and a real limitation.
+- **Memory-mapped writes** may be reported when the section is flushed
+  rather than when the memory is written.
+- **Ignored files are still outside the covered set**, exactly as
+  `content_fingerprint` defines it. The boundary does not widen the
+  claim; it defends the claim that was already being made.

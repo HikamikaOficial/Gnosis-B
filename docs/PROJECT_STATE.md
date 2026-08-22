@@ -3,7 +3,7 @@
 **Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION; THE PROBE HAS A CALLER; MULTI-CREDENTIAL ROTATION
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
-**Last update:** 2026-08-22 (F-34 closed; the stale lines below are F-19..F-32, still open)
+**Last update:** 2026-08-23 (F-34 closed; F-14 repaired twice and still open; the stale lines below are F-19..F-32, still open)
 
 ## Kernel hardening (post-Phase -1)
 
@@ -417,7 +417,7 @@ sites), `kernel/integration.py` and `adapters/cli_review.py`, which are
 decision logic in other subsystems; none can forge a COMPLETED, but
 "cannot forge a DONE" is weaker than "cannot be misread".
 
-## F-14 — the evidence surface now binds bytes (ADR-0026, 2026-08-22)
+## F-14 — the evidence surface binds bytes, and now the interval too (ADR-0026 + addendum, 2026-08-23)
 
 `scripts/capture_evidence.py` recorded HEAD and `git status --porcelain`.
 Status is a state and a NAME: two different dirty trees that touch the
@@ -448,17 +448,54 @@ had to find it again.
 All four ADR-0025 rounds wrote an external `tree-binding.json` by hand
 around this script. That workaround is now unnecessary.
 
-**F-14 is NOT closed.** It is repaired, tested (36 tests, 5 subtests) and
-mutation-checked (nine mutants, none survived,
-`scripts/mutation_check_f14.py`), and no independent review has seen it.
-It closes when one returns without findings.
+**First independent review (Codex, 2026-08-23): FAIL CRÍTICO.** The
+identity was right at both ends and the claim built on them was not. Two
+fingerprints prove the tree was the same at two INSTANTS; the checks run
+in the INTERVAL. A check that changed a covered file, read the change and
+restored the bytes, the size and the timestamps produced
+`evidence_valid: true` — and the 36 tests could not have caught it, since
+every mutation they make is still visible at the post fingerprint, so all
+of them are found by an endpoint comparison and none exercises
+change -> read -> restore.
+
+Nothing sampled closes that: polling, `mtime`, `git status` and a third
+fingerprint are all samples of a moment, and a transient change lives
+between moments. So the interval got its own authority.
+`kernel/write_observer.py` streams every change under the tree from
+`ReadDirectoryChangesW` — name, directory, attributes, size, last write,
+creation, security — armed BEFORE the pre fingerprint and closed AFTER
+the post one, so both endpoints sit inside the observed window. A stream
+that could have missed something is not a clean stream: an overflowed
+kernel queue fails closed, and rather than waiting out a timer for the
+tail, `stop()` writes a barrier file and blocks until it OBSERVES that
+barrier — notifications arrive in order, so seeing it proves everything
+earlier was already delivered. Two new outcomes with their own exit
+codes: `INPUTS_MUTATED` (4) for a covered input written during the run
+whatever the endpoints say, and `UNOBSERVED` (5) for an interval that
+could not be watched completely. `evidence_valid` is now the conjunction.
+
+Legitimate writes stop being false positives by being moved rather than
+forgiven: `PYTHONPYCACHEPREFIX`, `MYPY_CACHE_DIR`, `RUFF_CACHE_DIR` and
+`PYTEST_ADDOPTS=-p no:cacheprovider` send every cache to a scratch
+directory outside the tree. What remains is judged by rule, and writes
+under `.git/` are COUNTED as machinery rather than judged, because git
+rewrites its index while merely reading the tree.
+
+**F-14 is still NOT closed.** It is repaired twice now, tested (56 tests,
+3 subtests) and mutation-checked (thirteen mutants, none survived,
+`scripts/mutation_check_f14.py`), and it awaits a SECOND independent
+review. The first one found this in a unit that had 36 tests, nine
+mutants and a clean self-review. It closes when a review returns without
+findings.
 
 **Overlap recorded, not claimed:** F-15 (the unused primitive) is what
 this script now uses; F-16 (capture order) no longer affects the binding
 though the command list is unchanged; F-17 now has HEAD, the status
 digest and both identities inside `SUMMARY.json` but still **no hash
 chain and no signature**; F-18 is untouched. None of them are marked
-repaired.
+repaired. The addendum adds one more overlap, also unclaimed: `.git/`
+writes are counted and not judged, so a hook installed during a capture
+is outside this boundary and inside F-17's.
 
 **The baseline was not green at the start of this unit, and not because
 of it.** The full suite at `aea62b0` returned 1 failed, 873 passed:

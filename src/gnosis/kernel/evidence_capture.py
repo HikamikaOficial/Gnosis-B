@@ -30,14 +30,34 @@ Three rules make the binding worth something:
 - The bundle is written OUTSIDE the repository and published after the
   post fingerprint, so evidence never invalidates itself by existing.
 
-Four outcomes stay distinct, because the operator response differs::
+**Two fingerprints are not enough, and that was the first independent
+review's finding.** Equal endpoints prove the tree was the same at two
+instants; they prove nothing about the interval. A check that modifies a
+file, reads the modified bytes and restores the original bytes — and the
+original size, attributes and timestamps — leaves both fingerprints
+identical. Nothing sampled closes that: polling, `mtime`, `git status`
+and a third fingerprint are all snapshots of a moment, and a transient
+change lives between moments.
+
+So the interval has its own authority: a write observer
+(`kernel.write_observer`) armed before the first fingerprint and stopped
+after the last, which streams every create, delete, rename, size,
+attribute and last-write change under the tree. A write and its undo both
+appear. An observation that could have missed something — an overflowed
+kernel queue, an undelivered tail, no mechanism at all — is INCOMPLETE,
+and incomplete fails closed exactly like a broken identity probe.
+
+Six outcomes stay distinct, because the operator response differs::
 
     PASSED / FAILED        the checks — the code is right or wrong
     WITHIN_LINT_BASELINE   known, bounded debt; not a failure
-    TREE_MUTATED           the transcript is unattributable
-    IDENTITY_UNAVAILABLE   the probe is broken
+    TREE_MUTATED           the endpoints differ; unattributable
+    INPUTS_MUTATED         a covered input was written during the run,
+                           whatever the endpoints say
+    IDENTITY_UNAVAILABLE   the identity probe is broken
+    BOUNDARY_UNAVAILABLE   the write observer is missing or incomplete
 
-The last one fails closed on purpose. A probe that could not answer must
+The last two fail closed on purpose. A probe that could not answer must
 never read as "nothing changed", or breaking the probe becomes the way to
 defeat the check.
 
@@ -50,6 +70,7 @@ different decision than this one.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -63,15 +84,27 @@ from typing import Any
 
 from .canonical import hash_canonical
 from .git_evidence import content_fingerprint
+from .write_observer import (
+    BARRIER_DIR,
+    Observation,
+    WriteObserver,
+    create_write_observer,
+)
 
 # Distinct on purpose: a reader who sees only the exit code still learns
-# which of the four situations happened.
+# which of the six situations happened.
 EXIT_OK = 0
 EXIT_CHECKS_FAILED = 1
 EXIT_TREE_MUTATED = 2
 EXIT_IDENTITY_UNAVAILABLE = 3
+EXIT_INPUTS_MUTATED = 4
+EXIT_BOUNDARY_UNAVAILABLE = 5
 
 _UNREADABLE_PREFIX = "unreadable: "
+
+# Not a covered input and not the caller's choice: `content_fingerprint`
+# never hashes `.git`, and git writes there while reading the tree.
+_GIT_DIR = ".git/"
 
 
 class BindingVerdict(Enum):
@@ -98,6 +131,21 @@ class ChecksVerdict(Enum):
     WITHIN_BASELINE = "WITHIN_BASELINE"
     FAILED = "FAILED"
     NOT_RUN = "NOT_RUN"
+
+
+class ObservationVerdict(Enum):
+    """What the interval between the two fingerprints is known to be.
+
+    CLEAN is a positive claim and requires a complete observation. An
+    observer that was absent, that overflowed, or whose tail could not be
+    proved delivered lands in UNOBSERVED — never in CLEAN, because "we
+    saw nothing" and "we could not see" are the two answers this whole
+    unit exists to keep apart.
+    """
+
+    CLEAN = "CLEAN"
+    INPUTS_MUTATED = "INPUTS_MUTATED"
+    UNOBSERVED = "UNOBSERVED"
 
 
 @dataclass(frozen=True)
@@ -250,6 +298,157 @@ def bind_tree(pre: TreeIdentity, post: TreeIdentity) -> TreeBinding:
     return TreeBinding(pre, post, BindingVerdict.BOUND)
 
 
+def _git_lines(repo: Path, args: Sequence[str]) -> list[str]:
+    proc = subprocess.run(["git", *args], cwd=repo, capture_output=True,
+                          text=True, check=False)
+    if proc.returncode != 0:
+        return []
+    return [line for line in proc.stdout.split("\0") if line]
+
+
+def covered_paths(repo: Path) -> frozenset[str]:
+    """Every file the identity is a statement about.
+
+    Tracked files at their working-tree bytes, plus untracked files that
+    git would report — exactly the set `content_fingerprint` covers
+    through its patch and its per-path untracked digests. Ignored files
+    are outside it, here as there.
+    """
+    tracked = _git_lines(repo, ["ls-files", "-z"])
+    status = _git_lines(repo, ["status", "--porcelain", "-z", "--untracked-files=all"])
+    untracked = [entry[3:] for entry in status if entry.startswith("?? ")]
+    return frozenset(path.replace("\\", "/") for path in (*tracked, *untracked))
+
+
+def _git_ignored(repo: Path, candidates: Sequence[str]) -> frozenset[str]:
+    """Which of these paths git ignores. Used to CLASSIFY, never to detect.
+
+    The event stream is the authority on what changed; this only decides
+    whether a path that changed was ever part of the covered set. On any
+    error the answer is "none of them", which turns unknown paths into
+    violations rather than into silence.
+    """
+    if not candidates:
+        return frozenset()
+    proc = subprocess.run(
+        ["git", "check-ignore", "-z", "--stdin"], cwd=repo,
+        input="\0".join(candidates) + "\0", capture_output=True, text=True, check=False)
+    if proc.returncode not in (0, 1):
+        return frozenset()
+    return frozenset(path for path in proc.stdout.split("\0") if path)
+
+
+def _is_allowed_path(path: str, allowed: Sequence[str]) -> bool:
+    """An entry with a slash is a prefix; one without is a directory name."""
+    parts = path.split("/")
+    for entry in allowed:
+        if "/" in entry:
+            if path == entry.rstrip("/") or path.startswith(entry):
+                return True
+        elif entry in parts:
+            return True
+    return False
+
+
+@dataclass(frozen=True)
+class Boundary:
+    """What is known about the interval the checks ran in."""
+
+    verdict: ObservationVerdict
+    mechanism: str
+    observed_events: int
+    allowed_events: int
+    violations: tuple[str, ...]
+    covered_files: int
+    allowed_writes: tuple[str, ...]
+    reason: str | None = None
+    machinery_events: int = 0
+
+    @property
+    def clean(self) -> bool:
+        return self.verdict is ObservationVerdict.CLEAN
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "verdict": self.verdict.value,
+            "mechanism": self.mechanism,
+            "observed_events": self.observed_events,
+            "allowed_events": self.allowed_events,
+            "machinery_events": self.machinery_events,
+            "violations": list(self.violations),
+            "covered_files": self.covered_files,
+            "allowed_writes": list(self.allowed_writes),
+            "reason": self.reason,
+            "authority": (
+                "the write stream, not a comparison of endpoints: a change that "
+                "undoes itself before the second fingerprint is still a change"
+            ),
+            "machinery_note": (
+                "writes under .git/ are counted, not judged: git updates its own "
+                "index while merely reading the tree, and .git is not a covered "
+                "input. Tamper-evidence for the machinery itself is F-17 and is "
+                "not repaired here"
+            ),
+        }
+
+
+def classify_observation(
+    repo: Path,
+    observation: Observation,
+    covered: frozenset[str],
+    allowed_writes: Sequence[str],
+) -> Boundary:
+    """Turn a stream of writes into a verdict about the covered inputs.
+
+    A path is a violation when it is one of the covered files, or when it
+    is a path that is neither explicitly allowed nor ignored by git —
+    that second case is how a file created and deleted inside the run
+    gets caught, since it is in neither fingerprint.
+    """
+    allowed = (BARRIER_DIR, *allowed_writes)
+    if not observation.available or not observation.complete:
+        return Boundary(
+            ObservationVerdict.UNOBSERVED, observation.mechanism,
+            len(observation.events), 0, (), len(covered), tuple(allowed),
+            observation.reason or "the write observer could not promise a complete stream")
+
+    violations: list[str] = []
+    allowed_count = 0
+    machinery = 0
+    unknown: dict[str, str] = {}
+    for event in observation.events:
+        path = event.path
+        if path in covered:
+            violations.append(f"{event.action}: {path}")
+        elif path == _GIT_DIR.rstrip("/") or path.startswith(_GIT_DIR):
+            # Git rewrites its index while merely reading the tree, so
+            # judging these would make the mechanism unusable. They are
+            # counted instead of forgiven silently.
+            machinery += 1
+        elif _is_allowed_path(path, allowed):
+            allowed_count += 1
+        elif (repo / path).is_dir():
+            # A directory's own timestamp moves when its entries move. The
+            # entries produce their own events; the container is not a
+            # covered input.
+            allowed_count += 1
+        else:
+            unknown.setdefault(path, event.action)
+
+    ignored = _git_ignored(repo, sorted(unknown))
+    for path, action in sorted(unknown.items()):
+        if path in ignored:
+            allowed_count += 1
+        else:
+            violations.append(f"{action}: {path}")
+
+    verdict = (ObservationVerdict.INPUTS_MUTATED if violations
+               else ObservationVerdict.CLEAN)
+    return Boundary(verdict, observation.mechanism, len(observation.events),
+                    allowed_count, tuple(dict.fromkeys(violations)), len(covered),
+                    tuple(allowed), machinery_events=machinery)
+
+
 @dataclass(frozen=True)
 class CheckCommand:
     """One command in the capture.
@@ -310,7 +509,7 @@ class EmptyCaptureError(ValueError):
 
 @dataclass(frozen=True)
 class Capture:
-    """A finished capture: the binding, the checks, and the bundle."""
+    """A finished capture: the binding, the boundary, the checks, the bundle."""
 
     binding: TreeBinding
     checks: tuple[CheckResult, ...]
@@ -318,18 +517,43 @@ class Capture:
     bundle: Path
     summary: Mapping[str, Any]
     exit_code: int
+    boundary: Boundary
 
     @property
     def evidence_valid(self) -> bool:
-        """Whether this bundle may be cited as evidence about a tree."""
-        return self.binding.verdict is BindingVerdict.BOUND
+        """Whether this bundle may be cited as evidence about a tree.
+
+        Both halves are required. The binding says the endpoints agree;
+        the boundary says nothing happened in between. Equal endpoints
+        alone were the first independent review's finding.
+        """
+        return (self.binding.verdict is BindingVerdict.BOUND
+                and self.boundary.verdict is ObservationVerdict.CLEAN)
+
+
+def check_environment(scratch: Path) -> dict[str, str]:
+    """Send every cache a check would write into a directory outside the tree.
+
+    A capture that flags mypy's own cache as tampering is a capture
+    nobody will keep running. Redirecting beats allow-listing: a cache
+    that never lands in the tree cannot be confused with an input, and
+    what is left in the allow-list stays small enough to read.
+    """
+    env = dict(os.environ)
+    env["PYTHONPYCACHEPREFIX"] = str(scratch / "pycache")
+    env["MYPY_CACHE_DIR"] = str(scratch / "mypy_cache")
+    env["RUFF_CACHE_DIR"] = str(scratch / "ruff_cache")
+    addopts = env.get("PYTEST_ADDOPTS", "")
+    env["PYTEST_ADDOPTS"] = f"{addopts} -p no:cacheprovider".strip()
+    return env
 
 
 def _run_check(repo: Path, command: CheckCommand, staging: Path,
-               lint_baseline: int) -> CheckResult:
+               lint_baseline: int, env: Mapping[str, str] | None = None) -> CheckResult:
     started = time.monotonic()
     proc = subprocess.run(
         list(command.argv), cwd=repo, capture_output=True, text=True, check=False,
+        env=dict(env) if env is not None else None,
     )
     duration = time.monotonic() - started
     (staging / f"{command.name}.stdout.txt").write_text(proc.stdout, encoding="utf-8")
@@ -370,26 +594,38 @@ def _is_inside(path: Path, parent: Path) -> bool:
     return True
 
 
-def _exit_code(binding: TreeBinding, checks: ChecksVerdict) -> int:
+def _exit_code(binding: TreeBinding, checks: ChecksVerdict, boundary: Boundary) -> int:
     # Severity order, and it is a claim: a capture that cannot name its
     # own bytes is worse than one that names them and finds them red,
-    # because the second is still evidence and the first is not.
+    # because the second is still evidence and the first is not. Not
+    # knowing what happened in the interval outranks knowing that
+    # something did, for the same reason.
     if binding.verdict is BindingVerdict.IDENTITY_UNAVAILABLE:
         return EXIT_IDENTITY_UNAVAILABLE
     if binding.verdict is BindingVerdict.TREE_MUTATED:
         return EXIT_TREE_MUTATED
+    if boundary.verdict is ObservationVerdict.UNOBSERVED:
+        return EXIT_BOUNDARY_UNAVAILABLE
+    if boundary.verdict is ObservationVerdict.INPUTS_MUTATED:
+        return EXIT_INPUTS_MUTATED
     if checks not in (ChecksVerdict.ALL_CLEAN, ChecksVerdict.WITHIN_BASELINE):
         return EXIT_CHECKS_FAILED
     return EXIT_OK
 
 
-def _verdict_line(binding: TreeBinding, checks: ChecksVerdict) -> str:
+def _verdict_line(binding: TreeBinding, checks: ChecksVerdict, boundary: Boundary) -> str:
     if binding.verdict is BindingVerdict.IDENTITY_UNAVAILABLE:
         reason = binding.pre.reason or binding.post.reason or "no reason recorded"
         return f"INVALID EVIDENCE: the tree could not be identified - {reason}"
     if binding.verdict is BindingVerdict.TREE_MUTATED:
         return ("INVALID EVIDENCE: the tree changed during the capture; "
                 "see tree_identity.drift")
+    if boundary.verdict is ObservationVerdict.UNOBSERVED:
+        return ("INVALID EVIDENCE: the interval between the fingerprints was not "
+                f"observed - {boundary.reason}")
+    if boundary.verdict is ObservationVerdict.INPUTS_MUTATED:
+        return ("INVALID EVIDENCE: a covered input was written during the capture "
+                "and the endpoints do not show it; see boundary.violations")
     # Strings preserved from the previous script, so anything already
     # reading a bundle keeps reading it.
     if checks is ChecksVerdict.ALL_CLEAN:
@@ -403,6 +639,7 @@ def build_summary(
     binding: TreeBinding,
     checks: Sequence[CheckResult],
     checks_verdict: ChecksVerdict,
+    boundary: Boundary,
     *,
     staged_outside_repo: bool,
     captured_at: str,
@@ -419,7 +656,8 @@ def build_summary(
     """
     non_zero = [r.name for r in checks if r.exit_code != 0]
     all_zero = bool(checks) and not non_zero
-    valid = binding.verdict is BindingVerdict.BOUND
+    valid = (binding.verdict is BindingVerdict.BOUND
+             and boundary.verdict is ObservationVerdict.CLEAN)
     return {
         "captured_at": captured_at,
         "python": sys.version.split()[0],
@@ -432,9 +670,10 @@ def build_summary(
             ChecksVerdict.ALL_CLEAN, ChecksVerdict.WITHIN_BASELINE),
         "evidence_valid": valid,
         "tree_identity": binding.to_dict(),
+        "boundary": boundary.to_dict(),
         "bundle_staged_outside_repo": staged_outside_repo,
-        "exit_code": _exit_code(binding, checks_verdict),
-        "verdict": _verdict_line(binding, checks_verdict),
+        "exit_code": _exit_code(binding, checks_verdict, boundary),
+        "verdict": _verdict_line(binding, checks_verdict, boundary),
     }
 
 
@@ -455,13 +694,24 @@ def run_capture(
     *,
     lint_baseline: int = 0,
     identity: Callable[[Path], TreeIdentity] = probe_tree_identity,
+    observer: Callable[[Path], WriteObserver] = create_write_observer,
+    allowed_writes: Sequence[str] = (),
+    scratch: Path | None = None,
     now: Callable[[], str] = _utc_now,
 ) -> Capture:
-    """Run the checks between two fingerprints and write the bundle.
+    """Run the checks inside an observed interval, between two fingerprints.
 
-    Nothing is written into ``repo``: the bundle lands in ``staging``, and
-    publishing it is a separate step the caller takes AFTER this returns,
-    so the evidence cannot appear in its own post fingerprint.
+    The order is the argument. The observer is armed FIRST, so the pre
+    fingerprint is itself inside the observed window; the checks run; the
+    post fingerprint is taken while the observer is still running; only
+    then is the stream closed, behind a barrier that proves its tail was
+    delivered. The unobserved windows are the instant before arming and
+    the instant after the barrier, and nothing runs in either.
+
+    Nothing is written into ``repo`` by this function: the bundle lands in
+    ``staging`` and the checks' caches are redirected into ``scratch``,
+    both outside the tree, and publishing is a separate step the caller
+    takes AFTER this returns.
 
     If the pre-check identity is unavailable, NOTHING RUNS. Spending 500
     seconds to produce a transcript that could never be attributed is not
@@ -472,28 +722,41 @@ def run_capture(
             "a capture with no checks would report a result nothing produced")
 
     staging.mkdir(parents=True, exist_ok=True)
-    pre = identity(repo)
+    if scratch is None:
+        scratch = staging.parent / f"{staging.name}.scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
 
+    watcher = observer(repo)
+    watcher.start()
     results: list[CheckResult] = []
-    if pre.available:
-        for command in commands:
-            results.append(_run_check(repo, command, staging, lint_baseline))
-        post = identity(repo)
-    else:
-        post = TreeIdentity(
-            False, None, {},
-            "not taken: the pre-check identity was unavailable, so no check was run")
+    covered: frozenset[str] = frozenset()
+    try:
+        pre = identity(repo)
+        if pre.available:
+            covered = covered_paths(repo)
+            env = check_environment(scratch)
+            for command in commands:
+                results.append(_run_check(repo, command, staging, lint_baseline, env))
+            post = identity(repo)
+        else:
+            post = TreeIdentity(
+                False, None, {},
+                "not taken: the pre-check identity was unavailable, so no check was run")
+    finally:
+        observation = watcher.stop()
 
     binding = bind_tree(pre, post)
+    boundary = classify_observation(repo, observation, covered, allowed_writes)
     checks_verdict = _checks_verdict(results)
     summary = build_summary(
-        binding, results, checks_verdict,
+        binding, results, checks_verdict, boundary,
         staged_outside_repo=not _is_inside(staging, repo),
         captured_at=now(),
     )
     write_summary(staging, summary)
     exit_code = summary["exit_code"]
-    return Capture(binding, tuple(results), checks_verdict, staging, summary, int(exit_code))
+    return Capture(binding, tuple(results), checks_verdict, staging, summary,
+                   int(exit_code), boundary)
 
 
 def publish_bundle(staging: Path, destination: Path) -> Path:
