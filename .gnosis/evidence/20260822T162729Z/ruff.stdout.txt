@@ -1,0 +1,21 @@
+src\gnosis\contracts\director_brief.py:42:13: TRY004 Prefer `TypeError` exception for invalid type
+src\gnosis\contracts\engineer_report.py:45:13: TRY004 Prefer `TypeError` exception for invalid type
+src\gnosis\kernel\code_intelligence_adapters.py:153:20: PLW1510 `subprocess.run` without explicit `check` argument
+src\gnosis\kernel\file_lock.py:58:14: SIM115 Use a context manager for opening files
+src\gnosis\kernel\file_lock.py:81:9: PYI034 `__enter__` methods in classes like `FileLock` usually return `self` at runtime
+src\gnosis\kernel\memory_reference.py:185:9: SIM103 Return the negated condition directly
+src\gnosis\kernel\verification.py:144:20: PLW1510 `subprocess.run` without explicit `check` argument
+src\gnosis\runner\liveness.py:87:12: BLE001 Do not catch blind exception: `Exception`
+src\gnosis\runner\liveness.py:119:12: BLE001 Do not catch blind exception: `Exception`
+src\gnosis\runner\liveness.py:135:12: BLE001 Do not catch blind exception: `Exception`
+src\gnosis\runner\liveness.py:145:12: BLE001 Do not catch blind exception: `Exception`
+src\gnosis\runner\retry.py:30:21: UP046 Generic class `AttemptRecord` uses `Generic` subclass instead of type parameters
+src\gnosis\runner\retry.py:36:5: UP047 Generic function `execute_with_retry` should use type parameters
+tests\integration\test_memory_fabric_smoke.py:40:12: PLW1510 `subprocess.run` without explicit `check` argument
+tests\test_contracts.py:9:20: C408 Unnecessary `dict()` call (rewrite as a literal)
+tests\test_director_inbox.py:19:52: RUF013 PEP 484 prohibits implicit `Optional`
+tests\test_ledger.py:179:24: BLE001 Do not catch blind exception: `Exception`
+tests\test_run_store.py:97:20: BLE001 Do not catch blind exception: `Exception`
+tests\test_run_store.py:119:20: BLE001 Do not catch blind exception: `Exception`
+Found 19 errors.
+No fixes available (6 hidden fixes can be enabled with the `--unsafe-fixes` option).

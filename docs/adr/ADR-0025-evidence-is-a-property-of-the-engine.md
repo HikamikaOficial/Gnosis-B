@@ -4,7 +4,17 @@
 - Date: 2026-08-22
 - Repairs: **F-34** (`docs/V1_TRACEABILITY_AUDIT.md`), the one finding the
   earlier independent reviews did not have.
-- Evidence: `.gnosis/evidence/20260822T005432Z/` — **781 passed** (12 subtests), mypy strict
+- Evidence, round 3 (this unit): `.gnosis/evidence/20260822T162729Z/` —
+  **822 passed** (60 subtests), mypy strict clean over 55 files, ruff at
+  the 19-finding baseline exactly (0 added). Captured against a CLEAN
+  code tree at commit `1591aa7`, tree
+  `67d2bb9cecb4fbe3764e765d87252f35845eb125`;
+  `f34-round2-tree-binding.json` records `content_fingerprint()` around
+  the run and asserts `git status --porcelain -- src tests scripts
+  pyproject.toml` was empty at both ends. Mutation transcript:
+  `mutation-check.f34-round2.txt`; the two reproductions replayed against
+  the repaired tree: `reproduction-replay.f34-round2.txt`.
+- Evidence, round 1: `.gnosis/evidence/20260822T005432Z/` — **781 passed** (12 subtests), mypy strict
   clean over 55 files, ruff at the 19-finding baseline exactly. Captured
   against a CLEAN code tree at commit `29d3666`, tree
   `cf7a26577c4d1bdeca7829c0d83d330dbf0f65b6`; `f34-tree-binding.json` in
@@ -432,7 +442,7 @@ that is where the fix belongs.
 ### Mutation check
 
 Six mutants, each restoring exactly one half of the repair, captured in
-`mutation-check.f34-round2.txt`. Targeted suite:
+`.gnosis/evidence/20260822T162729Z/mutation-check.f34-round2.txt`. Targeted suite:
 `tests/test_state_machine.py` + `tests/test_no_invalid_done.py`, baseline
 71 passed / 57 subtests.
 
@@ -446,6 +456,27 @@ Six mutants, each restoring exactly one half of the repair, captured in
 | M6 the shared verdict itself reads truthiness | **20 red** |
 
 None survived; the tree was restored and re-verified green.
+
+### Evidence
+
+`.gnosis/evidence/20260822T162729Z/` — **822 passed, 60 subtests** (up from 800/27), mypy strict
+clean over 55 source files, ruff at **19 findings against a baseline of
+19**: this unit added no lint debt. Captured against a clean tree at
+`1591aa7` (tree `67d2bb9c`), with `f34-round2-tree-binding.json`
+recording the fingerprint around the run. Both reproductions from the
+review were replayed against the repaired tree and the transcript is in
+the bundle: the assignment raises `AttributeError` and leaves the machine
+in VERIFYING with no evidence, and the `passed=1` engine run reports
+`REJECTED — invalid evidence, no verdict recorded` with a populated
+problems list and a ledger entry marked `MALFORMED`.
+
+The pre-run half of the binding was recorded seconds AFTER
+`capture_evidence.py` was launched rather than strictly before it. The
+capture writes only into its own bundle directory and the suite runs in
+temporary directories, so nothing under the code paths could have moved
+in that window — but the ordering is stated in the JSON rather than
+implied, because the whole subject of this ADR is claims that were
+checked against something narrower than the sentence.
 
 ### Not repaired here, and named rather than implied
 

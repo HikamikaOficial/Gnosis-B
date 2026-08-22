@@ -339,7 +339,10 @@ because the predicate read `passed is True` and the printer read
 repaired: the storage is private behind read-only properties, and
 `verification_verdict()` is now the single reader, with a third answer
 (MALFORMED) that the ledger, the report and the completion predicate all
-derive from. Six mutants captured, none survived. **A THIRD independent
+derive from. Six mutants captured, none survived. Evidence
+`.gnosis/evidence/20260822T162729Z/` — 822 passed (60 subtests) on a
+clean tree at `1591aa7` (tree `67d2bb9c`), mypy strict clean, ruff at the
+19-finding baseline with nothing added. **A THIRD independent
 review is outstanding — this unit is delivered for review, not declared
 closed.** Named and NOT repaired, as candidates for that review: the
 same truthy read of `passed` remains in `kernel/convergence.py` (3

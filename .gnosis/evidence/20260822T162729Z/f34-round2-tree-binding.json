@@ -1,0 +1,67 @@
+{
+  "adr": "ADR-0025",
+  "capture_command": [
+    "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+    "scripts/capture_evidence.py"
+  ],
+  "capture_command_deviation": "The documented command wraps this in `uv run --no-project --with pytest --with mypy --with ruff`. The project venv holds the same three tools and capture_evidence.py invokes them through sys.executable, so the gates run are identical. Same deviation, same reason, as the round-1 bundle.",
+  "code_paths_considered": [
+    "src",
+    "tests",
+    "scripts",
+    "pyproject.toml"
+  ],
+  "code_tree_clean_and_unchanged_throughout": true,
+  "finding": "F-34",
+  "post": {
+    "code_status_porcelain": "",
+    "content_fingerprint": {
+      "branch": "master",
+      "head_sha": "1591aa73dc3421bf9a3948b087698a0789ab99e5",
+      "is_repo": true,
+      "patch_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+      "status_sha256": "2d217df0f627746bd592811ebfdd4aad01eae5e1a4c9e9d5faeb3c1240a5ed74",
+      "untracked": {
+        ".gnosis/evidence/20260822T162729Z/SUMMARY.json": "b7512e0cb272beb64fe74b1d2df5b4417e0b5d4e2db99f1511385757e81a4649",
+        ".gnosis/evidence/20260822T162729Z/git-head.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        ".gnosis/evidence/20260822T162729Z/git-head.stdout.txt": "93638814bf746bd17c3223a27cdedcbda06ee1645846ed88d0bbc4bcfdf9c401",
+        ".gnosis/evidence/20260822T162729Z/git-status.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        ".gnosis/evidence/20260822T162729Z/git-status.stdout.txt": "b8e7d0e2eb17e6cc92a0eb0ea6c69cdf52be71724898cd403ce71f63dc0cdb49",
+        ".gnosis/evidence/20260822T162729Z/mutation-check.f34-round2.txt": "76ea9779285c388b7ed7fc4244738d3ec04267feed5370fee596e5766560228d",
+        ".gnosis/evidence/20260822T162729Z/mypy.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        ".gnosis/evidence/20260822T162729Z/mypy.stdout.txt": "dc59e70de5f5fecd7996e15e779a6c91157713cf2d57cbb672cf9ed79d619649",
+        ".gnosis/evidence/20260822T162729Z/pytest.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        ".gnosis/evidence/20260822T162729Z/pytest.stdout.txt": "90562b23aae9e6af93da1946ba2ac6f1062ca1a2a010e94d1ce8c82aaff97c6b",
+        ".gnosis/evidence/20260822T162729Z/reproduction-replay.f34-round2.txt": "ad3ad3839d99740dfd093ae0449829cb29095de97391ca9e2f4ee8789bea4028",
+        ".gnosis/evidence/20260822T162729Z/ruff.stderr.txt": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        ".gnosis/evidence/20260822T162729Z/ruff.stdout.txt": "8032d93cc83fbe4b6246d9199bba1415f457cbe5f6e255600604783fda6c3113",
+        ".stfolder/syncthing-folder-c9ceae.txt": "0cf037252917faaef03b3c68f4ae5d7311f2f4e1d4fd29cbaebe45dfcebff398",
+        "PROJECT_REPORT.md": "98f306634c9c837d081e72392a876027903b276b7dd88e8bff40585770f6c21b"
+      }
+    },
+    "head_sha": "1591aa73dc3421bf9a3948b087698a0789ab99e5",
+    "recorded_at": "2026-08-22T16:37:03.619493+00:00",
+    "tree_sha": "67d2bb9cecb4fbe3764e765d87252f35845eb125"
+  },
+  "pre": {
+    "code_status_porcelain": "",
+    "content_fingerprint": {
+      "branch": "master",
+      "head_sha": "1591aa73dc3421bf9a3948b087698a0789ab99e5",
+      "is_repo": true,
+      "patch_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+      "status_sha256": "a419ce2ecd74a3f6fa0f21290740238ed077af6f87c759fcc861d213a46140fc",
+      "untracked": {
+        ".stfolder/syncthing-folder-c9ceae.txt": "0cf037252917faaef03b3c68f4ae5d7311f2f4e1d4fd29cbaebe45dfcebff398",
+        "PROJECT_REPORT.md": "98f306634c9c837d081e72392a876027903b276b7dd88e8bff40585770f6c21b"
+      }
+    },
+    "head_sha": "1591aa73dc3421bf9a3948b087698a0789ab99e5",
+    "recorded_at": "2026-08-22T16:28:00.698101+00:00",
+    "tree_sha": "67d2bb9cecb4fbe3764e765d87252f35845eb125"
+  },
+  "pre_timing_caveat": "The `pre` snapshot was taken seconds AFTER capture_evidence.py was launched, not strictly before it. capture_evidence.py writes only into .gnosis/evidence/<stamp>/ and the suite runs in temporary directories, so nothing under src/, tests/, scripts/ or pyproject.toml could have changed in that window \u2014 but the ordering is stated rather than implied.",
+  "purpose": "Binds this evidence bundle to the exact CODE tree it ran against. capture_evidence.py records only HEAD and `git status --porcelain` (names, not bytes) and records them after the suite (F-14..F-18); this file is written around it without modifying it, because this unit repairs F-34 only.",
+  "review_round": 2,
+  "verdict": "The suite ran against committed code at 1591aa73dc3421bf9a3948b087698a0789ab99e5 (tree 67d2bb9cecb4fbe3764e765d87252f35845eb125), with no uncommitted change under src, tests, scripts, pyproject.toml before or after the run."
+}

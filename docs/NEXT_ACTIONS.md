@@ -29,8 +29,9 @@ when an ADR with captured evidence backs it.
   properties, and `verification_verdict()` as the single reader of
   `passed` with a third answer, MALFORMED, that the ledger, the report
   and the completion predicate all derive from. Six mutants captured,
-  none survived. **Next action: hand this unit to a third independent
-  review.** It is not closed until that returns.
+  none survived. Evidence `.gnosis/evidence/20260822T162729Z/` (822
+  passed, 60 subtests, clean tree at `1591aa7`). **Next action: hand this
+  unit to a third independent review.** It is not closed until that returns.
 - **Candidate findings handed to that review, deliberately NOT repaired
   here** (the instruction was to repair this closure and start nothing
   else): the same truthy read of `passed` survives in

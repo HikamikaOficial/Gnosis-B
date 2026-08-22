@@ -1,0 +1,15 @@
+REPRODUCTION 1 — sm.state = TaskState.COMPLETED
+------------------------------------------------------------------------
+  AttributeError: property 'state' of 'TaskStateMachine' object has no setter
+  state              = TaskState.VERIFYING
+  is_terminal()      = False
+  completion_evidence= None
+  AttributeError: property 'completion_evidence' of 'TaskStateMachine' object has no setter
+
+REPRODUCTION 2 — TaskEngine with VerificationResult(passed=1)
+------------------------------------------------------------------------
+  final_task_state     = TaskState.FAILED
+  report.status        = ReportStatus.PARTIAL
+  verification         = ('malformed: REJECTED — invalid evidence, no verdict recorded', 'The verifier returned a VerificationResult whose `passed` is neither True nor False, so it records no verdict at all. The evidence is invalid and was rejected rather than read as a pass: `bool` is an `int` in Python, so a truthy value such as 1 satisfies any check that merely tests it for truth. The task is not COMPLETED (constitution rule 2: no DONE without evidence).')
+  problems_encountered = ('The verifier returned a VerificationResult whose `passed` is neither True nor False, so it records no verdict at all. The evidence is invalid and was rejected rather than read as a pass: `bool` is an `int` in Python, so a truthy value such as 1 satisfies any check that merely tests it for truth. The task is not COMPLETED (constitution rule 2: no DONE without evidence).',)
+  ledger entry         = [{'evidence': 'The verifier returned a VerificationResult whose `passed` is neither True nor False, so it records no verdict at all. The evidence is invalid and was rejected rather than read as a pass: `bool` is an `int` in Python, so a truthy value such as 1 satisfies any check that merely tests it for truth. The task is not COMPLETED (constitution rule 2: no DONE without evidence).', 'name': 'malformed', 'passed': False, 'rejected_result': {'duration_s': 0.0, 'exit_code': 0, 'name': 'malformed', 'passed': 1, 'stderr_excerpt': '', 'stdout_excerpt': 'looks fine', 'ts': '2026-08-22T16:15:24.513586+00:00'}, 'verdict': 'MALFORMED'}]
