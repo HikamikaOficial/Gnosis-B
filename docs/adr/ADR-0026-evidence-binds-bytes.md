@@ -659,6 +659,41 @@ removing the new prevention:
 MF14 is the review's finding put back: with it in place, B2 tampers
 successfully and the bundle certifies itself again.
 
+### Evidence
+
+`.gnosis/evidence/20260823T011759Z/` — **939 passed, 62 subtests**, mypy
+strict clean over 58 source files, ruff at 19 findings against a baseline
+of 19. Clean tree at `dc466a3`. The bundle now states three things about
+itself rather than two:
+
+```json
+"tree_identity": { "binding": "BOUND", "identical": true, "drift": [],
+                   "pre": {"digest": "2e963063…f0476c"},
+                   "post": {"digest": "2e963063…f0476c"} },
+"boundary": { "verdict": "CLEAN", "observed_events": 57, "violations": [],
+              "machinery_events": 32, "covered_files": 720,
+              "protection": { "enforced": true, "locked_inputs": 720,
+                              "refused": [],
+                              "mechanism": "CreateFileW(GENERIC_READ, FILE_SHARE_READ)" } }
+```
+
+Every one of the 720 covered inputs was unwritable for the whole
+thirteen-minute suite, none was refused, and the write stream recorded 57
+events of which none touched a covered path. `exit_code` 0 with
+`gates_clean` true and `all_passed` false, because ruff sits at the
+baseline.
+
+Two artifacts were added to the published directory after the capture
+returned; `SUMMARY.json` is exactly as produced:
+
+- `mutation-check.f14-round3.txt` — sixteen mutants, none survived.
+- `probe-f14-boundary.txt` — the six break attempts run against this
+  commit, `dc466a3`. It ends with `BROKEN: B0` and that line is the
+  point: B0 is the reviewed design reconstructed with a lock that claims
+  enforcement and locks nothing, so the transcript carries the defect and
+  its closure side by side. A0 held, A1/B1 refused the capture before it
+  started, A2/B2 had their writes refused by the operating system.
+
 ### What is still not closed
 
 - **F-14 remains OPEN**, pending a third independent review. Two reviews

@@ -1,0 +1,89 @@
+MUTATION CHECK — F-14, evidence binds bytes over a protected, observed interval
+========================================================================
+targeted suite: tests/test_evidence_binding.py tests/test_git_evidence.py
+
+BASELINE (repair in place): exit=0  67 passed, 3 subtests passed in 69.46s (0:01:09)
+
+MF1: the tree's identity is `git status --porcelain` again — a state and a name, never a content
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed in 0.90s
+  verdict: CAUGHT
+
+MF2: the before/after comparison is removed: two different fingerprints bind anyway
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 8 passed in 6.68s
+  verdict: CAUGHT
+
+MF3: an unavailable identity binds: a probe that could not answer reads as agreement
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 9 passed in 6.37s
+  verdict: CAUGHT
+
+MF4: the post fingerprint is never taken, so the capture has only one end to compare
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 13 passed in 9.80s
+  verdict: CAUGHT
+
+MF5: the bundle is staged inside the repository again, so the evidence appears in its own post fingerprint
+  files:  scripts/capture_evidence.py
+  result: exit=1  1 failed, 32 passed in 33.40s
+  verdict: CAUGHT
+
+MF6: an untracked file whose bytes could not be read is still called an identified tree
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 7 passed in 4.67s
+  verdict: CAUGHT
+
+MF7: a failed git probe is accepted as an identity
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 4 passed in 4.70s
+  verdict: CAUGHT
+
+MF8: the summary reports a pass for evidence the binding refused (ADR-0025 round 2, transplanted onto this surface)
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 14 passed in 11.75s
+  verdict: CAUGHT
+
+MF9: a capture with no checks is allowed to report a result
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 12 passed in 9.20s
+  verdict: CAUGHT
+
+MF10: an observed write to a covered input is not a violation, so a change that undoes itself passes
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 37 passed, 3 subtests passed in 35.30s
+  verdict: CAUGHT
+
+MF11: an observation that could have missed something is accepted as if it had seen nothing
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 48 passed, 3 subtests passed in 56.01s
+  verdict: CAUGHT
+
+MF12: validity goes back to the binding alone: equal endpoints are enough again (the reviewed defect, restored)
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 35 passed, 3 subtests passed in 33.36s
+  verdict: CAUGHT
+
+MF13: a path that appears and disappears inside the run is not judged, so create-read-delete is invisible again
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 44 passed, 3 subtests passed in 47.86s
+  verdict: CAUGHT
+
+MF14: the covered inputs are never made unwritable; only the write stream is left, which a mapped write can evade
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 56 passed, 3 subtests passed in 60.42s (0:01:00)
+  verdict: CAUGHT
+
+MF15: a lock that could not be enforced is recorded as if it had been
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 59 passed, 3 subtests passed in 65.31s (0:01:05)
+  verdict: CAUGHT
+
+MF16: the checks run even when the inputs could not be protected
+  files:  src/gnosis/kernel/evidence_capture.py
+  result: exit=1  1 failed, 59 passed, 3 subtests passed in 65.80s (0:01:05)
+  verdict: CAUGHT
+
+RESTORED: exit=0  67 passed, 3 subtests passed in 73.08s (0:01:13)
+
+mutants: 16  survived/aborted: 0

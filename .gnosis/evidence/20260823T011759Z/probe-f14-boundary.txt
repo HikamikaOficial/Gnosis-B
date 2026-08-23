@@ -1,0 +1,113 @@
+F-14 — SECOND INDEPENDENT REVIEW: breaking, then closing, the boundary
+==============================================================================
+tree:   dc466a3e21c6bee959944cec7c7abba070212b70
+python: 3.12.14
+
+GROUP 1 — OBSERVATION ONLY (the reviewed design: a lock that claims
+          enforcement and locks nothing, so the write stream is the
+          only authority)
+
+### A0 — open write handle, no flush, closed after stop()
+  external open                     : OPENED
+  digest before                     : 02f2442ae3e9dc707e6e0e148e86f3837d7851ec7ac8d50a1a8239f18176f563
+  digest after MODIFY (fresh read)  : 1f98840974adbfd35d16e8d409d0770e0302768e0f8a635b42b83ba0620d70c3
+  what the CHECK reported           : 1f98840974adbfd35d16e8d409d0770e0302768e0f8a635b42b83ba0620d70c3
+  -> a check consumed mutated bytes : True
+  digest after CLOSE                : 02f2442ae3e9dc707e6e0e148e86f3837d7851ec7ac8d50a1a8239f18176f563
+  PRE == POST                       : True
+  binding                           : BOUND
+  notification for a.txt received   : True
+  boundary                          : INPUTS_MUTATED
+  violations                        : ['modified: a.txt']
+  protection                        : {'enforced': True, 'locked_inputs': 0, 'refused': [], 'mechanism': 'none (observation only)', 'reason': None}
+  checks that ran                   : 1
+  evidence_valid                    : False
+  exit_code                         : 4
+  VERDICT                           : HELD
+
+### B0 — writable memory-mapped view, never flushed
+  external open                     : OPENED
+  digest before                     : 02f2442ae3e9dc707e6e0e148e86f3837d7851ec7ac8d50a1a8239f18176f563
+  digest after MODIFY (fresh read)  : ca6d8c6f611a46c5e05562a2d60f87f51b1bdf3e941fe3e544c8145c65c2991f
+  what the CHECK reported           : ca6d8c6f611a46c5e05562a2d60f87f51b1bdf3e941fe3e544c8145c65c2991f
+  -> a check consumed mutated bytes : True
+  digest after CLOSE                : 02f2442ae3e9dc707e6e0e148e86f3837d7851ec7ac8d50a1a8239f18176f563
+  PRE == POST                       : True
+  binding                           : BOUND
+  notification for a.txt received   : False
+  boundary                          : CLEAN
+  violations                        : []
+  protection                        : {'enforced': True, 'locked_inputs': 0, 'refused': [], 'mechanism': 'none (observation only)', 'reason': None}
+  checks that ran                   : 1
+  evidence_valid                    : True
+  exit_code                         : 0
+  VERDICT                           : BROKEN - mutated bytes consumed inside a valid bundle
+
+GROUP 2 — PREVENTION IN PLACE, attacker already holding the handle
+
+### A1 — the same open handle, taken before the capture
+  external open                     : OPENED
+  digest before                     : 02f2442ae3e9dc707e6e0e148e86f3837d7851ec7ac8d50a1a8239f18176f563
+  digest after MODIFY (fresh read)  : 1f98840974adbfd35d16e8d409d0770e0302768e0f8a635b42b83ba0620d70c3
+  what the CHECK reported           : (no check ran)
+  -> a check consumed mutated bytes : False
+  digest after CLOSE                : 02f2442ae3e9dc707e6e0e148e86f3837d7851ec7ac8d50a1a8239f18176f563
+  PRE == POST                       : True
+  binding                           : BOUND
+  notification for a.txt received   : True
+  boundary                          : UNPROTECTED
+  violations                        : ['a.txt (error 32)']
+  protection                        : {'enforced': False, 'locked_inputs': 0, 'refused': ['a.txt (error 32)'], 'mechanism': 'CreateFileW(GENERIC_READ, FILE_SHARE_READ)', 'reason': '1 covered input(s) could not be made unwritable; another process holds them open for writing'}
+  checks that ran                   : 0
+  evidence_valid                    : False
+  exit_code                         : 6
+  VERDICT                           : HELD
+
+### B1 — the same mapping, taken before the capture
+  external open                     : OPENED
+  digest before                     : 02f2442ae3e9dc707e6e0e148e86f3837d7851ec7ac8d50a1a8239f18176f563
+  digest after MODIFY (fresh read)  : ca6d8c6f611a46c5e05562a2d60f87f51b1bdf3e941fe3e544c8145c65c2991f
+  what the CHECK reported           : (no check ran)
+  -> a check consumed mutated bytes : False
+  digest after CLOSE                : 02f2442ae3e9dc707e6e0e148e86f3837d7851ec7ac8d50a1a8239f18176f563
+  PRE == POST                       : True
+  binding                           : BOUND
+  notification for a.txt received   : True
+  boundary                          : UNPROTECTED
+  violations                        : ['a.txt (error 32)']
+  protection                        : {'enforced': False, 'locked_inputs': 0, 'refused': ['a.txt (error 32)'], 'mechanism': 'CreateFileW(GENERIC_READ, FILE_SHARE_READ)', 'reason': '1 covered input(s) could not be made unwritable; another process holds them open for writing'}
+  checks that ran                   : 0
+  evidence_valid                    : False
+  exit_code                         : 6
+  VERDICT                           : HELD
+
+GROUP 3 — PREVENTION IN PLACE, the check itself is the attacker
+
+### A2 — the check opens a covered input for writing
+  the check reported                : REFUSED PermissionError 13
+  file digest afterwards            : 02f2442ae3e9dc707e6e0e148e86f3837d7851ec7ac8d50a1a8239f18176f563
+  -> bytes never changed            : True
+  PRE == POST                       : True
+  boundary                          : CLEAN
+  protection                        : {'enforced': True, 'locked_inputs': 1, 'refused': [], 'mechanism': 'CreateFileW(GENERIC_READ, FILE_SHARE_READ)', 'reason': None}
+  check exit code                   : 0
+  evidence_valid                    : True
+  exit_code                         : 0
+  VERDICT                           : HELD - the write was refused
+
+### B2 — the check maps a covered input writable
+  the check reported                : REFUSED PermissionError 13
+  file digest afterwards            : 02f2442ae3e9dc707e6e0e148e86f3837d7851ec7ac8d50a1a8239f18176f563
+  -> bytes never changed            : True
+  PRE == POST                       : True
+  boundary                          : CLEAN
+  protection                        : {'enforced': True, 'locked_inputs': 1, 'refused': [], 'mechanism': 'CreateFileW(GENERIC_READ, FILE_SHARE_READ)', 'reason': None}
+  check exit code                   : 0
+  evidence_valid                    : True
+  exit_code                         : 0
+  VERDICT                           : HELD - the write was refused
+
+==============================================================================
+BROKEN: B0
+Expected: A0 held (a raw write does notify), B0 BROKEN (a mapped write
+need not), A1/B1/A2/B2 held once the inputs are unwritable.
