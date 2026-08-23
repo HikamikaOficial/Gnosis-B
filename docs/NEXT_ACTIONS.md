@@ -115,11 +115,24 @@ when an ADR with captured evidence backs it.
   refused by the share mode itself. The identity that matters is taken
   AFTER the locks are in place, so the acquisition window cannot hide a
   change — `PREPARATION_DRIFT`, exit 7, nothing runs. And the volume is
-  probed rather than assumed: `fixed` plus NTFS or ReFS, UNC refused.
-  733 inputs locked and identified in 0.45 s. 84 tests, 7 subtests;
-  twenty mutants, none survived; the probe is nine cases now. **Next
-  action: hand this unit to a FOURTH independent review.** It is not
-  closed until one returns without findings.
+  probed rather than assumed, UNC refused. 733 inputs locked and
+  identified in 0.45 s.
+
+- **Fourth independent review (2026-08-23): FAIL DE ALCANCE — the
+  accepted domain was wider than the demonstrated one.** No new finding
+  against the architecture. `_SUPPORTED_FILESYSTEMS` held
+  `{"NTFS", "ReFS"}` and the boundary had only ever run on NTFS: no ReFS
+  volume here, no probe run on one, no evidence bundle containing the
+  string, and the two tests naming it admitted it as an alternative in an
+  assertion that always resolved by NTFS. Narrowed to `{"NTFS"}`, with
+  ReFS moved to `_CANDIDATE_FILESYSTEMS` and refused with its own reason
+  before any input is opened. **The demonstrated domain is Windows +
+  local + `fixed` + `NTFS`.** To add ReFS: run the probe and the suite on
+  a real ReFS volume, land that bundle, then move the string — in that
+  order. 87 tests, 7 subtests; twenty-one mutants, none survived (MF21
+  puts ReFS back and the suite goes red). **Next action: hand this unit
+  to the FINAL independent review.** It is not closed until one returns
+  without findings.
 
 - **Observed overlap with F-15..F-18, none of them marked repaired:**
   F-15's suggested correction is what this script now does, but the

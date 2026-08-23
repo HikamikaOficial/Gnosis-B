@@ -52,6 +52,8 @@ from gnosis.kernel.evidence_capture import (
 )
 from gnosis.kernel.git_evidence import content_fingerprint
 from gnosis.kernel.input_lock import (
+    _SUPPORTED_DRIVE_TYPES,
+    _SUPPORTED_FILESYSTEMS,
     LockOutcome,
     UnavailableLock,
     VolumeCapabilities,
@@ -1444,7 +1446,10 @@ class TestTheVolumeMustDemonstrateWhatIsClaimed(unittest.TestCase):
         capabilities = probe_volume(REPO)
         self.assertTrue(capabilities.supported, capabilities.reason)
         self.assertEqual(capabilities.drive_type, "fixed")
-        self.assertIn(capabilities.filesystem, {"NTFS", "ReFS"})
+        # Exactly the demonstrated contract. This used to admit ReFS as an
+        # alternative, which let a filesystem nobody had run the boundary
+        # on ride along in an assertion that always resolved by NTFS.
+        self.assertEqual(capabilities.filesystem, "NTFS")
 
     @WINDOWS_ONLY
     def test_a_network_volume_is_refused_rather_than_assumed(self):
@@ -1464,6 +1469,59 @@ class TestTheVolumeMustDemonstrateWhatIsClaimed(unittest.TestCase):
     def test_a_local_ntfs_volume_is_accepted(self):
         self.assertTrue(classify_volume("fixed", "NTFS").supported)
 
+    def test_refs_is_a_candidate_and_not_a_guarantee(self):
+        # The fourth independent review: the accepted domain was wider
+        # than the demonstrated one. ReFS supports FILE_ID_INFO and shares
+        # the share-mode model, which is an argument; nobody has ever run
+        # the boundary on a ReFS volume, which is the fact that decides.
+        capabilities = classify_volume("fixed", "ReFS")
+
+        self.assertFalse(capabilities.supported)
+        self.assertEqual(capabilities.filesystem, "ReFS")
+        self.assertIn("candidate", capabilities.reason or "")
+        self.assertIn("NOT been demonstrated", capabilities.reason or "")
+
+    def test_the_demonstrated_domain_is_exactly_one_filesystem(self):
+        self.assertEqual(_SUPPORTED_FILESYSTEMS, frozenset({"NTFS"}))
+        self.assertEqual(_SUPPORTED_DRIVE_TYPES, frozenset({"fixed"}))
+        self.assertNotIn("ReFS", _SUPPORTED_FILESYSTEMS)
+
+    @WINDOWS_ONLY
+    def test_a_refs_volume_locks_nothing_and_runs_nothing(self):
+        # Injected, because no ReFS volume exists here — which is the
+        # whole point. The refusal comes from the production classifier,
+        # not from a hand-made VolumeCapabilities.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            refs = classify_volume("fixed", "ReFS")
+            self.assertFalse(refs.supported)
+
+            lock = WindowsInputLock(repo, volume_probe=lambda _: refs)
+            try:
+                outcome = lock.acquire(sorted(covered_paths(repo)))
+            finally:
+                lock.release()
+
+            self.assertFalse(outcome.enforced)
+            self.assertEqual(outcome.locked, 0, "no input may be opened after the "
+                                                "volume is found unsupported")
+            self.assertEqual(outcome.identities, {})
+
+            capture = run_capture(
+                repo,
+                [_script("open('ran.txt', 'w', encoding='utf-8').write('x')")],
+                root / "staging",
+                input_lock=lambda _: WindowsInputLock(repo, volume_probe=lambda _: refs))
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.UNPROTECTED)
+            self.assertEqual(capture.exit_code, EXIT_INPUTS_UNPROTECTED)
+            self.assertEqual(capture.checks, ())
+            self.assertFalse((repo / "ran.txt").exists())
+            self.assertFalse(capture.evidence_valid)
+            self.assertEqual(capture.boundary.protection["volume"]["filesystem"], "ReFS")
+            self.assertFalse(capture.boundary.protection["volume"]["supported"])
+
     @WINDOWS_ONLY
     def test_the_bundle_records_the_volume_it_was_demonstrated_on(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1474,7 +1532,7 @@ class TestTheVolumeMustDemonstrateWhatIsClaimed(unittest.TestCase):
             volume = capture.boundary.protection["volume"]
             self.assertTrue(volume["supported"])
             self.assertEqual(volume["drive_type"], "fixed")
-            self.assertIn(volume["filesystem"], {"NTFS", "ReFS"})
+            self.assertEqual(volume["filesystem"], "NTFS")
 
     @WINDOWS_ONLY
     def test_a_volume_the_boundary_is_not_demonstrated_on_locks_nothing(self):

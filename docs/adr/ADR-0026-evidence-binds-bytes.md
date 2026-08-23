@@ -13,6 +13,10 @@
   memory-mapped view notifies nothing, so a check consumed mutated bytes
   inside a bundle that certified itself. Repaired in addendum 2 by making
   the covered inputs unwritable instead of merely watched.
+- Independent review, round 4 (2026-08-23): **FAIL DE ALCANCE** — no new
+  finding against the architecture; the accepted domain was wider than
+  the demonstrated one. `ReFS` was in the supported set and had never
+  been run on. Narrowed in addendum 4.
 - Independent review, round 3 (2026-08-23): **repair accepted, closure on
   hold.** The combination of prevention and observation was accepted; four
   adversarial questions were then asked, and three of them exposed a gap
@@ -25,11 +29,15 @@
   Three reviews have now found something this unit's own tests and
   mutants did not.
 - Demonstrated on: **Windows, local volume, drive type `fixed`,
-  filesystem `NTFS`.** Anything else is refused rather than assumed.
-- Tests: `tests/test_evidence_binding.py` — **84 tests, 7 subtests**
-  (36, then 20, then 9, then 19).
-- Mutation check: `scripts/mutation_check_f14.py` — **twenty mutants,
-  none survived** (nine, four, three, four), declared as data so a
+  filesystem `NTFS`** — and nothing else. `ReFS` is a candidate extension
+  pending real validation, refused with its own reason until the probe
+  has been run on a real volume of that kind. Every other drive type,
+  every other filesystem and every UNC path is refused before any input
+  is opened.
+- Tests: `tests/test_evidence_binding.py` — **87 tests, 7 subtests**
+  (36, then 20, then 9, then 19, then 3).
+- Mutation check: `scripts/mutation_check_f14.py` — **twenty-one mutants,
+  none survived** (nine, four, three, four, one), declared as data so a
   reviewer re-runs the claim rather than reading it.
 - Break attempts: `scripts/probe_f14_boundary.py` — nine cases, committed
   and re-runnable, containing the defect and its closure side by side.
@@ -810,10 +818,12 @@ all, and extrapolating from one local NTFS volume is exactly what the
 review said not to do.
 
 The capture now asks the volume and refuses what it cannot demonstrate:
-a whitelist of drive type `fixed` and filesystem `NTFS` or `ReFS`, a UNC
-path refused outright as a redirector, and the answer recorded in the
-bundle under `boundary.protection.volume`. **F-14 is demonstrated on:
-drive type `fixed`, filesystem `NTFS`, local volume.** Anything else
+a whitelist of drive type `fixed` and filesystem `NTFS` — it also
+admitted `ReFS` at the time, which the fourth review correctly refused;
+see addendum 4 — a UNC path refused outright as a redirector, and the
+answer recorded in the bundle under `boundary.protection.volume`. **F-14
+is demonstrated on: drive type `fixed`, filesystem `NTFS`, local
+volume.** Anything else
 produces `UNPROTECTED` before a single handle is taken — verified with an
 injected volume, because this machine has no share to mount.
 
@@ -909,8 +919,105 @@ capture returned except the first, which the capture writes itself:
 - **Attributes can still change** on a covered input. No write access
   follows from it while the share mode stands, and the observer reports
   it.
-- **Windows and a local NTFS/ReFS volume.** Everywhere else the capture
-  refuses to claim a boundary it cannot demonstrate.
+- **Windows and a local NTFS volume.** Everywhere else the capture
+  refuses to claim a boundary it cannot demonstrate. (This line said
+  "NTFS/ReFS" until the fourth review; addendum 4 narrows it.)
 - **`.git/` is counted, not judged**, and is not locked. A check that
   installs a hook is outside this boundary and inside F-17's.
 - **F-15..F-18 remain open and untouched.**
+
+## Fourth independent review addendum — 2026-08-23: **FAIL DE ALCANCE**
+
+No new finding against the protection architecture. One confirmed defect,
+and it is not in the mechanism: **the domain the code accepted was wider
+than the domain anyone had demonstrated.**
+
+`_SUPPORTED_FILESYSTEMS` accepted `{"NTFS", "ReFS"}`. The boundary had
+been demonstrated on Windows, a local volume, drive type `fixed`,
+filesystem `NTFS` — and on nothing else. No ReFS volume exists on this
+machine, no probe has ever run on one, and `git grep ReFS` over
+`.gnosis/evidence/` returns nothing. The two tests that named ReFS
+admitted it as an alternative in an assertion that always resolved by
+NTFS, so the wider half of the set was never exercised by anything.
+
+The uncomfortable part is that L-0053 — "a mechanism inherits the scope
+of its demonstration, not the scope of its description" — was written in
+the same commit as the violation. Writing a lesson down is not applying
+it, and the reviewer had to point at the sentence for it to bite.
+
+### The repair, which is one line and its consequences
+
+```python
+_SUPPORTED_FILESYSTEMS = frozenset({"NTFS"})
+# Filesystems that plausibly qualify and have not been demonstrated.
+# Listed to be refused with a reason, never to be accepted.
+_CANDIDATE_FILESYSTEMS = frozenset({"ReFS"})
+```
+
+ReFS is now refused, and refused with **its own reason**, because
+"nobody has run it there" is a different fact from "it cannot work
+there" and an operator who reads the bundle should be able to tell which
+one they are looking at:
+
+```
+filesystem 'ReFS' is a candidate the boundary has NOT been demonstrated
+on; it is refused until the probe has been run on a real volume of that
+kind
+```
+
+The refusal happens in `classify_volume`, which `WindowsInputLock.acquire`
+consults **before opening a single handle**, so an unsupported volume
+locks nothing, identifies nothing, and runs no check: `UNPROTECTED`,
+exit 6.
+
+The architecture for adding ReFS later is untouched and is now
+signposted. What it takes is not a code change first: run
+`scripts/probe_f14_boundary.py` and the full suite on a real ReFS volume,
+land that bundle, and then move the string from `_CANDIDATE_FILESYSTEMS`
+to `_SUPPORTED_FILESYSTEMS`. In that order.
+
+### The demonstrated domain, stated once and plainly
+
+> **F-14 is demonstrated on: Windows, local volume, `drive_type = fixed`,
+> `filesystem = NTFS`.**
+>
+> ReFS is a candidate extension pending real validation. It is not a
+> current guarantee. Every other drive type and filesystem, and every UNC
+> path, is refused before any input is opened.
+
+### Tests
+
+Two existing assertions tightened to the contract that was actually
+demonstrated — `assertIn(filesystem, {"NTFS", "ReFS"})` became
+`assertEqual(filesystem, "NTFS")` in both the probe test and the bundle
+test. Four added:
+
+- `test_refs_is_a_candidate_and_not_a_guarantee` —
+  `classify_volume("fixed", "ReFS").supported` is False, and the reason
+  says which kind of refusal it is.
+- `test_the_demonstrated_domain_is_exactly_one_filesystem` — asserts the
+  sets themselves, so widening the domain fails a test rather than
+  passing quietly.
+- `test_a_refs_volume_locks_nothing_and_runs_nothing` — takes the refusal
+  from the PRODUCTION classifier and injects it as the volume probe (no
+  ReFS volume exists here, which is the point), then asserts
+  `locked == 0`, `identities == {}`, `checks == ()`, exit 6, the check's
+  side-effect file absent, and the bundle recording
+  `volume.filesystem == "ReFS"` with `supported: false`.
+- the existing injected-volume refusal test is kept as it was.
+
+### Mutation check
+
+**MF21** puts the old line back —
+`_SUPPORTED_FILESYSTEMS = frozenset({"NTFS", "ReFS"})` — and the suite
+goes red. Twenty-one mutants now, none survived.
+
+### Unchanged
+
+Nothing else in this unit was touched. The guarantees accepted by the
+first three reviews stand exactly as they were: a pre-existing writer
+refuses the boundary; a live writable section refuses it in all four
+shapes; `FILE_ID_INFO` identity and final-path binding; reparse points
+and hard links; the identity taken after the lock; ABA prevention and
+detection; and the volume probe failing closed. The only change is which
+volumes the last of those calls supported.

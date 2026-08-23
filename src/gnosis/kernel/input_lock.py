@@ -183,10 +183,23 @@ if _IS_WINDOWS:
 
     _DRIVE_TYPES = {0: "unknown", 1: "no-root-dir", 2: "removable", 3: "fixed",
                     4: "remote", 5: "cdrom", 6: "ramdisk"}
-    # The boundary is demonstrated on a local volume whose filesystem can
-    # answer FILE_ID_INFO. Anything else is refused rather than assumed.
+    # The demonstrated domain, and nothing wider. These two sets are the
+    # extension point: a filesystem joins the second one when the whole
+    # boundary has been RUN on a real volume of that kind, not when it
+    # looks like it should work.
+    #
+    # ReFS was in this set and is not any more. It supports FILE_ID_INFO
+    # and shares Windows' share-mode model, which is an argument, and the
+    # fourth independent review pointed out that an argument is not a
+    # demonstration: no ReFS volume exists on this machine, no probe has
+    # ever run on one, and no evidence bundle contains the string. It is a
+    # candidate for the set, recorded here so the path back is obvious,
+    # and it is refused until someone runs the probe on a real one.
     _SUPPORTED_DRIVE_TYPES = frozenset({"fixed"})
-    _SUPPORTED_FILESYSTEMS = frozenset({"NTFS", "ReFS"})
+    _SUPPORTED_FILESYSTEMS = frozenset({"NTFS"})
+    # Filesystems that plausibly qualify and have not been demonstrated.
+    # Listed to be refused with a reason, never to be accepted.
+    _CANDIDATE_FILESYSTEMS = frozenset({"ReFS"})
 
     class _FileIdInfo(ctypes.Structure):
         _fields_ = (("VolumeSerialNumber", ctypes.c_ulonglong),
@@ -245,6 +258,15 @@ if _IS_WINDOWS:
                 False, drive_type, filesystem,
                 f"drive type {drive_type!r} is not one the boundary has been "
                 "demonstrated on; it is refused rather than assumed")
+        if filesystem in _CANDIDATE_FILESYSTEMS:
+            # Refused with its own reason: "nobody has run it there" is a
+            # different fact from "it cannot work there", and an operator
+            # who sees this knows what would change the answer.
+            return VolumeCapabilities(
+                False, drive_type, filesystem,
+                f"filesystem {filesystem!r} is a candidate the boundary has NOT been "
+                "demonstrated on; it is refused until the probe has been run on a "
+                "real volume of that kind")
         if filesystem not in _SUPPORTED_FILESYSTEMS:
             return VolumeCapabilities(
                 False, drive_type, filesystem,

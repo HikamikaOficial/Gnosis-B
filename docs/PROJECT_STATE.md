@@ -3,7 +3,7 @@
 **Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION; THE PROBE HAS A CALLER; MULTI-CREDENTIAL ROTATION
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
-**Last update:** 2026-08-23 (F-34 closed; F-14 repaired four times and still open; the stale lines below are F-19..F-32, still open)
+**Last update:** 2026-08-23 (F-34 closed; F-14 repaired five times and still open; the stale lines below are F-19..F-32, still open)
 
 ## Kernel hardening (post-Phase -1)
 
@@ -527,15 +527,36 @@ acquisition window was uncovered: the identity that matters is now taken
 AFTER the inputs are unwritable and must equal the pre-check one, else
 `PREPARATION_DRIFT`, exit 7, and nothing runs. (D) The guarantee is no
 longer extrapolated: drive type and filesystem are probed against a
-whitelist (`fixed` + NTFS/ReFS), a UNC path is refused as a redirector,
-and the answer is recorded in the bundle.
+whitelist, a UNC path is refused as a redirector, and the answer is
+recorded in the bundle.
 
 Measured: 733 covered inputs locked, identified and path-verified in
-0.45 s. **Demonstrated on Windows, local volume, `fixed`, NTFS.**
+0.45 s. **Demonstrated on Windows, local volume, `fixed`, NTFS — and, after the fourth review, declared on exactly that and nothing wider.**
 
-**F-14 is still NOT closed.** Repaired four times now, tested (84 tests,
-7 subtests) and mutation-checked (twenty mutants, none survived), it
-awaits a FOURTH independent review. Three reviews have each found
+**Fourth independent review (2026-08-23): FAIL DE ALCANCE.** No new
+finding against the architecture. One confirmed defect, and not in the
+mechanism: the domain the code ACCEPTED was wider than the domain anyone
+had DEMONSTRATED. `_SUPPORTED_FILESYSTEMS` held `{"NTFS", "ReFS"}` while
+the boundary had only ever run on NTFS — no ReFS volume on this machine,
+no probe run on one, no evidence bundle containing the string, and the
+two tests that named it admitted it as an alternative in an assertion
+that always resolved by NTFS. L-0053 says exactly this and was written in
+the same commit as the violation; writing a lesson down is not applying
+it.
+
+Narrowed: `_SUPPORTED_FILESYSTEMS = {"NTFS"}`, with ReFS moved to
+`_CANDIDATE_FILESYSTEMS` and refused with its own reason — "nobody has
+run it there" is a different fact from "it cannot work there" — before a
+single input is opened. The route back is signposted and is not a code
+change first: run the probe and the suite on a real ReFS volume, land the
+bundle, then move the string.
+
+**The demonstrated domain: Windows, local volume, `fixed`, `NTFS`. ReFS
+is a candidate extension pending real validation, not a guarantee.**
+
+**F-14 is still NOT closed.** Repaired five times now, tested (87 tests,
+7 subtests) and mutation-checked (twenty-one mutants, none survived), it
+awaits the FINAL independent review. Four reviews have each found
 something this unit's own tests and mutants did not. It closes when a
 review returns without findings.
 

@@ -26,6 +26,9 @@ is still the path it was opened by, when the identity was taken relative
 to the locking window, and whether the volume demonstrably provides the
 semantics all of this rests on.
 
+MF21 is the fourth review's: the accepted domain must not be wider than
+the demonstrated one.
+
     PYTHONUTF8=1 .venv/Scripts/python.exe scripts/mutation_check_f14.py
 
 Writes the transcript to stdout and, with `--out <path>`, to a file an
@@ -267,6 +270,15 @@ MUTANTS: list[Mutant] = [
                     drift = _preparation_drift(pre, prepared)""",
           """                    prepared = pre
                     drift = ()""")],
+    ),
+    # MF21 is the FOURTH independent review's finding: the accepted domain
+    # was wider than the demonstrated one. The mutant is the old line.
+    Mutant(
+        "MF21", "ReFS goes back into the demonstrated domain, so a "
+                "filesystem the boundary has never run on is accepted",
+        [(LOCK,
+          '    _SUPPORTED_FILESYSTEMS = frozenset({"NTFS"})',
+          '    _SUPPORTED_FILESYSTEMS = frozenset({"NTFS", "ReFS"})')],
     ),
 ]
 

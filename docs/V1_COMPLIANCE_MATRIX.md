@@ -1,9 +1,10 @@
 # GNOSIS — Matriz V1 viva
 
-**Última actualización:** 2026-08-23 · **Unidad:** ADR-0026 + tres
+**Última actualización:** 2026-08-23 · **Unidad:** ADR-0026 + cuatro
 revisiones independientes (**FAIL CRÍTICO**, **FAIL CRÍTICO
-PROVISIONAL**, **reparación aceptada con cierre en hold**) — **F-14 sigue
-ABIERTO**, entregado para una cuarta revisión independiente.
+PROVISIONAL**, **reparación aceptada con cierre en hold**, **FAIL DE
+ALCANCE**) — **F-14 sigue ABIERTO**, entregado para la revisión
+independiente final.
 Unidad anterior: ADR-0025 + cuatro addenda (FAIL PARCIAL, FAIL PARCIAL,
 **FAIL CRÍTICO**, **PASS**) — F-34 **CERRADO** por la cuarta revisión,
 sin hallazgos sobre el código `9c6064c` y la evidencia `f02e18e`
@@ -171,11 +172,16 @@ atributos de un input cubierto todavía pueden cambiarse (no concede
 escritura mientras el modo de compartición esté vigente, y el observador
 lo ve), y la frontera entera es un mecanismo de Windows.
 
-| **F-14 (tercera revisión)** — la reparación se acepta y el cierre queda en hold: faltaba atar el handle protegido al objeto identificado, la ventana de adquisición de ~700 cerrojos no estaba cubierta, y la garantía se extrapolaba a cualquier volumen | ADR-0026 addendum 3 | 2026-08-23 | **reparado, pendiente de cuarta revisión** | sección escribible sin handle de archivo rechazada en cuatro formas (error 32); `FILE_ID_INFO` por handle + verificación de ruta final + rechazo de reparse points; identidad **posterior** al bloqueo (`PREPARATION_DRIFT`, salida 7); capacidades de volumen en lista blanca (`fixed` + NTFS/ReFS). 733 inputs bloqueados e identificados en 0,45 s. 84 pruebas y 7 subtests; veinte mutantes, ninguno sobrevive; sonda de nueve casos |
+| **F-14 (tercera revisión)** — la reparación se acepta y el cierre queda en hold: faltaba atar el handle protegido al objeto identificado, la ventana de adquisición de ~700 cerrojos no estaba cubierta, y la garantía se extrapolaba a cualquier volumen | ADR-0026 addendum 3 | 2026-08-23 | **reparado, pendiente de cuarta revisión** | sección escribible sin handle de archivo rechazada en cuatro formas (error 32); `FILE_ID_INFO` por handle + verificación de ruta final + rechazo de reparse points; identidad **posterior** al bloqueo (`PREPARATION_DRIFT`, salida 7); capacidades de volumen en lista blanca (`fixed` + NTFS; ReFS retirado en el addendum 4). 733 inputs bloqueados e identificados en 0,45 s. 84 pruebas y 7 subtests; veinte mutantes, ninguno sobrevive; sonda de nueve casos |
+
+| **F-14 (cuarta revisión)** — sin hallazgo nuevo contra la arquitectura: el dominio **aceptado** por el código (`NTFS` + `ReFS`) era más ancho que el **demostrado** (`NTFS`). Ninguna ejecución real sobre ReFS, ningún paquete de evidencia lo menciona, y las dos pruebas que lo nombraban sólo lo admitían como alternativa en una aserción que siempre resolvía por NTFS | ADR-0026 addendum 4 | 2026-08-23 | **reparado, pendiente de revisión final** | `_SUPPORTED_FILESYSTEMS = {"NTFS"}`; ReFS pasa a `_CANDIDATE_FILESYSTEMS` y se rechaza con motivo propio antes de abrir un solo input; 87 pruebas y 7 subtests; veintiún mutantes, ninguno sobrevive (MF21 reintroduce ReFS y la suite se pone roja) |
 
 **F-14 está demostrado sobre:** Windows, volumen local, tipo `fixed`,
-filesystem `NTFS`. Cualquier otro entorno se rechaza antes de tomar un
-solo handle, en lugar de suponerse equivalente.
+filesystem `NTFS`. Y sobre nada más. **ReFS es una extensión candidata
+pendiente de validación real**, no una garantía actual: se rechaza con un
+motivo que dice explícitamente que nadie ha ejecutado la frontera ahí.
+Cualquier otro entorno se rechaza antes de tomar un solo handle, en lugar
+de suponerse equivalente.
 
 ## Hallazgos abiertos
 
