@@ -1,9 +1,9 @@
 # GNOSIS — Matriz V1 viva
 
-**Última actualización:** 2026-08-23 · **Unidad:** ADR-0026 + dos
+**Última actualización:** 2026-08-23 · **Unidad:** ADR-0026 + tres
 revisiones independientes (**FAIL CRÍTICO**, **FAIL CRÍTICO
-PROVISIONAL**, ambas reparadas) — **F-14 sigue ABIERTO**, entregado para
-una tercera revisión independiente.
+PROVISIONAL**, **reparación aceptada con cierre en hold**) — **F-14 sigue
+ABIERTO**, entregado para una cuarta revisión independiente.
 Unidad anterior: ADR-0025 + cuatro addenda (FAIL PARCIAL, FAIL PARCIAL,
 **FAIL CRÍTICO**, **PASS**) — F-34 **CERRADO** por la cuarta revisión,
 sin hallazgos sobre el código `9c6064c` y la evidencia `f02e18e`
@@ -170,6 +170,12 @@ F-17, que sigue abierto. Tras el addendum 2 se añade un residuo más: los
 atributos de un input cubierto todavía pueden cambiarse (no concede
 escritura mientras el modo de compartición esté vigente, y el observador
 lo ve), y la frontera entera es un mecanismo de Windows.
+
+| **F-14 (tercera revisión)** — la reparación se acepta y el cierre queda en hold: faltaba atar el handle protegido al objeto identificado, la ventana de adquisición de ~700 cerrojos no estaba cubierta, y la garantía se extrapolaba a cualquier volumen | ADR-0026 addendum 3 | 2026-08-23 | **reparado, pendiente de cuarta revisión** | sección escribible sin handle de archivo rechazada en cuatro formas (error 32); `FILE_ID_INFO` por handle + verificación de ruta final + rechazo de reparse points; identidad **posterior** al bloqueo (`PREPARATION_DRIFT`, salida 7); capacidades de volumen en lista blanca (`fixed` + NTFS/ReFS). 733 inputs bloqueados e identificados en 0,45 s. 84 pruebas y 7 subtests; veinte mutantes, ninguno sobrevive; sonda de nueve casos |
+
+**F-14 está demostrado sobre:** Windows, volumen local, tipo `fixed`,
+filesystem `NTFS`. Cualquier otro entorno se rechaza antes de tomar un
+solo handle, en lugar de suponerse equivalente.
 
 ## Hallazgos abiertos
 

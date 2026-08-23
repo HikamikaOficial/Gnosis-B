@@ -104,9 +104,22 @@ when an ADR with captured evidence backs it.
   rename to everything else — 718 inputs locked in 6.17 s here. What
   cannot be locked in advance (paths that do not exist yet) stays the
   observer's job. If any covered input cannot be protected, nothing runs:
-  `UNPROTECTED`, exit 6. 65 tests, 3 subtests; sixteen mutants, none
-  survived. **Next action: hand this unit to a THIRD independent
-  review.** It is not closed until one returns without findings.
+  `UNPROTECTED`, exit 6.
+
+- **Third independent review (2026-08-23): repair accepted, closure on
+  hold.** Four adversarial questions, all answered by measurement. A
+  writable section with no file handle behind it still refuses the lock
+  (four shapes, error 32, capture runs nothing). Every protected handle
+  now records `FILE_ID_INFO` and is verified to still resolve to its own
+  path; reparse points are refused and a hard link to a covered input is
+  refused by the share mode itself. The identity that matters is taken
+  AFTER the locks are in place, so the acquisition window cannot hide a
+  change — `PREPARATION_DRIFT`, exit 7, nothing runs. And the volume is
+  probed rather than assumed: `fixed` plus NTFS or ReFS, UNC refused.
+  733 inputs locked and identified in 0.45 s. 84 tests, 7 subtests;
+  twenty mutants, none survived; the probe is nine cases now. **Next
+  action: hand this unit to a FOURTH independent review.** It is not
+  closed until one returns without findings.
 
 - **Observed overlap with F-15..F-18, none of them marked repaired:**
   F-15's suggested correction is what this script now does, but the
@@ -201,7 +214,8 @@ That script now fails closed rather than producing an unattributable
 transcript: exit 2 if the endpoints differ, exit 3 if the identity could
 not be taken, exit 4 if a covered input was written during the run even
 though the endpoints agree, exit 5 if the interval could not be observed
-completely, exit 6 if the covered inputs could not be made unwritable. Baseline as of ADR-0026: **874 tests and 60
+completely, exit 6 if the covered inputs could not be made unwritable,
+exit 7 if the tree moved while the boundary was being built. Baseline as of ADR-0026: **874 tests and 60
 subtests when the flaky work-queue test cooperates** (873 + 1 flaky
 failure otherwise — see above), mypy strict clean over 56 source files,
 ruff at the 19-finding baseline. Then **whichever audit finding direction

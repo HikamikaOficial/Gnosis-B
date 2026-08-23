@@ -101,6 +101,7 @@ EXIT_IDENTITY_UNAVAILABLE = 3
 EXIT_INPUTS_MUTATED = 4
 EXIT_BOUNDARY_UNAVAILABLE = 5
 EXIT_INPUTS_UNPROTECTED = 6
+EXIT_PREPARATION_DRIFT = 7
 
 _UNREADABLE_PREFIX = "unreadable: "
 
@@ -149,6 +150,7 @@ class ObservationVerdict(Enum):
     INPUTS_MUTATED = "INPUTS_MUTATED"
     UNOBSERVED = "UNOBSERVED"
     UNPROTECTED = "UNPROTECTED"
+    PREPARATION_DRIFT = "PREPARATION_DRIFT"
 
 
 @dataclass(frozen=True)
@@ -367,6 +369,7 @@ class Boundary:
     reason: str | None = None
     machinery_events: int = 0
     protection: Mapping[str, Any] = field(default_factory=dict)
+    locked_identity: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def clean(self) -> bool:
@@ -384,6 +387,12 @@ class Boundary:
             "allowed_writes": list(self.allowed_writes),
             "reason": self.reason,
             "protection": dict(self.protection),
+            "locked_identity": dict(self.locked_identity),
+            "identity_of_what_ran": (
+                "locked_identity is taken AFTER every covered input is unwritable, "
+                "so it describes the bytes the checks will actually read; it must "
+                "equal the pre-check identity or the capture is refused"
+            ),
             "authority": (
                 "the write stream, not a comparison of endpoints: a change that "
                 "undoes itself before the second fingerprint is still a change"
@@ -403,6 +412,8 @@ def classify_observation(
     covered: frozenset[str],
     allowed_writes: Sequence[str],
     lock: LockOutcome | None = None,
+    drift: Sequence[str] = (),
+    locked_identity: Mapping[str, Any] | None = None,
 ) -> Boundary:
     """Turn prevention plus a stream of writes into one verdict.
 
@@ -419,18 +430,28 @@ def classify_observation(
     """
     allowed = (BARRIER_DIR, *allowed_writes)
     protection: Mapping[str, Any] = lock.to_dict() if lock is not None else {}
+    prepared: Mapping[str, Any] = locked_identity or {}
     if lock is not None and not lock.enforced:
         return Boundary(
             ObservationVerdict.UNPROTECTED, observation.mechanism,
             len(observation.events), 0, tuple(lock.refused), len(covered),
             tuple(allowed), lock.reason or "the covered inputs were not made unwritable",
-            protection=protection)
+            protection=protection, locked_identity=prepared)
+    if drift:
+        # The tree moved between the fingerprint and the moment the inputs
+        # became unwritable. Nothing ran, and the identity in the bundle
+        # would not have described the bytes a check would have read.
+        return Boundary(
+            ObservationVerdict.PREPARATION_DRIFT, observation.mechanism,
+            len(observation.events), 0, tuple(drift), len(covered), tuple(allowed),
+            "the tree changed while the boundary was being built",
+            protection=protection, locked_identity=prepared)
     if not observation.available or not observation.complete:
         return Boundary(
             ObservationVerdict.UNOBSERVED, observation.mechanism,
             len(observation.events), 0, (), len(covered), tuple(allowed),
             observation.reason or "the write observer could not promise a complete stream",
-            protection=protection)
+            protection=protection, locked_identity=prepared)
 
     violations: list[str] = []
     allowed_count = 0
@@ -466,7 +487,8 @@ def classify_observation(
                else ObservationVerdict.CLEAN)
     return Boundary(verdict, observation.mechanism, len(observation.events),
                     allowed_count, tuple(dict.fromkeys(violations)), len(covered),
-                    tuple(allowed), machinery_events=machinery, protection=protection)
+                    tuple(allowed), machinery_events=machinery, protection=protection,
+                    locked_identity=prepared)
 
 
 @dataclass(frozen=True)
@@ -628,6 +650,8 @@ def _exit_code(binding: TreeBinding, checks: ChecksVerdict, boundary: Boundary) 
         return EXIT_BOUNDARY_UNAVAILABLE
     if boundary.verdict is ObservationVerdict.UNPROTECTED:
         return EXIT_INPUTS_UNPROTECTED
+    if boundary.verdict is ObservationVerdict.PREPARATION_DRIFT:
+        return EXIT_PREPARATION_DRIFT
     if boundary.verdict is ObservationVerdict.INPUTS_MUTATED:
         return EXIT_INPUTS_MUTATED
     if checks not in (ChecksVerdict.ALL_CLEAN, ChecksVerdict.WITHIN_BASELINE):
@@ -648,6 +672,9 @@ def _verdict_line(binding: TreeBinding, checks: ChecksVerdict, boundary: Boundar
     if boundary.verdict is ObservationVerdict.UNPROTECTED:
         return ("INVALID EVIDENCE: the covered inputs were not made unwritable, so "
                 f"nothing ran - {boundary.reason}")
+    if boundary.verdict is ObservationVerdict.PREPARATION_DRIFT:
+        return ("INVALID EVIDENCE: the tree changed while the boundary was being "
+                "built, so nothing ran; see boundary.violations")
     if boundary.verdict is ObservationVerdict.INPUTS_MUTATED:
         return ("INVALID EVIDENCE: a covered input was written during the capture "
                 "and the endpoints do not show it; see boundary.violations")
@@ -700,6 +727,24 @@ def build_summary(
         "exit_code": _exit_code(binding, checks_verdict, boundary),
         "verdict": _verdict_line(binding, checks_verdict, boundary),
     }
+
+
+def _preparation_drift(pre: TreeIdentity, prepared: TreeIdentity) -> tuple[str, ...]:
+    """What moved between the fingerprint and the inputs becoming unwritable."""
+    if not prepared.available:
+        return ((f"the identity could not be re-taken once the inputs were locked: "
+                 f"{prepared.reason}"),)
+    if prepared.digest == pre.digest:
+        return ()
+    return describe_drift(pre.fingerprint, prepared.fingerprint) or ("digest",)
+
+
+def write_identities(staging: Path, identities: Mapping[str, str]) -> Path:
+    """Which filesystem object each protected path actually was."""
+    path = staging / "input-identities.json"
+    path.write_text(json.dumps(dict(identities), indent=2, sort_keys=True),
+                    encoding="utf-8")
+    return path
 
 
 def write_summary(staging: Path, summary: Mapping[str, Any]) -> Path:
@@ -757,6 +802,8 @@ def run_capture(
     results: list[CheckResult] = []
     covered: frozenset[str] = frozenset()
     lock_outcome: LockOutcome | None = None
+    prepared: TreeIdentity | None = None
+    drift: tuple[str, ...] = ()
     try:
         pre = identity(repo)
         if pre.available:
@@ -766,12 +813,21 @@ def run_capture(
             lock_outcome = lock.acquire(sorted(covered))
             try:
                 if lock_outcome.enforced:
-                    # Nothing runs against inputs that anything could
-                    # still write. Discovering that after the suite is
-                    # worse than discovering it before.
-                    for command in commands:
-                        results.append(
-                            _run_check(repo, command, staging, lint_baseline, env))
+                    # The identity that matters is taken HERE, once nothing
+                    # can write the inputs any more: acquiring ~700 locks
+                    # takes long enough to be a window, and an identity
+                    # from before that window describes bytes that could
+                    # still have moved inside it.
+                    prepared = identity(repo)
+                    drift = _preparation_drift(pre, prepared)
+                    write_identities(staging, lock_outcome.identities)
+                    if not drift:
+                        # Nothing runs against inputs that anything could
+                        # still write. Discovering that after the suite is
+                        # worse than discovering it before.
+                        for command in commands:
+                            results.append(
+                                _run_check(repo, command, staging, lint_baseline, env))
             finally:
                 lock.release()
             post = identity(repo)
@@ -784,7 +840,8 @@ def run_capture(
 
     binding = bind_tree(pre, post)
     boundary = classify_observation(repo, observation, covered, allowed_writes,
-                                    lock_outcome)
+                                    lock_outcome, drift,
+                                    prepared.to_dict() if prepared is not None else None)
     checks_verdict = _checks_verdict(results)
     summary = build_summary(
         binding, results, checks_verdict, boundary,

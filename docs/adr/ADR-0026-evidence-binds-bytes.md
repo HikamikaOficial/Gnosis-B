@@ -13,16 +13,25 @@
   memory-mapped view notifies nothing, so a check consumed mutated bytes
   inside a bundle that certified itself. Repaired in addendum 2 by making
   the covered inputs unwritable instead of merely watched.
-- **A third independent review is OUTSTANDING**; F-14 stays OPEN in
-  `docs/V1_COMPLIANCE_MATRIX.md` until one returns without findings. Two
-  reviews have now found something this unit's own tests and mutants did
-  not.
-- Tests: `tests/test_evidence_binding.py` — **65 tests, 3 subtests**
-  (36 in the first delivery, 20 added by addendum 1, 9 by addendum 2).
-- Mutation check: `scripts/mutation_check_f14.py` — **sixteen mutants,
-  none survived** (nine, then four, then three), declared as data so a
+- Independent review, round 3 (2026-08-23): **repair accepted, closure on
+  hold.** The combination of prevention and observation was accepted; four
+  adversarial questions were then asked, and three of them exposed a gap
+  between what the boundary claimed and what it had established — the
+  object behind each handle, the window while the locks are taken, and
+  the volume the guarantee rests on. All four answered by measurement in
+  addendum 3.
+- **A fourth independent review is OUTSTANDING**; F-14 stays OPEN in
+  `docs/V1_COMPLIANCE_MATRIX.md` until one returns without findings.
+  Three reviews have now found something this unit's own tests and
+  mutants did not.
+- Demonstrated on: **Windows, local volume, drive type `fixed`,
+  filesystem `NTFS`.** Anything else is refused rather than assumed.
+- Tests: `tests/test_evidence_binding.py` — **84 tests, 7 subtests**
+  (36, then 20, then 9, then 19).
+- Mutation check: `scripts/mutation_check_f14.py` — **twenty mutants,
+  none survived** (nine, four, three, four), declared as data so a
   reviewer re-runs the claim rather than reading it.
-- Break attempts: `scripts/probe_f14_boundary.py` — six cases, committed
+- Break attempts: `scripts/probe_f14_boundary.py` — nine cases, committed
   and re-runnable, containing the defect and its closure side by side.
 - Evidence: `.gnosis/evidence/20260822T212531Z/` — **910 passed, 62
   subtests**, mypy strict clean over 56 source files, ruff at **19
@@ -709,4 +718,156 @@ returned; `SUMMARY.json` is exactly as produced:
   a fail-open.
 - **`.git/` is counted, not judged**, and is not lockable in this scheme.
   A check that installs a hook is outside this boundary and inside F-17's.
+- **F-15..F-18 remain open and untouched.**
+
+## Third independent review addendum — 2026-08-23: **REPARACIÓN ACEPTADA, CIERRE EN HOLD**
+
+The review accepted the combination of prevention and observation and
+then asked four questions that decide whether the mechanism is real
+rather than plausible. All four were answered by running something, and
+the answers are below. Nothing about the architecture changed; what
+changed is that three of the four exposed a gap between what the
+boundary claimed and what it had actually established.
+
+### A — a writable section with no file handle left
+
+A section keeps the underlying file object alive with the access it was
+created through. If it did not, a view could sit on a covered input with
+nothing left to conflict with, the lock would report ENFORCED, and the
+whole prevention argument would be void for the exact case it was built
+to close.
+
+Measured, in four shapes, each from an independent process:
+
+| shape | lock |
+|---|---|
+| file handle open, mapping open, view alive | refused, error 32 |
+| file handle CLOSED, mapping open, view alive | refused, error 32 |
+| file handle closed AND mapping closed, only the view alive | refused, error 32 |
+| file handle closed, a DUPLICATE kept alive | refused, error 32 |
+
+`ERROR_SHARING_VIOLATION` in every case, and the capture then runs
+nothing: `UNPROTECTED`, exit 6, zero checks, and the check's side-effect
+file never appears. The last three are cases A3, A4 and A5 of
+`scripts/probe_f14_boundary.py` and are permanent tests in
+`TestALiveWritableSectionRefusesTheBoundary`.
+
+### B — the protected handle and the identified object are one object
+
+They were not being tied together at all. Now every handle is recorded
+by **`FILE_ID_INFO`** — the volume serial number and the 128-bit file id
+— and verified with `GetFinalPathNameByHandleW` to still resolve to the
+path it was opened by. A handle whose final path is not its own path is
+a refusal, not a note.
+
+The full map goes into the bundle as `input-identities.json`, and
+`SUMMARY.json` carries its digest and count, so a reviewer can check that
+the objects protected are the objects the fingerprint is about without
+reading 700 lines of hex.
+
+Three more refusals came out of asking the question properly:
+
+- **Reparse points are refused outright.** A symlink or junction among
+  the covered inputs is a redirection, and what the lock holds need not
+  be what a check opens. This tree has never had one; if it acquires one,
+  the capture stops rather than reasons about it.
+- **A hard link is refused too**, and that one is a property rather than
+  a check: the share mode belongs to the FILE, not to the name it was
+  opened by, so a second name for the same object cannot be written
+  either. Verified.
+- **A covered input deleted before its turn** fails the acquisition.
+
+### C — the race while the locks are being taken
+
+Acquiring the locks is not instantaneous, and an input whose turn has not
+come is not yet protected. The old code took its identity BEFORE that
+window and would have described a tree that could still have moved
+inside it.
+
+**The identity that matters is now taken after the inputs are
+unwritable.** `run_capture` re-probes once the lock reports enforced and
+requires that identity to equal the pre-check one; anything else is
+`PREPARATION_DRIFT`, exit 7, and **nothing runs**. The bundle records it
+under `boundary.locked_identity`, described in the file as "the bytes the
+checks will actually read".
+
+That gives exactly the two outcomes the review allowed. Either the
+boundary is invalid, or the recorded identity demonstrably corresponds to
+what will be checked — and it is now the second by construction rather
+than by argument. A modification made in the window and left in place is
+caught (and, since it also survives to the end, the more severe
+`TREE_MUTATED` is what the exit code reports — both facts are in the
+bundle). A modification made in the window and reverted is caught by the
+observer, because an ordinary write still notifies. Both are permanent
+tests, driven by a lock that deliberately acquires in two halves so the
+window is a real one rather than a mocked one.
+
+### D — the volume the guarantee was demonstrated on
+
+Share-mode refusal and `FILE_ID_INFO` are local Windows filesystem
+semantics. A network redirector may implement them partially or not at
+all, and extrapolating from one local NTFS volume is exactly what the
+review said not to do.
+
+The capture now asks the volume and refuses what it cannot demonstrate:
+a whitelist of drive type `fixed` and filesystem `NTFS` or `ReFS`, a UNC
+path refused outright as a redirector, and the answer recorded in the
+bundle under `boundary.protection.volume`. **F-14 is demonstrated on:
+drive type `fixed`, filesystem `NTFS`, local volume.** Anything else
+produces `UNPROTECTED` before a single handle is taken — verified with an
+injected volume, because this machine has no share to mount.
+
+### Measurements
+
+733 covered inputs on this repository: locked, identified by file id and
+path-verified in **0.45 s**. (The 6.17 s recorded in the previous
+addendum was a cold cache; the number is kept there rather than quietly
+corrected.)
+
+### Tests: 84, and the 65 are all still here
+
+Nineteen added, across four classes named after the review's four
+questions. Of the 65, exactly one changed and only in its fixture:
+`test_an_unavailable_post_identity_fails_closed_although_every_check_passed`
+injects a sequence of identities and now needs three of them rather than
+two, because the identity is taken before the lock, again once the
+inputs are unwritable, and again after the checks. Its assertions are
+untouched.
+
+### Mutation check: 20, none survived
+
+The sixteen are all here. Four added, one per new guarantee:
+
+| Mutant | Result |
+|---|---|
+| MF17 a reparse point among the covered inputs is locked like any other file | **red** |
+| MF18 the protected handles are never identified | **red** |
+| MF19 any volume is assumed to provide the semantics | **red** |
+| MF20 the identity is not re-taken once the inputs are unwritable | **red** |
+
+MF19 is the one worth noting: it can only be caught because the volume
+probe is injectable, so the refusal is testable on a machine that has
+only a supported volume. A guarantee that can only be tested where it
+does not apply is not tested.
+
+### The probe, extended to nine cases
+
+`scripts/probe_f14_boundary.py` now runs A0, B0, A1, B1, A3, A4, A5, A2,
+B2 and ends with `BROKEN: B0`. That line is the point rather than an
+embarrassment: B0 is the observation-only design reconstructed with a
+lock that claims enforcement and locks nothing, so the transcript carries
+the defect and its closure side by side, in one file, re-runnable.
+
+### What is still not closed
+
+- **F-14 remains OPEN.** Three reviews, three findings this unit's own
+  tests did not have. It closes when an independent review returns
+  without findings, and not before.
+- **Attributes can still change** on a covered input. No write access
+  follows from it while the share mode stands, and the observer reports
+  it.
+- **Windows and a local NTFS/ReFS volume.** Everywhere else the capture
+  refuses to claim a boundary it cannot demonstrate.
+- **`.git/` is counted, not judged**, and is not locked. A check that
+  installs a hook is outside this boundary and inside F-17's.
 - **F-15..F-18 remain open and untouched.**

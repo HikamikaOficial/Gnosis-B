@@ -1,36 +1,38 @@
-"""Try to break the ADR-0026 boundary the way the second review says it can.
+"""Try to break the F-14 boundary the way three reviews said it could break.
 
     PYTHONUTF8=1 .venv/Scripts/python.exe scripts/probe_f14_boundary.py --out <file>
 
-Committed so the claim can be re-run rather than read. Read-only with respect
-to this repository: every tree it builds is a throwaway git repo in the system
-temp directory.
+Committed so the claim can be re-run rather than read. Read-only with
+respect to this repository: every tree it builds is a throwaway git repo
+in the system temp directory, and every ordering is a handshake on a
+pipe — there is not one sleep in the synchronisation.
 
-Six cases, in three groups.
+Nine cases, in three groups.
 
-OBSERVATION ONLY (the reviewed design, reconstructed with a lock that
-claims to be enforced and locks nothing):
+OBSERVATION ONLY — the design the second review broke, reconstructed here
+with a lock that claims enforcement and locks nothing, so the write
+stream is the only authority:
 
-  A0  an independent process keeps a raw write handle open across the
-      whole capture, never flushes, and closes only after stop()
-  B0  the same through a writable memory-mapped view, never flushed
+  A0  a check writes a covered input with an ordinary handle, reads the
+      change, and puts the original bytes back
+  B0  the same through a writable memory-mapped view
 
-PREVENTION IN PLACE (the repaired design):
+PREVENTION, the attacker already holding something:
 
-  A1  the same open handle, taken BEFORE the capture: the boundary
-      cannot be established and nothing runs
-  B1  the same for the mapping
-  A2  the CHECK ITSELF tries to open a covered input for writing
-  B2  the CHECK ITSELF tries to map a covered input writable
+  A1  an independent process holds a raw write handle when the capture starts
+  B1  an independent process holds a writable mapping
+  A3  a writable SECTION whose file handle has been closed
+  A4  the same with the mapping handle closed too: only the view remains
+  A5  the same with a duplicated file handle kept alive instead
 
-Every ordering is a handshake on a pipe. There is not one sleep in it:
-the mutation is sent after the PRE fingerprint has been acknowledged and
-before any check starts, and the restore is sent after the checks and
-acknowledged before the POST fingerprint.
+PREVENTION, the check itself is the attacker:
 
-Each case separates, as the review asked: whether the mutation was
-observable BY THE CHECK, whether PRE == POST, whether a notification
-arrived at all, the boundary verdict, and evidence_valid.
+  A2  the check opens a covered input for writing
+  B2  the check maps a covered input writable
+
+Each case prints what the review asked to see separately: whether the
+mutation was observable BY THE CHECK, whether the endpoints agree,
+whether a notification arrived, the boundary verdict, and evidence_valid.
 """
 from __future__ import annotations
 
@@ -46,13 +48,10 @@ REPO = HERE.parent
 if str(REPO / "src") not in sys.path:
     sys.path.insert(0, str(REPO / "src"))
 
-from gnosis.kernel.evidence_capture import (  # noqa: E402
-    CheckCommand,
-    probe_tree_identity,
-    run_capture,
-)
-from gnosis.kernel.input_lock import LockOutcome  # noqa: E402
+from gnosis.kernel.evidence_capture import CheckCommand, run_capture  # noqa: E402
+from gnosis.kernel.input_lock import LockOutcome, VolumeCapabilities  # noqa: E402
 
+MEDDLER = HERE / "probe_f14_meddler.py"
 LINES: list[str] = []
 
 
@@ -82,14 +81,12 @@ def make_repo(root: Path, name: str) -> Path:
 class HollowLock:
     """Claims the inputs are protected and protects nothing.
 
-    This is the reviewed design expressed as a lock: observation only.
+    The reviewed design, expressed as a lock: observation only.
     """
 
-    def __init__(self, root: Path) -> None:
-        self.root = root
-
-    def acquire(self, paths):  # noqa: ANN001, ANN201
-        return LockOutcome(True, 0, (), "none (observation only)")
+    def acquire(self, paths: list[str]) -> LockOutcome:
+        return LockOutcome(True, 0, (), "none (observation only)",
+                           volume=VolumeCapabilities(True, "fixed", "NTFS"))
 
     def release(self) -> None:
         return None
@@ -100,9 +97,13 @@ class Meddler:
 
     def __init__(self, mode: str, target: Path) -> None:
         self.process = subprocess.Popen(
-            [sys.executable, str(HERE / "probe_f14_meddler.py"), mode, str(target)],
+            [sys.executable, str(MEDDLER), mode, str(target)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
         self.expect("READY")
+
+    def read(self) -> str:
+        assert self.process.stdout is not None
+        return self.process.stdout.readline().strip()
 
     def send(self, command: str) -> str:
         assert self.process.stdin is not None
@@ -110,25 +111,19 @@ class Meddler:
         self.process.stdin.flush()
         return self.read()
 
-    def read(self) -> str:
-        assert self.process.stdout is not None
-        return self.process.stdout.readline().strip()
-
     def expect(self, prefix: str) -> str:
         line = self.read()
         if not line.startswith(prefix):
             raise RuntimeError(f"expected {prefix}, got {line!r}")
         return line
 
-    def close(self) -> str:
-        line = self.send("CLOSE")
-        self.process.wait(timeout=30)
-        return line
-
-
-READER = CheckCommand("check", (
-    sys.executable, "-c",
-    "import hashlib;print(hashlib.sha256(open('a.txt','rb').read()).hexdigest())"))
+    def close(self) -> None:
+        try:
+            self.send("CLOSE")
+        finally:
+            assert self.process.stdin is not None
+            self.process.stdin.close()
+            self.process.wait(timeout=30)
 
 
 def tampering_check(mode: str) -> CheckCommand:
@@ -139,19 +134,22 @@ def tampering_check(mode: str) -> CheckCommand:
             "try:\n"
             "    fd = os.open('a.txt', os.O_RDWR | os.O_BINARY)\n"
             "except OSError as exc:\n"
-            "    print('REFUSED', type(exc).__name__, exc.errno)\n"
+            "    print('REFUSED', type(exc).__name__)\n"
             "else:\n"
             "    original = os.read(fd, 1 << 20)\n"
-            "    os.lseek(fd, 0, os.SEEK_SET); os.write(fd, b'TAMPERED')\n"
+            "    os.lseek(fd, 0, os.SEEK_SET)\n"
+            "    os.write(fd, b'TAMPERED')\n"
             "    print('TAMPERED', hashlib.sha256(open('a.txt','rb').read()).hexdigest())\n"
-            "    os.lseek(fd, 0, os.SEEK_SET); os.write(fd, original); os.close(fd)\n")
+            "    os.lseek(fd, 0, os.SEEK_SET)\n"
+            "    os.write(fd, original)\n"
+            "    os.close(fd)\n")
     else:
         source = (
             "import hashlib, mmap\n"
             "try:\n"
             "    handle = open('a.txt', 'r+b')\n"
             "except OSError as exc:\n"
-            "    print('REFUSED', type(exc).__name__, exc.errno)\n"
+            "    print('REFUSED', type(exc).__name__)\n"
             "else:\n"
             "    view = mmap.mmap(handle.fileno(), 0)\n"
             "    original = bytes(view[:])\n"
@@ -161,93 +159,65 @@ def tampering_check(mode: str) -> CheckCommand:
     return CheckCommand("check", (sys.executable, "-c", source))
 
 
-def show(capture, original_digest, modified_digest, check_saw, closed) -> bool:
-    say(f"  digest before                     : {original_digest}")
-    say(f"  digest after MODIFY (fresh read)  : {modified_digest}")
-    say(f"  what the CHECK reported           : {check_saw or '(no check ran)'}")
-    consumed = bool(modified_digest) and check_saw == modified_digest
-    say(f"  -> a check consumed mutated bytes : {consumed}")
-    if closed:
-        say(f"  digest after CLOSE                : {closed}")
+def report(capture, before: str, after: str, extra: str = "") -> bool:
+    reported = capture.checks[0].tail.strip() if capture.checks else "(no check ran)"
+    tampered = reported.startswith("TAMPERED")
+    if extra:
+        say(f"  {extra}")
+    say(f"  what the CHECK reported           : {reported}")
+    say(f"  -> a check consumed mutated bytes : {tampered}")
+    say(f"  bytes unchanged at the end        : {before == after}")
     say(f"  PRE == POST                       : "
         f"{capture.summary['tree_identity']['identical']}")
-    say(f"  binding                           : "
-        f"{capture.summary['tree_identity']['binding']}")
     say(f"  notification for a.txt received   : "
-        f"{any('a.txt' in v for v in capture.boundary.violations)}")
+        f"{any('a.txt' in item for item in capture.boundary.violations)}")
     say(f"  boundary                          : {capture.boundary.verdict.value}")
     say(f"  violations                        : {list(capture.boundary.violations)}")
-    say(f"  protection                        : {dict(capture.boundary.protection)}")
+    say(f"  protection.enforced               : "
+        f"{dict(capture.boundary.protection).get('enforced')}")
     say(f"  checks that ran                   : {len(capture.checks)}")
     say(f"  evidence_valid                    : {capture.summary['evidence_valid']}")
     say(f"  exit_code                         : {capture.exit_code}")
-    broke = consumed and bool(capture.summary["evidence_valid"])
+    broke = tampered and bool(capture.summary["evidence_valid"])
     say(f"  VERDICT                           : "
         f"{'BROKEN - mutated bytes consumed inside a valid bundle' if broke else 'HELD'}")
     say()
     return broke
 
 
-def external_case(title: str, mode: str, root: Path, name: str, *, hollow: bool) -> bool:
-    """An independent process holds the write handle across the capture."""
+def digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def check_case(title: str, mode: str, root: Path, name: str, *, hollow: bool) -> bool:
+    """The check itself is the attacker."""
     say(f"### {title}")
     repo = make_repo(root, name)
-    target = repo / "a.txt"
-    original_digest = hashlib.sha256(target.read_bytes()).hexdigest()
+    before = digest(repo / "a.txt")
+    kwargs = {"input_lock": (lambda _: HollowLock())} if hollow else {}
+    capture = run_capture(repo, [tampering_check(mode)], root / f"s-{name}", **kwargs)
+    return report(capture, before, digest(repo / "a.txt"))
 
-    meddler = Meddler(mode, target)
-    opened = meddler.send("OPEN")
-    say(f"  external open                     : {opened}")
-    state: dict[str, str | None] = {"modified": None}
-    calls = {"n": 0}
 
-    def identity(path: Path):
-        index = calls["n"]
-        calls["n"] += 1
-        if index == 0:
-            pre = probe_tree_identity(path)
-            if opened.startswith("OPENED"):
-                state["modified"] = meddler.send("MODIFY").split()[1]
-            return pre
-        if opened.startswith("OPENED"):
-            meddler.send("RESTORE")
-        return probe_tree_identity(path)
-
-    kwargs = {"input_lock": (lambda _: HollowLock(_))} if hollow else {}
+def holder_case(title: str, mode: str, root: Path, name: str) -> bool:
+    """Somebody else is already holding something writable."""
+    say(f"### {title}")
+    repo = make_repo(root, name)
+    before = digest(repo / "a.txt")
+    meddler = Meddler(mode, repo / "a.txt")
     try:
-        capture = run_capture(repo, [READER], root / f"s-{name}",
-                              identity=identity, **kwargs)
+        opened = meddler.send("OPEN")
+        say(f"  the other process reports         : {opened}")
+        capture = run_capture(
+            repo,
+            [CheckCommand("check", (sys.executable, "-c",
+                                    "open('ran.txt','w',encoding='utf-8').write('x')"))],
+            root / f"s-{name}")
     finally:
-        closed = meddler.close()
-
-    check_saw = capture.checks[0].tail.strip() if capture.checks else ""
-    return show(capture, original_digest, state["modified"], check_saw,
-                closed.split()[1] if len(closed.split()) > 1 else "")
-
-
-def check_case(title: str, mode: str, root: Path, name: str) -> bool:
-    """The check itself is the attacker, and the lock is already in place."""
-    say(f"### {title}")
-    repo = make_repo(root, name)
-    original_digest = hashlib.sha256((repo / "a.txt").read_bytes()).hexdigest()
-    capture = run_capture(repo, [tampering_check(mode)], root / f"s-{name}")
-    reported = capture.checks[0].tail.strip() if capture.checks else ""
-    after = hashlib.sha256((repo / "a.txt").read_bytes()).hexdigest()
-    say(f"  the check reported                : {reported}")
-    say(f"  file digest afterwards            : {after}")
-    say(f"  -> bytes never changed            : {after == original_digest}")
-    say(f"  PRE == POST                       : "
-        f"{capture.summary['tree_identity']['identical']}")
-    say(f"  boundary                          : {capture.boundary.verdict.value}")
-    say(f"  protection                        : {dict(capture.boundary.protection)}")
-    say(f"  check exit code                   : {capture.checks[0].exit_code}")
-    say(f"  evidence_valid                    : {capture.summary['evidence_valid']}")
-    say(f"  exit_code                         : {capture.exit_code}")
-    broke = reported.startswith("TAMPERED")
-    say(f"  VERDICT                           : "
-        f"{'BROKEN - the check mutated its own inputs' if broke else 'HELD - the write was refused'}")
-    say()
-    return broke
+        meddler.close()
+    ran = (repo / "ran.txt").exists()
+    return report(capture, before, digest(repo / "a.txt"),
+                  extra=f"the check's side effect happened   : {ran}")
 
 
 def main() -> int:
@@ -255,48 +225,52 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
-    say("F-14 — SECOND INDEPENDENT REVIEW: breaking, then closing, the boundary")
+    say("F-14 — trying to break the boundary, across three reviews")
     say("=" * 78)
     say(f"tree:   {git(REPO, 'rev-parse', 'HEAD').strip()}")
     say(f"python: {sys.version.split()[0]}")
-    say()
-    say("GROUP 1 — OBSERVATION ONLY (the reviewed design: a lock that claims")
-    say("          enforcement and locks nothing, so the write stream is the")
-    say("          only authority)")
     say()
 
     broke: list[str] = []
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        if external_case("A0 — open write handle, no flush, closed after stop()",
-                         "handle", root, "a0", hollow=True):
+
+        say("GROUP 1 — OBSERVATION ONLY (prevention disabled: the second")
+        say("          review's world, where watching is the whole boundary)")
+        say()
+        if check_case("A0 — the check writes, reads and restores with an ordinary handle",
+                      "handle", root, "a0", hollow=True):
             broke.append("A0")
-        if external_case("B0 — writable memory-mapped view, never flushed",
-                         "mmap", root, "b0", hollow=True):
+        if check_case("B0 — the same through a writable memory-mapped view",
+                      "mmap", root, "b0", hollow=True):
             broke.append("B0")
 
-        say("GROUP 2 — PREVENTION IN PLACE, attacker already holding the handle")
+        say("GROUP 2 — PREVENTION, with the attacker already holding something")
         say()
-        if external_case("A1 — the same open handle, taken before the capture",
-                         "handle", root, "a1", hollow=False):
-            broke.append("A1")
-        if external_case("B1 — the same mapping, taken before the capture",
-                         "mmap", root, "b1", hollow=False):
-            broke.append("B1")
+        for name, mode, title in (
+            ("a1", "handle", "A1 — a raw write handle, taken before the capture"),
+            ("b1", "mmap", "B1 — a writable mapping, taken before the capture"),
+            ("a3", "section", "A3 — a writable SECTION with the file handle closed"),
+            ("a4", "section-orphan", "A4 — the same with the mapping handle closed too"),
+            ("a5", "section-dup", "A5 — the same with a duplicated handle kept alive"),
+        ):
+            if holder_case(title, mode, root, name):
+                broke.append(name.upper())
 
-        say("GROUP 3 — PREVENTION IN PLACE, the check itself is the attacker")
+        say("GROUP 3 — PREVENTION, with the check itself as the attacker")
         say()
         if check_case("A2 — the check opens a covered input for writing",
-                      "handle", root, "a2"):
+                      "handle", root, "a2", hollow=False):
             broke.append("A2")
         if check_case("B2 — the check maps a covered input writable",
-                      "mmap", root, "b2"):
+                      "mmap", root, "b2", hollow=False):
             broke.append("B2")
 
     say("=" * 78)
     say(f"BROKEN: {', '.join(broke) if broke else 'none'}")
     say("Expected: A0 held (a raw write does notify), B0 BROKEN (a mapped write")
-    say("need not), A1/B1/A2/B2 held once the inputs are unwritable.")
+    say("need not — that is why prevention exists), and everything in groups 2")
+    say("and 3 held once the covered inputs are unwritable.")
 
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)

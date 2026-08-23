@@ -3,7 +3,7 @@
 **Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION; THE PROBE HAS A CALLER; MULTI-CREDENTIAL ROTATION
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
-**Last update:** 2026-08-23 (F-34 closed; F-14 repaired three times and still open; the stale lines below are F-19..F-32, still open)
+**Last update:** 2026-08-23 (F-34 closed; F-14 repaired four times and still open; the stale lines below are F-19..F-32, still open)
 
 ## Kernel hardening (post-Phase -1)
 
@@ -512,11 +512,32 @@ directory operations no cache can defer. If any covered input cannot be
 locked — another process already holds it open for writing — nothing runs
 at all: `UNPROTECTED`, exit 6.
 
-**F-14 is still NOT closed.** Repaired three times now, tested (65 tests,
-3 subtests) and mutation-checked (sixteen mutants, none survived), it
-awaits a THIRD independent review. Two reviews have each found something
-this unit's own tests and mutants did not. It closes when a review
-returns without findings.
+**Third independent review (2026-08-23): repair accepted, closure on
+hold.** Four adversarial questions, all answered by running something.
+(A) A writable section keeps the file object alive with its original
+access, so a view with no handle behind it still refuses the lock —
+verified in four shapes, `ERROR_SHARING_VIOLATION` every time, capture
+runs nothing. (B) The protected handle and the identified object were
+never tied together: every handle now records `FILE_ID_INFO` (volume
+serial plus 128-bit file id), is verified to still resolve to its own
+path, and the map goes into the bundle as `input-identities.json`;
+reparse points are refused outright and a hard link to a covered input is
+refused as a property of the share mode rather than by a check. (C) The
+acquisition window was uncovered: the identity that matters is now taken
+AFTER the inputs are unwritable and must equal the pre-check one, else
+`PREPARATION_DRIFT`, exit 7, and nothing runs. (D) The guarantee is no
+longer extrapolated: drive type and filesystem are probed against a
+whitelist (`fixed` + NTFS/ReFS), a UNC path is refused as a redirector,
+and the answer is recorded in the bundle.
+
+Measured: 733 covered inputs locked, identified and path-verified in
+0.45 s. **Demonstrated on Windows, local volume, `fixed`, NTFS.**
+
+**F-14 is still NOT closed.** Repaired four times now, tested (84 tests,
+7 subtests) and mutation-checked (twenty mutants, none survived), it
+awaits a FOURTH independent review. Three reviews have each found
+something this unit's own tests and mutants did not. It closes when a
+review returns without findings.
 
 **Overlap recorded, not claimed:** F-15 (the unused primitive) is what
 this script now uses; F-16 (capture order) no longer affects the binding

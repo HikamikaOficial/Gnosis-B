@@ -22,6 +22,7 @@ import time
 import unittest
 from pathlib import Path
 
+from gnosis.kernel.canonical import hash_canonical
 from gnosis.kernel.evidence_capture import (
     EXIT_BOUNDARY_UNAVAILABLE,
     EXIT_CHECKS_FAILED,
@@ -29,6 +30,7 @@ from gnosis.kernel.evidence_capture import (
     EXIT_INPUTS_MUTATED,
     EXIT_INPUTS_UNPROTECTED,
     EXIT_OK,
+    EXIT_PREPARATION_DRIFT,
     EXIT_TREE_MUTATED,
     BindingVerdict,
     Boundary,
@@ -52,7 +54,11 @@ from gnosis.kernel.git_evidence import content_fingerprint
 from gnosis.kernel.input_lock import (
     LockOutcome,
     UnavailableLock,
+    VolumeCapabilities,
+    WindowsInputLock,
+    classify_volume,
     create_input_lock,
+    probe_volume,
 )
 from gnosis.kernel.write_observer import (
     Observation,
@@ -348,7 +354,11 @@ class TestACaptureBindsTheTreeItChecked(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = _make_repo(root)
+            # Three answers, not two: the identity is taken before the
+            # lock, again once the inputs are unwritable, and again after
+            # the checks. Only the last one is the unavailable case here.
             answers = [probe_tree_identity(repo),
+                       probe_tree_identity(repo),
                        TreeIdentity(False, None, {"is_repo": True,
                                                   "probe_failed": "git timed out"},
                                     "git probe failed: git timed out")]
@@ -1125,6 +1135,374 @@ class TestTheInputsCannotBeWritten(unittest.TestCase):
         self.assertIs(boundary.verdict, ObservationVerdict.UNPROTECTED)
         self.assertIn("a.txt (error 32)", boundary.violations)
         self.assertFalse(boundary.protection["enforced"])
+
+
+MEDDLER = REPO / "scripts" / "probe_f14_meddler.py"
+
+
+class _Meddler:
+    """The other process, driven over pipes. No sleeps anywhere."""
+
+    def __init__(self, mode: str, target: Path) -> None:
+        self.process = subprocess.Popen(
+            [sys.executable, str(MEDDLER), mode, str(target)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+        self._expect("READY")
+
+    def _read(self) -> str:
+        return self.process.stdout.readline().strip()
+
+    def _expect(self, prefix: str) -> str:
+        line = self._read()
+        if not line.startswith(prefix):
+            raise RuntimeError(f"expected {prefix}, got {line!r}")
+        return line
+
+    def send(self, command: str) -> str:
+        self.process.stdin.write(command + "\n")
+        self.process.stdin.flush()
+        return self._read()
+
+    def close(self) -> None:
+        try:
+            self.send("CLOSE")
+        finally:
+            self.process.stdin.close()
+            self.process.wait(timeout=30)
+
+
+class _PausingLock:
+    """Takes the locks in two halves so a test can act inside the window.
+
+    Acquiring several hundred handles is not instantaneous, and the third
+    review asked what happens to a covered input that is modified while
+    its turn has not come yet.
+    """
+
+    def __init__(self, root: Path, during) -> None:
+        self._inner = create_input_lock(root)
+        self._during = during
+
+    def acquire(self, paths):
+        ordered = sorted(paths)
+        first = self._inner.acquire(ordered[:1])
+        self._during()
+        second = self._inner.acquire(ordered[1:])
+        identities = dict(first.identities)
+        identities.update(second.identities)
+        return LockOutcome(
+            first.enforced and second.enforced, second.locked,
+            first.refused + second.refused, first.mechanism,
+            first.reason or second.reason, identities, first.volume)
+
+    def release(self) -> None:
+        self._inner.release()
+
+
+def _repo_with_two_files(root: Path) -> Path:
+    repo = _make_repo(root)
+    (repo / "b.txt").write_text("second-covered-file\n", encoding="utf-8")
+    _git(repo, "add", "b.txt")
+    _git(repo, "commit", "-m", "second")
+    return repo
+
+
+class TestALiveWritableSectionRefusesTheBoundary(unittest.TestCase):
+    """Third review, reproduction A.
+
+    A writable section keeps the underlying file object alive with the
+    access it was created through, so the share-mode check still sees a
+    writer even when every ordinary handle is gone. If that were not so,
+    a view could sit on a covered input with nothing left to conflict
+    with, and the lock would report ENFORCED over a file somebody can
+    still change.
+    """
+
+    def _assert_refused(self, mode: str):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            meddler = _Meddler(mode, repo / "a.txt")
+            try:
+                opened = meddler.send("OPEN")
+                self.assertTrue(opened.startswith("OPENED"), opened)
+                capture = run_capture(
+                    repo,
+                    [_script("open('ran.txt', 'w', encoding='utf-8').write('x')")],
+                    root / "staging")
+            finally:
+                meddler.close()
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.UNPROTECTED)
+            self.assertEqual(capture.exit_code, EXIT_INPUTS_UNPROTECTED)
+            self.assertEqual(capture.checks, ())
+            self.assertFalse((repo / "ran.txt").exists())
+            self.assertFalse(capture.evidence_valid)
+            self.assertTrue(any("a.txt" in item for item in capture.boundary.violations))
+
+    @WINDOWS_ONLY
+    def test_a_writable_view_with_the_file_handle_closed_refuses_the_lock(self):
+        self._assert_refused("section")
+
+    @WINDOWS_ONLY
+    def test_a_writable_view_with_the_mapping_handle_closed_too_refuses_the_lock(self):
+        # Only the view is left. Nothing a directory listing or a handle
+        # enumeration would show, and still a writer.
+        self._assert_refused("section-orphan")
+
+    @WINDOWS_ONLY
+    def test_a_duplicated_file_handle_kept_alive_refuses_the_lock(self):
+        self._assert_refused("section-dup")
+
+
+class TestTheProtectedObjectIsTheIdentifiedObject(unittest.TestCase):
+    """Third review, B: the handle and the fingerprint must be one object."""
+
+    @WINDOWS_ONLY
+    def test_every_protected_handle_is_recorded_by_file_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_two_files(root)
+            lock = create_input_lock(repo)
+            try:
+                outcome = lock.acquire(sorted(covered_paths(repo)))
+                self.assertTrue(outcome.enforced)
+                self.assertEqual(set(outcome.identities), {"a.txt", "b.txt"})
+                for path, identity in outcome.identities.items():
+                    with self.subTest(path=path):
+                        self.assertRegex(identity, r"\A[0-9a-f]{16}:[0-9a-f]{32}\Z")
+                self.assertNotEqual(outcome.identities["a.txt"],
+                                    outcome.identities["b.txt"])
+                self.assertRegex(outcome.identity_digest, r"\A[0-9a-f]{64}\Z")
+            finally:
+                lock.release()
+
+    @WINDOWS_ONLY
+    def test_the_identities_are_written_into_the_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            capture = run_capture(repo, [_script("pass")], root / "staging")
+
+            written = json.loads(
+                (capture.bundle / "input-identities.json").read_text(encoding="utf-8"))
+            self.assertIn("a.txt", written)
+            self.assertEqual(capture.boundary.protection["identified_objects"], 1)
+            self.assertEqual(capture.boundary.protection["identity_digest"],
+                             hash_canonical(sorted(written.items())))
+
+    @WINDOWS_ONLY
+    def test_a_hardlink_to_a_covered_input_cannot_be_written_either(self):
+        # The share mode belongs to the FILE, not to the name it was
+        # opened by, so a second name for the same object is refused too.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            link = root / "outside-link.txt"
+            try:
+                os.link(repo / "a.txt", link)
+            except OSError as exc:  # pragma: no cover - filesystem dependent
+                self.skipTest(f"hard links are not available here: {exc}")
+
+            lock = create_input_lock(repo)
+            try:
+                self.assertTrue(lock.acquire(sorted(covered_paths(repo))).enforced)
+                with self.assertRaises(PermissionError):
+                    link.write_text("through the other name\n", encoding="utf-8")
+            finally:
+                lock.release()
+
+    @WINDOWS_ONLY
+    def test_a_reparse_point_among_the_covered_inputs_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            link = repo / "link.txt"
+            try:
+                link.symlink_to(repo / "a.txt")
+            except OSError as exc:  # pragma: no cover - needs privilege
+                self.skipTest(f"symlinks are not available here: {exc}")
+
+            lock = create_input_lock(repo)
+            try:
+                outcome = lock.acquire(["a.txt", "link.txt"])
+            finally:
+                lock.release()
+
+            self.assertFalse(outcome.enforced)
+            self.assertTrue(any("reparse" in item for item in outcome.refused))
+
+    @WINDOWS_ONLY
+    def test_a_covered_input_deleted_before_its_turn_is_caught(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_two_files(root)
+
+            def during() -> None:
+                (repo / "b.txt").unlink()
+
+            capture = run_capture(
+                repo, [_script("pass")], root / "staging",
+                input_lock=lambda _: _PausingLock(repo, during))
+
+            self.assertFalse(capture.evidence_valid)
+            self.assertEqual(capture.checks, ())
+
+
+class TestARaceWhileTheBoundaryIsBuilt(unittest.TestCase):
+    """Third review, C: the acquisition window is not instantaneous."""
+
+    @WINDOWS_ONLY
+    def test_an_input_modified_before_its_turn_and_left_that_way_is_caught(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_two_files(root)
+
+            def during() -> None:
+                (repo / "b.txt").write_text("changed inside the window\n",
+                                            encoding="utf-8")
+
+            capture = run_capture(
+                repo, [_script("open('ran.txt', 'w', encoding='utf-8').write('x')")],
+                root / "staging", input_lock=lambda _: _PausingLock(repo, during))
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.PREPARATION_DRIFT)
+            self.assertEqual(capture.checks, (), "nothing may run on a tree that moved")
+            self.assertFalse((repo / "ran.txt").exists())
+            self.assertFalse(capture.evidence_valid)
+            self.assertIn("patch_sha256", capture.boundary.violations)
+            # The change is still there at the end, so the endpoints
+            # disagree as well and the more severe of the two is what the
+            # exit code reports. Both facts are in the bundle.
+            self.assertEqual(capture.exit_code, EXIT_TREE_MUTATED)
+            self.assertIs(capture.binding.verdict, BindingVerdict.TREE_MUTATED)
+
+    def test_preparation_drift_alone_has_its_own_exit_code(self):
+        # The same defect with the endpoints agreeing: the tree moved
+        # between the fingerprint and the lock and moved back before the
+        # end. Only the post-lock identity ever saw it.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            settled = probe_tree_identity(repo)
+            drifted = TreeIdentity(True, "a-different-digest", dict(settled.fingerprint))
+            answers = [settled, drifted, settled]
+
+            capture = run_capture(
+                repo, [_script("open('ran.txt', 'w', encoding='utf-8').write('x')")],
+                root / "staging", identity=lambda _: answers.pop(0))
+
+            self.assertIs(capture.binding.verdict, BindingVerdict.BOUND)
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.PREPARATION_DRIFT)
+            self.assertEqual(capture.exit_code, EXIT_PREPARATION_DRIFT)
+            self.assertEqual(capture.checks, ())
+            self.assertFalse((repo / "ran.txt").exists())
+            self.assertFalse(capture.evidence_valid)
+
+    @WINDOWS_ONLY
+    def test_an_input_modified_and_restored_before_its_turn_is_still_not_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_two_files(root)
+            original = (repo / "b.txt").read_bytes()
+
+            def during() -> None:
+                (repo / "b.txt").write_bytes(b"transient\n")
+                (repo / "b.txt").write_bytes(original)
+
+            capture = run_capture(
+                repo, [_script("pass")], root / "staging",
+                input_lock=lambda _: _PausingLock(repo, during))
+
+            # The post-lock identity matches, so the bytes that would be
+            # checked are the bytes named — but the interval was not quiet
+            # and the observer says so.
+            self.assertFalse(capture.evidence_valid)
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.INPUTS_MUTATED)
+            self.assertTrue(any("b.txt" in item for item in capture.boundary.violations))
+
+    @WINDOWS_ONLY
+    def test_a_quiet_preparation_records_the_identity_of_what_will_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_two_files(root)
+
+            capture = run_capture(repo, [_script("pass")], root / "staging",
+                                  input_lock=lambda _: _PausingLock(repo, lambda: None))
+
+            locked = capture.boundary.locked_identity
+            self.assertTrue(locked["available"])
+            self.assertEqual(locked["digest"], capture.binding.pre.digest)
+            self.assertTrue(capture.evidence_valid)
+
+
+class TestTheVolumeMustDemonstrateWhatIsClaimed(unittest.TestCase):
+    """Third review, D: do not extrapolate from one local NTFS volume."""
+
+    @WINDOWS_ONLY
+    def test_this_repository_sits_on_a_volume_the_boundary_is_demonstrated_on(self):
+        capabilities = probe_volume(REPO)
+        self.assertTrue(capabilities.supported, capabilities.reason)
+        self.assertEqual(capabilities.drive_type, "fixed")
+        self.assertIn(capabilities.filesystem, {"NTFS", "ReFS"})
+
+    @WINDOWS_ONLY
+    def test_a_network_volume_is_refused_rather_than_assumed(self):
+        capabilities = classify_volume("remote", "NTFS")
+        self.assertFalse(capabilities.supported)
+        self.assertIn("remote", capabilities.reason or "")
+
+    @WINDOWS_ONLY
+    def test_a_filesystem_that_cannot_answer_file_id_is_refused(self):
+        for filesystem in ("FAT32", "exFAT", "unknown"):
+            with self.subTest(filesystem=filesystem):
+                capabilities = classify_volume("fixed", filesystem)
+                self.assertFalse(capabilities.supported)
+                self.assertIn("FILE_ID_INFO", capabilities.reason or "")
+
+    @WINDOWS_ONLY
+    def test_a_local_ntfs_volume_is_accepted(self):
+        self.assertTrue(classify_volume("fixed", "NTFS").supported)
+
+    @WINDOWS_ONLY
+    def test_the_bundle_records_the_volume_it_was_demonstrated_on(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            capture = run_capture(repo, [_script("pass")], root / "staging")
+
+            volume = capture.boundary.protection["volume"]
+            self.assertTrue(volume["supported"])
+            self.assertEqual(volume["drive_type"], "fixed")
+            self.assertIn(volume["filesystem"], {"NTFS", "ReFS"})
+
+    @WINDOWS_ONLY
+    def test_a_volume_the_boundary_is_not_demonstrated_on_locks_nothing(self):
+        # Injected, because this machine has no share to mount. The point
+        # is that the refusal happens BEFORE a single handle is taken.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            unsupported = VolumeCapabilities(
+                False, "remote", "NTFS", "a network redirector cannot demonstrate it")
+            lock = WindowsInputLock(repo, volume_probe=lambda _: unsupported)
+            try:
+                outcome = lock.acquire(sorted(covered_paths(repo)))
+            finally:
+                lock.release()
+
+            self.assertFalse(outcome.enforced)
+            self.assertEqual(outcome.locked, 0)
+            self.assertEqual(outcome.identities, {})
+            self.assertIn("network redirector", outcome.reason or "")
+            # And the file is still writable, because nothing was locked.
+            (repo / "a.txt").write_text("still writable" + chr(10), encoding="utf-8")
+
+    def test_an_unavailable_lock_records_an_unsupported_volume(self):
+        outcome = UnavailableLock("no lock on this platform").acquire(["a.txt"])
+        self.assertFalse(outcome.enforced)
+        self.assertIsNotNone(outcome.volume)
+        self.assertFalse(outcome.volume.supported)
 
 
 if __name__ == "__main__":

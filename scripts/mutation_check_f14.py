@@ -21,6 +21,11 @@ view need not generate any notification at all, so the covered inputs are
 made unwritable instead of merely watched. These three take the
 prevention away again.
 
+MF17..MF20 are the third review's: which object is protected, whether it
+is still the path it was opened by, when the identity was taken relative
+to the locking window, and whether the volume demonstrably provides the
+semantics all of this rests on.
+
     PYTHONUTF8=1 .venv/Scripts/python.exe scripts/mutation_check_f14.py
 
 Writes the transcript to stdout and, with `--out <path>`, to a file an
@@ -45,6 +50,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 CAPTURE = "src/gnosis/kernel/evidence_capture.py"
+LOCK = "src/gnosis/kernel/input_lock.py"
 SCRIPT = "scripts/capture_evidence.py"
 
 # Narrower than `tests/` on purpose: these are the tests that assert the
@@ -221,6 +227,46 @@ MUTANTS: list[Mutant] = [
         [(CAPTURE,
           "                if lock_outcome.enforced:",
           "                if True:")],
+    ),
+    # MF17..MF20 are the THIRD independent review's questions: which
+    # object is protected, when it was identified, and on what volume the
+    # guarantee has actually been demonstrated.
+    Mutant(
+        "MF17", "a reparse point among the covered inputs is locked like "
+                "any other file, so the lock and the check can follow "
+                "different redirections",
+        [(LOCK,
+          """                if (attributes != _INVALID_FILE_ATTRIBUTES
+                        and attributes & _FILE_ATTRIBUTE_REPARSE_POINT):""",
+          "                if False:")],
+    ),
+    Mutant(
+        "MF18", "the protected handles are never identified, so nothing "
+                "says which object was locked",
+        [(LOCK,
+          """                problem = self._identify(relative, target, handle, identities)
+                if problem is not None:
+                    refused.append(problem)""",
+          '                identities[relative] = ""')],
+    ),
+    Mutant(
+        "MF19", "any volume is assumed to provide the semantics the "
+                "boundary needs",
+        [(LOCK,
+          """            volume = probe(self.root)
+            if not volume.supported:""",
+          """            volume = probe(self.root)
+            if False:""")],
+    ),
+    Mutant(
+        "MF20", "the identity is not re-taken once the inputs are "
+                "unwritable, so it describes a tree from before the "
+                "locking window",
+        [(CAPTURE,
+          """                    prepared = identity(repo)
+                    drift = _preparation_drift(pre, prepared)""",
+          """                    prepared = pre
+                    drift = ()""")],
     ),
 ]
 
