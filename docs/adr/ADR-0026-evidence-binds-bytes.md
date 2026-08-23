@@ -1012,6 +1012,39 @@ test. Four added:
 `_SUPPORTED_FILESYSTEMS = frozenset({"NTFS", "ReFS"})` — and the suite
 goes red. Twenty-one mutants now, none survived.
 
+### Evidence
+
+`.gnosis/evidence/20260823T043619Z/` — **961 passed, 67 subtests**, mypy
+strict clean over 58 source files, ruff at 19 findings against a baseline
+of 19. Clean tree at `ed83ed7`.
+
+```json
+"tree_identity": { "binding": "BOUND", "identical": true,
+                   "pre": {"digest": "1484f782…d7ebca"} },
+"boundary": {
+  "verdict": "CLEAN", "observed_events": 64, "violations": [],
+  "covered_files": 747,
+  "locked_identity": { "digest": "1484f782…d7ebca" },
+  "protection": { "enforced": true, "locked_inputs": 747,
+                  "identified_objects": 747,
+                  "volume": { "supported": true, "drive_type": "fixed",
+                              "filesystem": "NTFS" } } }
+```
+
+`volume.filesystem` is `NTFS`, which is now the whole of the accepted
+domain rather than half of it. `locked_identity` equals the pre-check
+digest, so the identity the bundle cites was taken with the inputs
+already unwritable.
+
+Two artifacts beyond the gate transcripts, added after the capture
+returned; `SUMMARY.json` and `input-identities.json` are as the capture
+wrote them:
+
+- `mutation-check.f14-round5.txt` — twenty-one mutants, none survived.
+- `probe-f14-boundary.txt` — the nine break attempts re-run against this
+  commit, unchanged in outcome: only B0, the reconstructed
+  observation-only design, breaks.
+
 ### Unchanged
 
 Nothing else in this unit was touched. The guarantees accepted by the
