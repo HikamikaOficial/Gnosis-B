@@ -858,6 +858,49 @@ embarrassment: B0 is the observation-only design reconstructed with a
 lock that claims enforcement and locks nothing, so the transcript carries
 the defect and its closure side by side, in one file, re-runnable.
 
+### Evidence
+
+`.gnosis/evidence/20260823T025127Z/` — **958 passed, 67 subtests**, mypy
+strict clean over 58 source files, ruff at 19 findings against a baseline
+of 19. Clean tree at `f0f892a`. The bundle states four things about
+itself now:
+
+```json
+"tree_identity": { "binding": "BOUND", "identical": true,
+                   "pre":  {"digest": "21acee64…3a391f"},
+                   "post": {"digest": "21acee64…3a391f"} },
+"boundary": {
+  "verdict": "CLEAN", "observed_events": 65, "violations": [],
+  "covered_files": 733,
+  "locked_identity": { "available": true, "digest": "21acee64…3a391f" },
+  "protection": {
+    "enforced": true, "locked_inputs": 733, "identified_objects": 733,
+    "identity_digest": "a93d481b…23308f",
+    "mechanism": "CreateFileW(GENERIC_READ, FILE_SHARE_READ)",
+    "volume": { "supported": true, "drive_type": "fixed",
+                "filesystem": "NTFS" } } }
+```
+
+`locked_identity.digest` equals the pre-check digest, which is the point
+of it: the identity the bundle cites was taken once the inputs were
+already unwritable, so it describes the bytes the thirteen-minute suite
+actually read rather than the bytes the tree held before the locks went
+on. All 733 covered inputs were locked, identified by file id and
+path-verified; none was refused; no observed event touched a covered
+path.
+
+Three artifacts beyond the gate transcripts, all written after the
+capture returned except the first, which the capture writes itself:
+
+- `input-identities.json` — 733 entries, one per protected object, each
+  `volume-serial:file-id`. `SUMMARY.json` carries their digest so the map
+  can be checked without being read.
+- `mutation-check.f14-round4.txt` — twenty mutants, none survived.
+- `probe-f14-boundary.txt` — the nine break attempts run against this
+  commit. It ends with `BROKEN: B0`, and that is deliberate: B0 is the
+  observation-only design reconstructed, so the transcript carries the
+  defect and its closure in one file.
+
 ### What is still not closed
 
 - **F-14 remains OPEN.** Three reviews, three findings this unit's own

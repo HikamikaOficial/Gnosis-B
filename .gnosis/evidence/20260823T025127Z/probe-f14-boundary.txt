@@ -1,0 +1,153 @@
+F-14 — trying to break the boundary, across three reviews
+==============================================================================
+tree:   f0f892aadf93ae2837f2d790b80e272d7def63e8
+python: 3.12.14
+
+GROUP 1 — OBSERVATION ONLY (prevention disabled: the second
+          review's world, where watching is the whole boundary)
+
+### A0 — the check writes, reads and restores with an ordinary handle
+  what the CHECK reported           : TAMPERED 1342627806dad29a44c76e4de9a41ff8b92a9c1224c62e9a7f58bdb35c289d4d
+  -> a check consumed mutated bytes : True
+  bytes unchanged at the end        : True
+  PRE == POST                       : True
+  notification for a.txt received   : True
+  boundary                          : INPUTS_MUTATED
+  violations                        : ['modified: a.txt']
+  protection.enforced               : True
+  checks that ran                   : 1
+  evidence_valid                    : False
+  exit_code                         : 4
+  VERDICT                           : HELD
+
+### B0 — the same through a writable memory-mapped view
+  what the CHECK reported           : TAMPERED 1342627806dad29a44c76e4de9a41ff8b92a9c1224c62e9a7f58bdb35c289d4d
+  -> a check consumed mutated bytes : True
+  bytes unchanged at the end        : True
+  PRE == POST                       : True
+  notification for a.txt received   : False
+  boundary                          : CLEAN
+  violations                        : []
+  protection.enforced               : True
+  checks that ran                   : 1
+  evidence_valid                    : True
+  exit_code                         : 0
+  VERDICT                           : BROKEN - mutated bytes consumed inside a valid bundle
+
+GROUP 2 — PREVENTION, with the attacker already holding something
+
+### A1 — a raw write handle, taken before the capture
+  the other process reports         : OPENED
+  the check's side effect happened   : False
+  what the CHECK reported           : (no check ran)
+  -> a check consumed mutated bytes : False
+  bytes unchanged at the end        : True
+  PRE == POST                       : True
+  notification for a.txt received   : True
+  boundary                          : UNPROTECTED
+  violations                        : ['a.txt (error 32)']
+  protection.enforced               : False
+  checks that ran                   : 0
+  evidence_valid                    : False
+  exit_code                         : 6
+  VERDICT                           : HELD
+
+### B1 — a writable mapping, taken before the capture
+  the other process reports         : OPENED
+  the check's side effect happened   : False
+  what the CHECK reported           : (no check ran)
+  -> a check consumed mutated bytes : False
+  bytes unchanged at the end        : True
+  PRE == POST                       : True
+  notification for a.txt received   : True
+  boundary                          : UNPROTECTED
+  violations                        : ['a.txt (error 32)']
+  protection.enforced               : False
+  checks that ran                   : 0
+  evidence_valid                    : False
+  exit_code                         : 6
+  VERDICT                           : HELD
+
+### A3 — a writable SECTION with the file handle closed
+  the other process reports         : OPENED
+  the check's side effect happened   : False
+  what the CHECK reported           : (no check ran)
+  -> a check consumed mutated bytes : False
+  bytes unchanged at the end        : True
+  PRE == POST                       : True
+  notification for a.txt received   : True
+  boundary                          : UNPROTECTED
+  violations                        : ['a.txt (error 32)']
+  protection.enforced               : False
+  checks that ran                   : 0
+  evidence_valid                    : False
+  exit_code                         : 6
+  VERDICT                           : HELD
+
+### A4 — the same with the mapping handle closed too
+  the other process reports         : OPENED
+  the check's side effect happened   : False
+  what the CHECK reported           : (no check ran)
+  -> a check consumed mutated bytes : False
+  bytes unchanged at the end        : True
+  PRE == POST                       : True
+  notification for a.txt received   : True
+  boundary                          : UNPROTECTED
+  violations                        : ['a.txt (error 32)']
+  protection.enforced               : False
+  checks that ran                   : 0
+  evidence_valid                    : False
+  exit_code                         : 6
+  VERDICT                           : HELD
+
+### A5 — the same with a duplicated handle kept alive
+  the other process reports         : OPENED
+  the check's side effect happened   : False
+  what the CHECK reported           : (no check ran)
+  -> a check consumed mutated bytes : False
+  bytes unchanged at the end        : True
+  PRE == POST                       : True
+  notification for a.txt received   : True
+  boundary                          : UNPROTECTED
+  violations                        : ['a.txt (error 32)']
+  protection.enforced               : False
+  checks that ran                   : 0
+  evidence_valid                    : False
+  exit_code                         : 6
+  VERDICT                           : HELD
+
+GROUP 3 — PREVENTION, with the check itself as the attacker
+
+### A2 — the check opens a covered input for writing
+  what the CHECK reported           : REFUSED PermissionError
+  -> a check consumed mutated bytes : False
+  bytes unchanged at the end        : True
+  PRE == POST                       : True
+  notification for a.txt received   : False
+  boundary                          : CLEAN
+  violations                        : []
+  protection.enforced               : True
+  checks that ran                   : 1
+  evidence_valid                    : True
+  exit_code                         : 0
+  VERDICT                           : HELD
+
+### B2 — the check maps a covered input writable
+  what the CHECK reported           : REFUSED PermissionError
+  -> a check consumed mutated bytes : False
+  bytes unchanged at the end        : True
+  PRE == POST                       : True
+  notification for a.txt received   : False
+  boundary                          : CLEAN
+  violations                        : []
+  protection.enforced               : True
+  checks that ran                   : 1
+  evidence_valid                    : True
+  exit_code                         : 0
+  VERDICT                           : HELD
+
+==============================================================================
+BROKEN: B0
+Expected: A0 held (a raw write does notify), B0 BROKEN (a mapped write
+need not — that is why prevention exists), and everything in groups 2
+and 3 held once the covered inputs are unwritable.
