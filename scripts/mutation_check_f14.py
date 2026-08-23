@@ -16,6 +16,11 @@ fingerprints prove two instants, not the interval between them. Each of
 those four restores a version in which a check can change a file, read
 the change and put the original bytes back without the capture noticing.
 
+MF14..MF16 are the second review's: a write made through a memory-mapped
+view need not generate any notification at all, so the covered inputs are
+made unwritable instead of merely watched. These three take the
+prevention away again.
+
     PYTHONUTF8=1 .venv/Scripts/python.exe scripts/mutation_check_f14.py
 
 Writes the transcript to stdout and, with `--out <path>`, to a file an
@@ -94,21 +99,15 @@ MUTANTS: list[Mutant] = [
         return TreeBinding(pre, post, BindingVerdict.IDENTITY_UNAVAILABLE)""")],
     ),
     Mutant(
-        "MF4", "the post fingerprint is taken BEFORE the checks, so the "
-               "capture describes a tree nothing ran against",
+        "MF4", "the post fingerprint is never taken, so the capture has "
+               "only one end to compare",
         [(CAPTURE,
-          """        if pre.available:
-            covered = covered_paths(repo)
-            env = check_environment(scratch)
-            for command in commands:
-                results.append(_run_check(repo, command, staging, lint_baseline, env))
+          """            finally:
+                lock.release()
             post = identity(repo)""",
-          """        if pre.available:
-            covered = covered_paths(repo)
-            env = check_environment(scratch)
-            post = identity(repo)
-            for command in commands:
-                results.append(_run_check(repo, command, staging, lint_baseline, env))""")],
+          """            finally:
+                lock.release()
+            pass""")],
     ),
     Mutant(
         "MF5", "the bundle is staged inside the repository again, so the "
@@ -196,6 +195,33 @@ MUTANTS: list[Mutant] = [
             violations.append(f"{action}: {path}")""",
           "    allowed_count += len(unknown)")],
     ),
+    # MF14..MF16 are the SECOND independent review's finding: a write made
+    # through a memory-mapped view need not notify anything, so watching
+    # cannot be the whole boundary. Each of these removes the prevention
+    # that closes it and leaves only the watching.
+    Mutant(
+        "MF14", "the covered inputs are never made unwritable; only the "
+                "write stream is left, which a mapped write can evade",
+        [(CAPTURE,
+          """            lock = input_lock(repo)
+            lock_outcome = lock.acquire(sorted(covered))""",
+          """            lock = input_lock(repo)
+            lock_outcome = LockOutcome(True, 0, (), "none")""")],
+    ),
+    Mutant(
+        "MF15", "a lock that could not be enforced is recorded as if it "
+                "had been",
+        [(CAPTURE,
+          "    if lock is not None and not lock.enforced:",
+          "    if False:")],
+    ),
+    Mutant(
+        "MF16", "the checks run even when the inputs could not be "
+                "protected",
+        [(CAPTURE,
+          "                if lock_outcome.enforced:",
+          "                if True:")],
+    ),
 ]
 
 
@@ -219,7 +245,7 @@ def main() -> int:
         print(text, flush=True)
         lines.append(text)
 
-    say("MUTATION CHECK — F-14, evidence binds bytes over an observed interval")
+    say("MUTATION CHECK — F-14, evidence binds bytes over a protected, observed interval")
     say("=" * 72)
     say(f"targeted suite: {' '.join(SUITE)}")
     say()

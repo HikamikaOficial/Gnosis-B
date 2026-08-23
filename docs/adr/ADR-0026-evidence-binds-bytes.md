@@ -6,18 +6,24 @@
 - Independent review, round 1 (Codex, 2026-08-23): **FAIL CRÍTICO** — the
   two fingerprints proved the endpoints and not the interval between
   them, so a check that changed a file, read the change and restored the
-  original bytes produced `evidence_valid: true`. Repaired in the
-  addendum below. **A second independent review is OUTSTANDING**; F-14
-  stays OPEN in `docs/V1_COMPLIANCE_MATRIX.md` until one returns without
-  findings. The rule ADR-0025 had to learn three times applies to a
-  repair that looks clean on its first pass exactly as much as to one
-  that does not — and this one did.
-- Tests: `tests/test_evidence_binding.py` — **56 tests, 3 subtests**
-  (36 in the first delivery, 20 added by the addendum).
-- Mutation check: `scripts/mutation_check_f14.py` — **thirteen mutants,
-  none survived** (nine from the first delivery, four added by the
-  addendum), declared as data so a reviewer re-runs the claim rather
-  than reading it.
+  original bytes produced `evidence_valid: true`. Repaired in addendum 1.
+- Independent review, round 2 (2026-08-23): **FAIL CRÍTICO PROVISIONAL** —
+  the barrier proves that generated notifications were delivered, not
+  that every modification generated one. Reproduced: a write through a
+  memory-mapped view notifies nothing, so a check consumed mutated bytes
+  inside a bundle that certified itself. Repaired in addendum 2 by making
+  the covered inputs unwritable instead of merely watched.
+- **A third independent review is OUTSTANDING**; F-14 stays OPEN in
+  `docs/V1_COMPLIANCE_MATRIX.md` until one returns without findings. Two
+  reviews have now found something this unit's own tests and mutants did
+  not.
+- Tests: `tests/test_evidence_binding.py` — **65 tests, 3 subtests**
+  (36 in the first delivery, 20 added by addendum 1, 9 by addendum 2).
+- Mutation check: `scripts/mutation_check_f14.py` — **sixteen mutants,
+  none survived** (nine, then four, then three), declared as data so a
+  reviewer re-runs the claim rather than reading it.
+- Break attempts: `scripts/probe_f14_boundary.py` — six cases, committed
+  and re-runnable, containing the defect and its closure side by side.
 - Evidence: `.gnosis/evidence/20260822T212531Z/` — **910 passed, 62
   subtests**, mypy strict clean over 56 source files, ruff at **19
   findings against a baseline of 19** (0 added). Captured against a CLEAN
@@ -515,3 +521,157 @@ added to the published directory after the capture returned:
 - **Ignored files are still outside the covered set**, exactly as
   `content_fingerprint` defines it. The boundary does not widen the
   claim; it defends the claim that was already being made.
+
+## Second independent review addendum — 2026-08-23: **FAIL CRÍTICO PROVISIONAL**
+
+The write observer closed the ABA the first review demonstrated, and the
+review confirmed that. It then asked the right next question: the barrier
+proves that every notification Windows had already **generated** was
+delivered, and proves nothing about whether every modification generated
+one. `FILE_NOTIFY_CHANGE_SIZE` and `FILE_NOTIFY_CHANGE_LAST_WRITE` are
+documented as detected when a change reaches storage or the cache, last
+write may not settle until write handles close, and modifications through
+a memory-mapped section have weaker guarantees still.
+
+The instruction was to try to break the thing before changing it. So the
+two reproductions were built and run against the shipped implementation
+first. Both are committed as `scripts/probe_f14_boundary.py` (with
+`scripts/probe_f14_meddler.py` as the second process), every ordering is
+a handshake on a pipe, and there is not one sleep in the synchronisation.
+
+### The result: one held, one broke
+
+**A — an independent process holds a raw write handle open across the
+whole capture, never calls `FlushFileBuffers`, and closes only after
+`stop()`. HELD.** The check demonstrably read the mutated bytes, PRE and
+POST were identical, and the observer reported `modified: a.txt` anyway:
+`INPUTS_MUTATED`, exit 4. On this platform an ordinary buffered write
+does generate its notification when it reaches the cache, without waiting
+for the handle to close.
+
+**B — the same, through a writable memory-mapped view that is never
+flushed and stays alive across the barrier. BROKE IT.**
+
+```
+digest before                     : 02f2442a…
+digest after MODIFY (fresh read)  : ca6d8c6f…
+what the CHECK read               : ca6d8c6f…   <- mutated bytes consumed
+PRE == POST                       : True
+notification for a.txt received   : False       <- nothing to deliver
+boundary                          : CLEAN
+evidence_valid                    : True
+exit_code                         : 0
+```
+
+That is the whole finding in eight lines. The check ran against bytes the
+bundle does not name, and the bundle certified itself. No barrier could
+have helped: the barrier orders a stream that never contained the event.
+
+### The repair: stop watching for it, start refusing it
+
+Patching the specific case — a settle delay, a `FlushFileBuffers`, an
+exception for mapped files — would have been treating the symptom, and
+the review said so in advance. What is wrong is the category: **a
+mechanism that reports writes cannot be the whole boundary when a write
+can decline to be reported.**
+
+So the covered inputs stop being writable. For the duration of the checks
+`kernel/input_lock.py` holds every covered file open with `GENERIC_READ`
+and a share mode of `FILE_SHARE_READ` alone. Measured on this repository
+rather than assumed — **718 covered inputs locked in 6.17 s**:
+
+| another process… | result |
+|---|---|
+| reads the file | allowed |
+| opens it for writing | `ERROR_SHARING_VIOLATION` |
+| **maps it writable** | **`ERROR_SHARING_VIOLATION`** |
+| deletes it | `ERROR_SHARING_VIOLATION` |
+| renames it | `ERROR_SHARING_VIOLATION` |
+| changes its attributes | allowed — and notified |
+
+The mapping row is the one that matters. A writable section needs a
+handle with write access and there is no way to obtain one, so
+reproduction B is not detected late, it is refused early.
+
+**Prevention and observation are complementary by construction, and the
+split is not arbitrary.** Prevention covers what a notification can be
+withheld for: content written into a file that already exists. Observation
+covers what no cache can defer: creating, deleting and renaming a path,
+which are directory-entry operations, plus the attribute changes that
+remain legal. Neither half is sufficient and each covers exactly the
+other's blind spot.
+
+**If the boundary cannot be built, nothing runs.** A covered input that
+another process already holds open for writing cannot be locked, so the
+capture stops before the first check with `UNPROTECTED` and exit **6**.
+That is reproductions A1 and B1 in the probe: the attacker gets its handle
+first and wins nothing, because the suite never starts. Discovering that
+in six seconds is better than discovering it after nineteen minutes.
+
+### The probe, now committed and re-runnable
+
+`scripts/probe_f14_boundary.py` runs six cases and prints, for each, the
+five things the review asked to see separately: whether the mutation was
+observable BY THE CHECK, whether PRE == POST, whether a notification
+arrived, the boundary verdict, and `evidence_valid`.
+
+| case | boundary | result |
+|---|---|---|
+| A0 raw handle, observation only | `INPUTS_MUTATED`, exit 4 | held |
+| **B0 mapped write, observation only** | `CLEAN`, exit 0 | **BROKEN** |
+| A1 raw handle taken before the capture | `UNPROTECTED`, exit 6, 0 checks | held |
+| B1 mapping taken before the capture | `UNPROTECTED`, exit 6, 0 checks | held |
+| A2 the check opens an input for writing | refused, `CLEAN` | held |
+| B2 the check maps an input writable | refused, `CLEAN` | held |
+
+A0 and B0 use a lock that claims enforcement and locks nothing — the
+reviewed design, reconstructed — so the transcript contains the defect
+and its closure side by side rather than only the closure.
+
+### Tests: 65, of which the 56 are all still here
+
+Nine added. Of the 56, **six were given one extra argument** —
+`input_lock=_no_prevention` — and **not one assertion was changed**. Those
+six are the tests whose check writes a covered input; with prevention on,
+the write is refused and the observation half of the boundary would never
+be exercised. Disabling prevention in those six keeps the detector under
+test, which matters: it is the only half that covers a path which did not
+exist when the lock was taken, and the only half a platform without the
+share-mode mechanism could ever have. The prevention half has its own
+class, `TestTheInputsCannotBeWritten`, including both reproductions and a
+deliberate characterisation test asserting that a mapped write produces
+no notification — if Windows ever changes that, it goes red, and that is
+worth learning.
+
+### Mutation check: 16, none survived
+
+The thirteen are all still here. MF4's anchor text was rewritten because
+the code it names moved again and its mutation is now "the post
+fingerprint is never taken"; its subject is unchanged. Three added, each
+removing the new prevention:
+
+| Mutant | Result |
+|---|---|
+| MF14 the covered inputs are never made unwritable | **red** |
+| MF15 a lock that could not be enforced is recorded as if it had been | **red** |
+| MF16 the checks run even when the inputs could not be protected | **red** |
+
+MF14 is the review's finding put back: with it in place, B2 tampers
+successfully and the bundle certifies itself again.
+
+### What is still not closed
+
+- **F-14 remains OPEN**, pending a third independent review. Two reviews
+  have now found something in this unit that its own tests and mutants
+  did not.
+- **Attributes can still change** on a covered input. `chmod` cannot
+  grant write access while the share mode stands, and the observer
+  reports it, so it is visible and inert — but it is not prevented.
+- **Windows only.** Both halves of the boundary are Windows mechanisms.
+  Elsewhere the lock and the observer both report themselves unavailable
+  and the capture exits 6 or 5 rather than pretending; no valid evidence
+  can be produced on another platform, which is a real limitation and not
+  a fail-open.
+- **`.git/` is counted, not judged**, and is not lockable in this scheme.
+  A check that installs a hook is outside this boundary and inside F-17's.
+- **F-15..F-18 remain open and untouched.**

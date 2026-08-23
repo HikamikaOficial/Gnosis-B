@@ -1,8 +1,9 @@
 # GNOSIS — Matriz V1 viva
 
-**Última actualización:** 2026-08-23 · **Unidad:** ADR-0026 + primera
-revisión independiente (**FAIL CRÍTICO**, reparada) — **F-14 sigue
-ABIERTO**, entregado para una segunda revisión independiente.
+**Última actualización:** 2026-08-23 · **Unidad:** ADR-0026 + dos
+revisiones independientes (**FAIL CRÍTICO**, **FAIL CRÍTICO
+PROVISIONAL**, ambas reparadas) — **F-14 sigue ABIERTO**, entregado para
+una tercera revisión independiente.
 Unidad anterior: ADR-0025 + cuatro addenda (FAIL PARCIAL, FAIL PARCIAL,
 **FAIL CRÍTICO**, **PASS**) — F-34 **CERRADO** por la cuarta revisión,
 sin hallazgos sobre el código `9c6064c` y la evidencia `f02e18e`
@@ -120,7 +121,8 @@ lo que costó F-34.
 | Hallazgo | ADR | Fecha | Estado | Evidencia |
 |---|---|---|---|---|
 | **F-14** — la evidencia capturada no identifica de forma vinculante los bytes probados: `git status` es estado y nombre, nunca contenido | ADR-0026 | 2026-08-22 | reparado; **primera revisión independiente: FAIL CRÍTICO** | 36 pruebas, nueve mutantes; el vínculo probaba los extremos, no el intervalo |
-| **F-14 (primera revisión)** — dos huellas iguales no demuestran estabilidad: una comprobación que cambia un fichero, lee el cambio y restaura los bytes, el tamaño y las fechas devolvía `evidence_valid: true`. Cambio transitorio (ABA) | ADR-0026 addendum 1 | 2026-08-23 | **reparado, pendiente de segunda revisión** | observador de escrituras (`ReadDirectoryChangesW`) armado antes de la huella previa y cerrado tras una barrera de entrega; 56 pruebas y 3 subtests; trece mutantes, ninguno sobrevive |
+| **F-14 (primera revisión)** — dos huellas iguales no demuestran estabilidad: una comprobación que cambia un fichero, lee el cambio y restaura los bytes, el tamaño y las fechas devolvía `evidence_valid: true`. Cambio transitorio (ABA) | ADR-0026 addendum 1 | 2026-08-23 | reparado | observador de escrituras (`ReadDirectoryChangesW`) armado antes de la huella previa y cerrado tras una barrera de entrega |
+| **F-14 (segunda revisión)** — la barrera demuestra que se entregaron las notificaciones **generadas**, no que toda modificación generase una: una escritura por *memory mapping* no notifica nada, y una comprobación consumió bytes mutados dentro de un paquete que se certificó a sí mismo | ADR-0026 addendum 2 | 2026-08-23 | **reparado, pendiente de tercera revisión** | los inputs cubiertos dejan de ser escribibles durante las comprobaciones (`CreateFileW` con `FILE_SHARE_READ`): escritura, mapeo escribible, borrado y renombrado quedan rechazados por el sistema. 718 inputs bloqueados en 6,17 s. 65 pruebas y 3 subtests; dieciséis mutantes, ninguno sobrevive; sonda de rotura re-ejecutable (`scripts/probe_f14_boundary.py`) |
 
 Qué hace la reparación: `probe_tree_identity()` envuelve
 `content_fingerprint()` — HEAD, el parche contra él y el sha256 de cada
@@ -131,7 +133,7 @@ captura no es evidencia y lo dice, hayan pasado las pruebas o no. El
 bundle se construye fuera del repositorio y se publica después de la
 huella final, para que la evidencia no aparezca en su propia huella.
 
-Y, tras la primera revisión: **el intervalo tiene su propia autoridad.**
+Tras la primera revisión: **el intervalo tiene su propia autoridad.**
 Un observador de escrituras se arma antes de la huella previa y se cierra
 después de la posterior, detrás de una barrera de entrega que demuestra
 que la cola del flujo llegó. Un cambio que se deshace a sí mismo sigue
@@ -139,6 +141,17 @@ siendo un cambio (`INPUTS_MUTATED`, salida 4); un flujo que pudo perder
 algo — desbordamiento, barrera no observada, mecanismo ausente — no es
 «no pasó nada» (`UNOBSERVED`, salida 5). `evidence_valid` es ahora la
 conjunción: extremos iguales **y** intervalo observado limpio.
+
+Y tras la segunda: **observar no basta, porque una escritura puede
+negarse a ser observada.** Una modificación hecha a través de una vista
+mapeada en memoria no genera notificación alguna; reproducido, con una
+comprobación consumiendo los bytes mutados y el paquete declarándose
+válido. La reparación no tapa el caso: durante las comprobaciones los
+inputs cubiertos **dejan de ser escribibles**. El sistema rechaza
+escritura, mapeo escribible, borrado y renombrado; lo que no puede
+bloquearse por adelantado —rutas que aún no existen— sigue siendo trabajo
+del observador. Si algún input no puede protegerse, no se ejecuta nada
+(`UNPROTECTED`, salida 6).
 
 **Solapamiento observado con F-15…F-18, que NO se marcan reparados:**
 F-15 (la primitiva existía sin usarse) — este script ya la usa, que era
@@ -153,7 +166,10 @@ que trata F-17; F-18 (deriva de evidencia) — intacto. El addendum añade un so
 más, también sin reclamar: las escrituras bajo `.git/` se **cuentan** y no
 se juzgan, porque git reescribe su índice al leer el árbol; un gancho
 instalado durante la captura queda fuera de esta frontera y dentro de
-F-17, que sigue abierto.
+F-17, que sigue abierto. Tras el addendum 2 se añade un residuo más: los
+atributos de un input cubierto todavía pueden cambiarse (no concede
+escritura mientras el modo de compartición esté vigente, y el observador
+lo ve), y la frontera entera es un mecanismo de Windows.
 
 ## Hallazgos abiertos
 

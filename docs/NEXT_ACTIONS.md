@@ -88,10 +88,25 @@ when an ADR with captured evidence backs it.
   written during the run is `INPUTS_MUTATED` (exit 4) whatever the
   endpoints say; a stream that overflowed or could not be armed is
   `UNOBSERVED` (exit 5), never "nothing happened". Caches are redirected
-  out of the tree rather than forgiven inside it. 56 tests, 3 subtests;
-  thirteen mutants, none survived. **Next action: hand this unit to a
-  SECOND independent review.** It is not closed until one returns without
-  findings.
+  out of the tree rather than forgiven inside it.
+
+- **Second independent review (2026-08-23): FAIL CRITICO PROVISIONAL — a
+  write can decline to be observed.** The barrier proves the delivery of
+  notifications Windows generated, not that every modification generated
+  one. Reproduced against the shipped code before changing anything, and
+  committed as `scripts/probe_f14_boundary.py`: a raw write with an open
+  handle DOES notify (held), but a write through a memory-mapped view
+  notifies nothing, so a check consumed mutated bytes and the bundle
+  reported `CLEAN` / `evidence_valid: true` / exit 0. Repaired by
+  prevention rather than by patching the case: `kernel/input_lock.py`
+  holds every covered input open with `FILE_SHARE_READ` for the duration
+  of the checks, so Windows refuses write, writable mapping, delete and
+  rename to everything else — 718 inputs locked in 6.17 s here. What
+  cannot be locked in advance (paths that do not exist yet) stays the
+  observer's job. If any covered input cannot be protected, nothing runs:
+  `UNPROTECTED`, exit 6. 65 tests, 3 subtests; sixteen mutants, none
+  survived. **Next action: hand this unit to a THIRD independent
+  review.** It is not closed until one returns without findings.
 
 - **Observed overlap with F-15..F-18, none of them marked repaired:**
   F-15's suggested correction is what this script now does, but the
@@ -186,7 +201,7 @@ That script now fails closed rather than producing an unattributable
 transcript: exit 2 if the endpoints differ, exit 3 if the identity could
 not be taken, exit 4 if a covered input was written during the run even
 though the endpoints agree, exit 5 if the interval could not be observed
-completely. Baseline as of ADR-0026: **874 tests and 60
+completely, exit 6 if the covered inputs could not be made unwritable. Baseline as of ADR-0026: **874 tests and 60
 subtests when the flaky work-queue test cooperates** (873 + 1 flaky
 failure otherwise — see above), mypy strict clean over 56 source files,
 ruff at the 19-finding baseline. Then **whichever audit finding direction

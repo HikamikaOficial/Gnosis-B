@@ -3,7 +3,7 @@
 **Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION; THE PROBE HAS A CALLER; MULTI-CREDENTIAL ROTATION
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
-**Last update:** 2026-08-23 (F-34 closed; F-14 repaired twice and still open; the stale lines below are F-19..F-32, still open)
+**Last update:** 2026-08-23 (F-34 closed; F-14 repaired three times and still open; the stale lines below are F-19..F-32, still open)
 
 ## Kernel hardening (post-Phase -1)
 
@@ -417,7 +417,7 @@ sites), `kernel/integration.py` and `adapters/cli_review.py`, which are
 decision logic in other subsystems; none can forge a COMPLETED, but
 "cannot forge a DONE" is weaker than "cannot be misread".
 
-## F-14 — the evidence surface binds bytes, and now the interval too (ADR-0026 + addendum, 2026-08-23)
+## F-14 — the evidence surface binds bytes, over an interval whose inputs cannot be written (ADR-0026 + two addenda, 2026-08-23)
 
 `scripts/capture_evidence.py` recorded HEAD and `git status --porcelain`.
 Status is a state and a NAME: two different dirty trees that touch the
@@ -481,12 +481,42 @@ directory outside the tree. What remains is judged by rule, and writes
 under `.git/` are COUNTED as machinery rather than judged, because git
 rewrites its index while merely reading the tree.
 
-**F-14 is still NOT closed.** It is repaired twice now, tested (56 tests,
-3 subtests) and mutation-checked (thirteen mutants, none survived,
-`scripts/mutation_check_f14.py`), and it awaits a SECOND independent
-review. The first one found this in a unit that had 36 tests, nine
-mutants and a clean self-review. It closes when a review returns without
-findings.
+**Second independent review (2026-08-23): FAIL CRITICO PROVISIONAL.** The
+barrier proves that the notifications Windows GENERATED were delivered;
+it proves nothing about whether every modification generated one. Size
+and last-write notifications are documented as arriving when a change
+reaches storage or the cache, and a write made through a memory-mapped
+section is weaker still. Both reproductions were built and run against
+the shipped code before anything changed, and they are committed as
+`scripts/probe_f14_boundary.py`, driven by pipe handshakes with no sleeps
+in the ordering.
+
+A held: an independent process keeping a raw write handle open across the
+whole capture, never flushing, still produced `modified: a.txt` —
+`INPUTS_MUTATED`, exit 4. **B broke it:** the same through a writable
+mapping notified NOTHING, the check demonstrably read the mutated bytes,
+PRE equalled POST, and the bundle finished `CLEAN` / `evidence_valid:
+true` / exit 0.
+
+The repair is a category change, not a patch. A mechanism that reports
+writes cannot be the whole boundary when a write can decline to be
+reported, so **the covered inputs stop being writable**:
+`kernel/input_lock.py` holds every one of them open with `GENERIC_READ`
+and a share mode of `FILE_SHARE_READ`, and Windows then refuses any other
+open asking for write or delete — which is also the only way to obtain a
+writable mapping. Measured here: **718 covered inputs locked in 6.17 s**.
+Prevention and observation cover each other's blind spots by
+construction: prevention for content written into a file that exists,
+observation for creating, deleting and renaming a path, which are
+directory operations no cache can defer. If any covered input cannot be
+locked — another process already holds it open for writing — nothing runs
+at all: `UNPROTECTED`, exit 6.
+
+**F-14 is still NOT closed.** Repaired three times now, tested (65 tests,
+3 subtests) and mutation-checked (sixteen mutants, none survived), it
+awaits a THIRD independent review. Two reviews have each found something
+this unit's own tests and mutants did not. It closes when a review
+returns without findings.
 
 **Overlap recorded, not claimed:** F-15 (the unused primitive) is what
 this script now uses; F-16 (capture order) no longer affects the binding

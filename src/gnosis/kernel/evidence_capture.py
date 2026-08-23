@@ -84,6 +84,7 @@ from typing import Any
 
 from .canonical import hash_canonical
 from .git_evidence import content_fingerprint
+from .input_lock import InputLock, LockOutcome, create_input_lock
 from .write_observer import (
     BARRIER_DIR,
     Observation,
@@ -99,6 +100,7 @@ EXIT_TREE_MUTATED = 2
 EXIT_IDENTITY_UNAVAILABLE = 3
 EXIT_INPUTS_MUTATED = 4
 EXIT_BOUNDARY_UNAVAILABLE = 5
+EXIT_INPUTS_UNPROTECTED = 6
 
 _UNREADABLE_PREFIX = "unreadable: "
 
@@ -146,6 +148,7 @@ class ObservationVerdict(Enum):
     CLEAN = "CLEAN"
     INPUTS_MUTATED = "INPUTS_MUTATED"
     UNOBSERVED = "UNOBSERVED"
+    UNPROTECTED = "UNPROTECTED"
 
 
 @dataclass(frozen=True)
@@ -363,6 +366,7 @@ class Boundary:
     allowed_writes: tuple[str, ...]
     reason: str | None = None
     machinery_events: int = 0
+    protection: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def clean(self) -> bool:
@@ -379,6 +383,7 @@ class Boundary:
             "covered_files": self.covered_files,
             "allowed_writes": list(self.allowed_writes),
             "reason": self.reason,
+            "protection": dict(self.protection),
             "authority": (
                 "the write stream, not a comparison of endpoints: a change that "
                 "undoes itself before the second fingerprint is still a change"
@@ -397,8 +402,15 @@ def classify_observation(
     observation: Observation,
     covered: frozenset[str],
     allowed_writes: Sequence[str],
+    lock: LockOutcome | None = None,
 ) -> Boundary:
-    """Turn a stream of writes into a verdict about the covered inputs.
+    """Turn prevention plus a stream of writes into one verdict.
+
+    The boundary has two halves and needs both. The lock is what makes a
+    covered input unwritable, including through a memory mapping, which
+    is the case no watcher can see. The stream is what covers the
+    operations the lock cannot pre-empt — a path that did not exist when
+    the lock was taken, and the metadata changes that remain legal.
 
     A path is a violation when it is one of the covered files, or when it
     is a path that is neither explicitly allowed nor ignored by git —
@@ -406,11 +418,19 @@ def classify_observation(
     gets caught, since it is in neither fingerprint.
     """
     allowed = (BARRIER_DIR, *allowed_writes)
+    protection: Mapping[str, Any] = lock.to_dict() if lock is not None else {}
+    if lock is not None and not lock.enforced:
+        return Boundary(
+            ObservationVerdict.UNPROTECTED, observation.mechanism,
+            len(observation.events), 0, tuple(lock.refused), len(covered),
+            tuple(allowed), lock.reason or "the covered inputs were not made unwritable",
+            protection=protection)
     if not observation.available or not observation.complete:
         return Boundary(
             ObservationVerdict.UNOBSERVED, observation.mechanism,
             len(observation.events), 0, (), len(covered), tuple(allowed),
-            observation.reason or "the write observer could not promise a complete stream")
+            observation.reason or "the write observer could not promise a complete stream",
+            protection=protection)
 
     violations: list[str] = []
     allowed_count = 0
@@ -446,7 +466,7 @@ def classify_observation(
                else ObservationVerdict.CLEAN)
     return Boundary(verdict, observation.mechanism, len(observation.events),
                     allowed_count, tuple(dict.fromkeys(violations)), len(covered),
-                    tuple(allowed), machinery_events=machinery)
+                    tuple(allowed), machinery_events=machinery, protection=protection)
 
 
 @dataclass(frozen=True)
@@ -606,6 +626,8 @@ def _exit_code(binding: TreeBinding, checks: ChecksVerdict, boundary: Boundary) 
         return EXIT_TREE_MUTATED
     if boundary.verdict is ObservationVerdict.UNOBSERVED:
         return EXIT_BOUNDARY_UNAVAILABLE
+    if boundary.verdict is ObservationVerdict.UNPROTECTED:
+        return EXIT_INPUTS_UNPROTECTED
     if boundary.verdict is ObservationVerdict.INPUTS_MUTATED:
         return EXIT_INPUTS_MUTATED
     if checks not in (ChecksVerdict.ALL_CLEAN, ChecksVerdict.WITHIN_BASELINE):
@@ -623,6 +645,9 @@ def _verdict_line(binding: TreeBinding, checks: ChecksVerdict, boundary: Boundar
     if boundary.verdict is ObservationVerdict.UNOBSERVED:
         return ("INVALID EVIDENCE: the interval between the fingerprints was not "
                 f"observed - {boundary.reason}")
+    if boundary.verdict is ObservationVerdict.UNPROTECTED:
+        return ("INVALID EVIDENCE: the covered inputs were not made unwritable, so "
+                f"nothing ran - {boundary.reason}")
     if boundary.verdict is ObservationVerdict.INPUTS_MUTATED:
         return ("INVALID EVIDENCE: a covered input was written during the capture "
                 "and the endpoints do not show it; see boundary.violations")
@@ -695,6 +720,7 @@ def run_capture(
     lint_baseline: int = 0,
     identity: Callable[[Path], TreeIdentity] = probe_tree_identity,
     observer: Callable[[Path], WriteObserver] = create_write_observer,
+    input_lock: Callable[[Path], InputLock] = create_input_lock,
     allowed_writes: Sequence[str] = (),
     scratch: Path | None = None,
     now: Callable[[], str] = _utc_now,
@@ -730,13 +756,24 @@ def run_capture(
     watcher.start()
     results: list[CheckResult] = []
     covered: frozenset[str] = frozenset()
+    lock_outcome: LockOutcome | None = None
     try:
         pre = identity(repo)
         if pre.available:
             covered = covered_paths(repo)
             env = check_environment(scratch)
-            for command in commands:
-                results.append(_run_check(repo, command, staging, lint_baseline, env))
+            lock = input_lock(repo)
+            lock_outcome = lock.acquire(sorted(covered))
+            try:
+                if lock_outcome.enforced:
+                    # Nothing runs against inputs that anything could
+                    # still write. Discovering that after the suite is
+                    # worse than discovering it before.
+                    for command in commands:
+                        results.append(
+                            _run_check(repo, command, staging, lint_baseline, env))
+            finally:
+                lock.release()
             post = identity(repo)
         else:
             post = TreeIdentity(
@@ -746,7 +783,8 @@ def run_capture(
         observation = watcher.stop()
 
     binding = bind_tree(pre, post)
-    boundary = classify_observation(repo, observation, covered, allowed_writes)
+    boundary = classify_observation(repo, observation, covered, allowed_writes,
+                                    lock_outcome)
     checks_verdict = _checks_verdict(results)
     summary = build_summary(
         binding, results, checks_verdict, boundary,

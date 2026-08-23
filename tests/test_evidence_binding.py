@@ -27,6 +27,7 @@ from gnosis.kernel.evidence_capture import (
     EXIT_CHECKS_FAILED,
     EXIT_IDENTITY_UNAVAILABLE,
     EXIT_INPUTS_MUTATED,
+    EXIT_INPUTS_UNPROTECTED,
     EXIT_OK,
     EXIT_TREE_MUTATED,
     BindingVerdict,
@@ -39,13 +40,20 @@ from gnosis.kernel.evidence_capture import (
     ObservationVerdict,
     TreeIdentity,
     bind_tree,
+    classify_observation,
     count_lint_findings,
+    covered_paths,
     describe_drift,
     probe_tree_identity,
     publish_bundle,
     run_capture,
 )
 from gnosis.kernel.git_evidence import content_fingerprint
+from gnosis.kernel.input_lock import (
+    LockOutcome,
+    UnavailableLock,
+    create_input_lock,
+)
 from gnosis.kernel.write_observer import (
     Observation,
     UnavailableObserver,
@@ -265,7 +273,8 @@ class TestACaptureBindsTheTreeItChecked(unittest.TestCase):
             (repo / "a.txt").write_text("dirty\n", encoding="utf-8")
 
             mutate = _python("open('a.txt', 'a', encoding='utf-8').write('more\\n')")
-            capture = run_capture(repo, [mutate], root / "staging")
+            capture = run_capture(repo, [mutate], root / "staging",
+                                  input_lock=_no_prevention)
 
             self.assertIs(capture.binding.verdict, BindingVerdict.TREE_MUTATED)
             self.assertFalse(capture.evidence_valid)
@@ -279,7 +288,8 @@ class TestACaptureBindsTheTreeItChecked(unittest.TestCase):
             (repo / "u.txt").write_text("before\n", encoding="utf-8")
 
             mutate = _python("open('u.txt', 'w', encoding='utf-8').write('after\\n')")
-            capture = run_capture(repo, [mutate], root / "staging")
+            capture = run_capture(repo, [mutate], root / "staging",
+                                  input_lock=_no_prevention)
 
             self.assertIs(capture.binding.verdict, BindingVerdict.TREE_MUTATED)
             self.assertEqual(capture.exit_code, EXIT_TREE_MUTATED)
@@ -589,6 +599,27 @@ def _script(*lines: str) -> CheckCommand:
     return CheckCommand("check", (sys.executable, "-c", "\n".join(lines)))
 
 
+class _NoPrevention:
+    """Prevention switched off, so the OBSERVATION half can be tested alone.
+
+    By default the boundary REFUSES these writes outright — that is what
+    `TestTheInputsCannotBeWritten` proves. Detection still has to work
+    and still has to be tested: it is the only half that covers a path
+    which did not exist when the lock was taken, and the only half a
+    platform without the share-mode mechanism could ever have.
+    """
+
+    def acquire(self, paths):
+        return LockOutcome(True, 0, (), "none (prevention disabled for this test)")
+
+    def release(self) -> None:
+        return None
+
+
+def _no_prevention(_: Path) -> _NoPrevention:
+    return _NoPrevention()
+
+
 def _change_read_restore(target: str) -> CheckCommand:
     """The reproduction: mutate, read the mutation, put everything back.
 
@@ -632,7 +663,8 @@ class TestATransientChangeIsStillAChange(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = _make_repo(root)
-            capture = run_capture(repo, [_change_read_restore("a.txt")], root / "staging")
+            capture = run_capture(repo, [_change_read_restore("a.txt")], root / "staging",
+                                  input_lock=_no_prevention)
             self._assert_caught(capture, "a.txt")
 
     def test_an_already_dirty_tracked_file_changed_read_and_restored_is_caught(self):
@@ -640,7 +672,8 @@ class TestATransientChangeIsStillAChange(unittest.TestCase):
             root = Path(tmp)
             repo = _make_repo(root)
             (repo / "a.txt").write_text("dirty before the capture\n", encoding="utf-8")
-            capture = run_capture(repo, [_change_read_restore("a.txt")], root / "staging")
+            capture = run_capture(repo, [_change_read_restore("a.txt")], root / "staging",
+                                  input_lock=_no_prevention)
             self._assert_caught(capture, "a.txt")
 
     def test_an_untracked_file_changed_read_and_restored_is_caught(self):
@@ -648,7 +681,8 @@ class TestATransientChangeIsStillAChange(unittest.TestCase):
             root = Path(tmp)
             repo = _make_repo(root)
             (repo / "u.txt").write_text("untracked\n", encoding="utf-8")
-            capture = run_capture(repo, [_change_read_restore("u.txt")], root / "staging")
+            capture = run_capture(repo, [_change_read_restore("u.txt")], root / "staging",
+                                  input_lock=_no_prevention)
             self._assert_caught(capture, "u.txt")
 
     def test_an_untracked_file_created_read_and_deleted_is_caught(self):
@@ -693,7 +727,8 @@ class TestATransientChangeIsStillAChange(unittest.TestCase):
             meddler = threading.Thread(target=meddle)
             meddler.start()
             try:
-                capture = run_capture(repo, [check], root / "staging")
+                capture = run_capture(repo, [check], root / "staging",
+                                      input_lock=_no_prevention)
             finally:
                 go.write_text("go", encoding="utf-8")
                 meddler.join(timeout=30)
@@ -894,6 +929,202 @@ class TestTheWriteObserverItself(unittest.TestCase):
         self.assertFalse(observation.complete)
         self.assertFalse(observation.trustworthy)
         self.assertEqual(observation.events, ())
+
+
+def _tamper_attempt(mode: str) -> CheckCommand:
+    """A check that tries the ABA on its own inputs and says what happened."""
+    if mode == "handle":
+        source = (
+            "import hashlib, os\n"
+            "try:\n"
+            "    fd = os.open('a.txt', os.O_RDWR | os.O_BINARY)\n"
+            "except OSError as exc:\n"
+            "    print('REFUSED', type(exc).__name__)\n"
+            "else:\n"
+            "    original = os.read(fd, 1 << 20)\n"
+            "    os.lseek(fd, 0, os.SEEK_SET)\n"
+            "    os.write(fd, b'TAMPERED')\n"
+            "    print('TAMPERED', hashlib.sha256(open('a.txt','rb').read()).hexdigest())\n"
+            "    os.lseek(fd, 0, os.SEEK_SET)\n"
+            "    os.write(fd, original)\n"
+            "    os.close(fd)\n")
+    else:
+        source = (
+            "import hashlib, mmap\n"
+            "try:\n"
+            "    handle = open('a.txt', 'r+b')\n"
+            "except OSError as exc:\n"
+            "    print('REFUSED', type(exc).__name__)\n"
+            "else:\n"
+            "    view = mmap.mmap(handle.fileno(), 0)\n"
+            "    original = bytes(view[:])\n"
+            "    view[0:8] = b'TAMPERED'\n"
+            "    print('TAMPERED', hashlib.sha256(open('a.txt','rb').read()).hexdigest())\n"
+            "    view[:] = original\n")
+    return CheckCommand("check", (sys.executable, "-c", source))
+
+
+WINDOWS_ONLY = unittest.skipUnless(sys.platform == "win32",
+                                   "the share-mode lock is a Windows mechanism")
+
+
+class TestTheInputsCannotBeWritten(unittest.TestCase):
+    """The second independent review, closed by prevention rather than sight.
+
+    Its reproduction B is why this class exists: a write made through a
+    memory-mapped view need not generate any notification at all, so no
+    watcher can be the whole boundary. What closes it is that a writable
+    mapping needs a handle with write access, and while the capture holds
+    every covered input open with a share mode of FILE_SHARE_READ there
+    is no way to get one.
+    """
+
+    @WINDOWS_ONLY
+    def test_a_check_cannot_open_a_covered_input_for_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            before = (repo / "a.txt").read_bytes()
+
+            capture = run_capture(repo, [_tamper_attempt("handle")], root / "staging")
+
+            self.assertIn("REFUSED", capture.checks[0].tail)
+            self.assertEqual((repo / "a.txt").read_bytes(), before)
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
+            self.assertTrue(capture.boundary.protection["enforced"])
+
+    @WINDOWS_ONLY
+    def test_a_check_cannot_map_a_covered_input_writable(self):
+        # Reproduction B. Under observation alone this succeeded in
+        # silence: no notification, both fingerprints equal, valid bundle.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            before = (repo / "a.txt").read_bytes()
+
+            capture = run_capture(repo, [_tamper_attempt("mmap")], root / "staging")
+
+            self.assertIn("REFUSED", capture.checks[0].tail)
+            self.assertNotIn("TAMPERED", capture.checks[0].tail)
+            self.assertEqual((repo / "a.txt").read_bytes(), before)
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
+
+    @WINDOWS_ONLY
+    def test_a_mapped_write_is_invisible_to_the_observer_which_is_why_this_exists(self):
+        # A characterisation of the platform, kept deliberately. With
+        # prevention disabled the same tamper succeeds and the write
+        # stream reports NOTHING, so the capture calls it clean. If
+        # Windows ever starts notifying mapped writes this goes red, and
+        # that is worth learning rather than worth hiding.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+
+            capture = run_capture(repo, [_tamper_attempt("mmap")], root / "staging",
+                                  input_lock=_no_prevention)
+
+            self.assertIn("TAMPERED", capture.checks[0].tail)
+            self.assertIs(capture.binding.verdict, BindingVerdict.BOUND)
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
+            self.assertTrue(capture.summary["evidence_valid"],
+                            "this is precisely the hole the input lock closes")
+
+    @WINDOWS_ONLY
+    def test_a_check_may_still_read_every_covered_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            capture = run_capture(
+                repo,
+                [_script("print(open('a.txt', encoding='utf-8').read().strip())")],
+                root / "staging")
+
+            self.assertEqual(capture.checks[0].tail, "original")
+            self.assertEqual(capture.exit_code, EXIT_OK)
+            self.assertTrue(capture.evidence_valid)
+
+    @WINDOWS_ONLY
+    def test_an_input_held_open_for_writing_elsewhere_refuses_the_whole_capture(self):
+        # Reproductions A1 and B1: the other process already has the
+        # handle when the capture starts, so the boundary cannot be built
+        # and nothing runs. The handshake is a pipe, not a sleep.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            hold = ("import sys\n"
+                    "handle = open(sys.argv[1], 'r+b')\n"
+                    "print('HELD', flush=True)\n"
+                    "sys.stdin.readline()\n")
+            holder = subprocess.Popen(
+                [sys.executable, "-c", hold, str(repo / "a.txt")],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            try:
+                self.assertEqual(holder.stdout.readline().strip(), "HELD")
+                capture = run_capture(
+                    repo,
+                    [_script("open('ran.txt', 'w', encoding='utf-8').write('x')")],
+                    root / "staging")
+            finally:
+                holder.stdin.write("\n")
+                holder.stdin.flush()
+                holder.wait(timeout=30)
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.UNPROTECTED)
+            self.assertEqual(capture.exit_code, EXIT_INPUTS_UNPROTECTED)
+            self.assertFalse(capture.evidence_valid)
+            self.assertEqual(capture.checks, ())
+            self.assertFalse((repo / "ran.txt").exists())
+            self.assertTrue(any("a.txt" in item for item in capture.boundary.violations))
+            self.assertFalse(capture.boundary.protection["enforced"])
+
+    def test_a_lock_that_is_not_there_is_not_protection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            capture = run_capture(
+                repo, [_script("pass")], root / "staging",
+                input_lock=lambda _: UnavailableLock("no lock on this platform"))
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.UNPROTECTED)
+            self.assertEqual(capture.exit_code, EXIT_INPUTS_UNPROTECTED)
+            self.assertFalse(capture.evidence_valid)
+            self.assertEqual(capture.checks, ())
+
+    @WINDOWS_ONLY
+    def test_the_lock_releases_every_handle_it_took(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            run_capture(repo, [_script("pass")], root / "staging")
+            # If one handle had survived the capture, this would raise.
+            (repo / "a.txt").write_text("writable again\n", encoding="utf-8")
+            self.assertEqual((repo / "a.txt").read_text(encoding="utf-8"),
+                             "writable again\n")
+
+    @WINDOWS_ONLY
+    def test_the_lock_covers_every_covered_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            (repo / "u.txt").write_text("untracked\n", encoding="utf-8")
+            lock = create_input_lock(repo)
+            try:
+                outcome = lock.acquire(sorted(covered_paths(repo)))
+                self.assertTrue(outcome.enforced)
+                self.assertEqual(outcome.locked, 2)
+                with self.assertRaises(PermissionError):
+                    (repo / "u.txt").write_text("changed\n", encoding="utf-8")
+            finally:
+                lock.release()
+
+    def test_a_refused_lock_is_a_boundary_failure_not_a_check_failure(self):
+        boundary = classify_observation(
+            Path("."), Observation(True, True, (), "test"), frozenset({"a.txt"}), (),
+            LockOutcome(False, 0, ("a.txt (error 32)",), "test", "held open elsewhere"))
+
+        self.assertIs(boundary.verdict, ObservationVerdict.UNPROTECTED)
+        self.assertIn("a.txt (error 32)", boundary.violations)
+        self.assertFalse(boundary.protection["enforced"])
 
 
 if __name__ == "__main__":

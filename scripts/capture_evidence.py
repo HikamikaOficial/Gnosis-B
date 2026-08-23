@@ -39,6 +39,15 @@ Exit codes are distinct on purpose:
     3  the tree's identity could not be taken — the probe is broken
     4  a covered input was written during the run, endpoints notwithstanding
     5  the interval could not be observed — no mechanism, or an incomplete one
+    6  the covered inputs could not be made unwritable, so nothing ran
+
+A second review then broke the observation: a write made through a
+memory-mapped view need not generate any notification at all. So the
+covered inputs are no longer merely watched — for the duration of the
+checks the capture holds every one of them open with a share mode that
+refuses write, delete and rename to everything else, which is also the
+only way to refuse a writable mapping. Watching remains for what cannot
+be locked in advance: paths that do not exist yet.
 """
 from __future__ import annotations
 
