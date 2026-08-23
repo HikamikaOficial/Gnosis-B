@@ -1,0 +1,186 @@
+{
+  "all_passed": false,
+  "boundary": {
+    "allowed_events": 15,
+    "allowed_writes": [
+      ".gnosis-capture-barrier",
+      ".git/",
+      ".pytest_cache/",
+      ".mypy_cache/",
+      ".ruff_cache/",
+      "__pycache__"
+    ],
+    "authority": "the write stream, not a comparison of endpoints: a change that undoes itself before the second fingerprint is still a change",
+    "covered_files": 761,
+    "identity_of_what_ran": "locked_identity is taken AFTER every covered input is unwritable, so it describes the bytes the checks will actually read; it must equal the pre-check identity or the capture is refused",
+    "locked_identity": {
+      "available": true,
+      "digest": "f07927fcec34707d003ebb561b81bd5a7b28cb84a5e0d15cffc4ccc6702ddff0",
+      "fingerprint": {
+        "branch": "master",
+        "head_sha": "b783a394fa9c5da326d3193a25341cd02ba809ff",
+        "is_repo": true,
+        "patch_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        "status_sha256": "a419ce2ecd74a3f6fa0f21290740238ed077af6f87c759fcc861d213a46140fc",
+        "untracked": {
+          ".stfolder/syncthing-folder-c9ceae.txt": "0cf037252917faaef03b3c68f4ae5d7311f2f4e1d4fd29cbaebe45dfcebff398",
+          "PROJECT_REPORT.md": "98f306634c9c837d081e72392a876027903b276b7dd88e8bff40585770f6c21b"
+        }
+      },
+      "reason": null,
+      "ts": "2026-08-23T13:24:46.321983+00:00"
+    },
+    "machinery_events": 40,
+    "machinery_note": "writes under .git/ are counted, not judged: git updates its own index while merely reading the tree, and .git is not a covered input. Tamper-evidence for the machinery itself is F-17 and is not repaired here",
+    "mechanism": "ReadDirectoryChangesW(recursive)",
+    "observed_events": 65,
+    "protection": {
+      "enforced": true,
+      "fully_identified": true,
+      "identified_objects": 761,
+      "identity_digest": "a84fbea9da6f63b2e83f295ec83f6dc1ea65d6fd2d923826802bcb55f6302bf8",
+      "identity_note": "every protected handle is recorded by FILE_ID_INFO (volume serial plus 128-bit file id) and verified to still resolve to the path it was opened by; the full map is input-identities.json in this bundle",
+      "locked_inputs": 761,
+      "mechanism": "CreateFileW(GENERIC_READ, FILE_SHARE_READ)",
+      "reason": null,
+      "refused": [],
+      "volume": {
+        "drive_type": "fixed",
+        "filesystem": "NTFS",
+        "reason": null,
+        "supported": true
+      }
+    },
+    "reason": null,
+    "verdict": "CLEAN",
+    "violations": []
+  },
+  "bundle_staged_outside_repo": true,
+  "captured_at": "2026-08-23T13:39:09.680764+00:00",
+  "checks_all_zero_exit": false,
+  "checks_verdict": "WITHIN_BASELINE",
+  "evidence_valid": true,
+  "exit_code": 0,
+  "gates_clean": true,
+  "non_zero_exits": [
+    "ruff"
+  ],
+  "python": "3.12.14",
+  "results": [
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "tests/",
+        "-q"
+      ],
+      "duration_s": 857.52,
+      "exit_code": 0,
+      "name": "pytest",
+      "outcome": "PASSED",
+      "tail": "968 passed, 67 subtests passed in 851.43s (0:14:11)"
+    },
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "mypy",
+        "src/gnosis"
+      ],
+      "duration_s": 4.77,
+      "exit_code": 0,
+      "name": "mypy",
+      "outcome": "PASSED",
+      "tail": "Success: no issues found in 58 source files"
+    },
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "ruff",
+        "check",
+        "src/gnosis",
+        "tests",
+        "--no-cache",
+        "--output-format=concise"
+      ],
+      "duration_s": 0.23,
+      "exit_code": 1,
+      "lint_baseline": 19,
+      "lint_findings": 19,
+      "name": "ruff",
+      "outcome": "WITHIN_LINT_BASELINE",
+      "tail": "No fixes available (6 hidden fixes can be enabled with the `--unsafe-fixes` option).",
+      "verdict": "known backlog, not above baseline"
+    },
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "duration_s": 0.08,
+      "exit_code": 0,
+      "name": "git-head",
+      "outcome": "PASSED",
+      "tail": "b783a394fa9c5da326d3193a25341cd02ba809ff"
+    },
+    {
+      "argv": [
+        "git",
+        "status",
+        "--porcelain"
+      ],
+      "duration_s": 0.08,
+      "exit_code": 0,
+      "name": "git-status",
+      "outcome": "PASSED",
+      "tail": "?? PROJECT_REPORT.md"
+    }
+  ],
+  "tree_identity": {
+    "binding": "BOUND",
+    "blind_spot": "git-ignored files are not enumerated by content_fingerprint (build caches, .venv, the ignored parts of .gnosis/)",
+    "covers": "from immediately before the first check to immediately after the last one; the bundle is published afterwards and is deliberately not part of the identified tree",
+    "drift": [],
+    "identical": true,
+    "post": {
+      "available": true,
+      "digest": "f07927fcec34707d003ebb561b81bd5a7b28cb84a5e0d15cffc4ccc6702ddff0",
+      "fingerprint": {
+        "branch": "master",
+        "head_sha": "b783a394fa9c5da326d3193a25341cd02ba809ff",
+        "is_repo": true,
+        "patch_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        "status_sha256": "a419ce2ecd74a3f6fa0f21290740238ed077af6f87c759fcc861d213a46140fc",
+        "untracked": {
+          ".stfolder/syncthing-folder-c9ceae.txt": "0cf037252917faaef03b3c68f4ae5d7311f2f4e1d4fd29cbaebe45dfcebff398",
+          "PROJECT_REPORT.md": "98f306634c9c837d081e72392a876027903b276b7dd88e8bff40585770f6c21b"
+        }
+      },
+      "reason": null,
+      "ts": "2026-08-23T13:39:09.604268+00:00"
+    },
+    "pre": {
+      "available": true,
+      "digest": "f07927fcec34707d003ebb561b81bd5a7b28cb84a5e0d15cffc4ccc6702ddff0",
+      "fingerprint": {
+        "branch": "master",
+        "head_sha": "b783a394fa9c5da326d3193a25341cd02ba809ff",
+        "is_repo": true,
+        "patch_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        "status_sha256": "a419ce2ecd74a3f6fa0f21290740238ed077af6f87c759fcc861d213a46140fc",
+        "untracked": {
+          ".stfolder/syncthing-folder-c9ceae.txt": "0cf037252917faaef03b3c68f4ae5d7311f2f4e1d4fd29cbaebe45dfcebff398",
+          "PROJECT_REPORT.md": "98f306634c9c837d081e72392a876027903b276b7dd88e8bff40585770f6c21b"
+        }
+      },
+      "reason": null,
+      "ts": "2026-08-23T13:24:45.077885+00:00"
+    },
+    "primitive": "gnosis.kernel.git_evidence.content_fingerprint",
+    "reason": null
+  },
+  "verdict": "within baseline; see non_zero_exits"
+}

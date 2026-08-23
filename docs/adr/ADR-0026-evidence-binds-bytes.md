@@ -1200,6 +1200,40 @@ refusal is disabled, the `FILE_FLAG_BACKUP_SEMANTICS` retry with its
 unidentified `append` is put back, and the producer-side invariant is
 switched off. The suite goes red. Twenty-two mutants now, none survived.
 
+### Evidence
+
+`.gnosis/evidence/20260823T132444Z/` — **968 passed, 67 subtests**, mypy
+strict clean over 58 source files, ruff at 19 findings against a baseline
+of 19. Clean tree at `b783a39`.
+
+```json
+"tree_identity": { "binding": "BOUND", "identical": true,
+                   "pre": {"digest": "f07927fc…2ddff0"} },
+"boundary": {
+  "verdict": "CLEAN", "observed_events": 65, "violations": [],
+  "covered_files": 761,
+  "locked_identity": { "digest": "f07927fc…2ddff0" },
+  "protection": { "enforced": true, "locked_inputs": 761,
+                  "identified_objects": 761, "fully_identified": true,
+                  "identity_digest": "a84fbea9…302bf8",
+                  "volume": { "supported": true, "drive_type": "fixed",
+                              "filesystem": "NTFS" } } }
+```
+
+`fully_identified: true` is the new line, and it is the one this addendum
+exists for: 761 handles held, 761 objects named, and the bundle says so
+rather than leaving a reader to compare two counts and hope they were
+meant to match.
+
+Two artifacts beyond the gate transcripts, added after the capture
+returned; `SUMMARY.json` and `input-identities.json` are as the capture
+wrote them:
+
+- `mutation-check.f14-round7.txt` — twenty-two mutants, none survived.
+- `probe-f14-boundary.txt` — the nine break attempts re-run against this
+  commit, unchanged in outcome: only B0, the reconstructed
+  observation-only design, breaks.
+
 ### What is still not closed
 
 - **F-14 remains OPEN.** Five reviews, five findings this unit's own
