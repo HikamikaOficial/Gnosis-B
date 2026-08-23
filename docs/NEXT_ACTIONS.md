@@ -130,9 +130,24 @@ when an ADR with captured evidence backs it.
   local + `fixed` + `NTFS`.** To add ReFS: run the probe and the suite on
   a real ReFS volume, land that bundle, then move the string — in that
   order. 87 tests, 7 subtests; twenty-one mutants, none survived (MF21
-  puts ReFS back and the suite goes red). **Next action: hand this unit
-  to the FINAL independent review.** It is not closed until one returns
-  without findings.
+  puts ReFS back and the suite goes red).
+
+- **Fifth independent review (2026-08-23): FAIL PARCIAL — ALTA. One
+  fail-open path, in the place claiming the strongest guarantee.** A
+  covered input that is a DIRECTORY — a submodule gitlink — was reopened
+  with `FILE_FLAG_BACKUP_SEMANTICS`, appended to the handle list and
+  never identified: it counted as locked, never reached `identities`, and
+  the outcome could still say `enforced: true` against the module's own
+  published line. Declined rather than extended: directory-like covered
+  inputs are refused before any open, the retry is gone, no path appends
+  a handle without identifying it, and the invariant `locked ==
+  identified` is asserted in the producer, re-checked in the consumer and
+  recorded in the bundle as `protection.fully_identified`. The ancestor
+  reparse point is closed by requiring every object's
+  `VolumeSerialNumber` to be the root's. 94 tests, 7 subtests;
+  twenty-two mutants, none survived (MF22 restores the defect in three
+  edits at once). **Next action: hand this unit to a SIXTH independent
+  review.** It is not closed until one returns without findings.
 
 - **Observed overlap with F-15..F-18, none of them marked repaired:**
   F-15's suggested correction is what this script now does, but the

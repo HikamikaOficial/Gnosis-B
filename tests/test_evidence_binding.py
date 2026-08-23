@@ -1563,5 +1563,206 @@ class TestTheVolumeMustDemonstrateWhatIsClaimed(unittest.TestCase):
         self.assertFalse(outcome.volume.supported)
 
 
+class TestNoProtectedHandleEscapesIdentification(unittest.TestCase):
+    """Fifth review: a directory handle counted as locked and was never named.
+
+    `CreateFileW` on a covered entry that is a directory failed with
+    ERROR_ACCESS_DENIED, the code reopened it with
+    FILE_FLAG_BACKUP_SEMANTICS, appended the handle and skipped
+    `_identify` altogether. That handle counted towards `locked_inputs`,
+    never reached `identities`, and the outcome could still say
+    `enforced: true` — against this module's own published guarantee. A
+    submodule gitlink is the realistic way to get one, and a handle on a
+    submodule's directory says nothing about the bytes inside it.
+    """
+
+    @WINDOWS_ONLY
+    def test_a_directory_covered_input_is_refused_before_it_is_opened(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            (repo / "subdir").mkdir()
+
+            lock = create_input_lock(repo)
+            try:
+                outcome = lock.acquire(["a.txt", "subdir"])
+            finally:
+                lock.release()
+
+            self.assertFalse(outcome.enforced)
+            self.assertTrue(any("subdir" in item and "directory-like" in item
+                                for item in outcome.refused), outcome.refused)
+            self.assertNotIn("subdir", outcome.identities)
+            # And the invariant holds even in the refusal: no handle is
+            # held that the outcome cannot name.
+            self.assertTrue(outcome.fully_identified)
+            self.assertEqual(outcome.locked, len(outcome.identities))
+
+    @WINDOWS_ONLY
+    def test_a_directory_handle_cannot_pass_as_a_protected_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            (repo / "subdir").mkdir()
+            (repo / "subdir" / "inner.txt").write_text("inner\n", encoding="utf-8")
+
+            capture = run_capture(
+                repo,
+                [_script("open('ran.txt', 'w', encoding='utf-8').write('x')")],
+                root / "staging",
+                input_lock=lambda _: _LockOver(repo, ["a.txt", "subdir"]))
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.UNPROTECTED)
+            self.assertEqual(capture.exit_code, EXIT_INPUTS_UNPROTECTED)
+            self.assertEqual(capture.checks, ())
+            self.assertFalse((repo / "ran.txt").exists())
+            self.assertFalse(capture.evidence_valid)
+            self.assertFalse(capture.boundary.protection["enforced"])
+
+    @WINDOWS_ONLY
+    def test_a_real_submodule_gitlink_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inner = _make_repo(root)
+            outer = root / "outer"
+            outer.mkdir()
+            _git(outer, "init")
+            _git(outer, "config", "user.email", "test@example.com")
+            _git(outer, "config", "user.name", "Test")
+            _git(outer, "config", "commit.gpgsign", "false")
+            (outer / "a.txt").write_text("original\n", encoding="utf-8")
+            _git(outer, "add", "a.txt")
+            _git(outer, "commit", "-m", "init")
+            try:
+                _git(outer, "-c", "protocol.file.allow=always", "submodule", "add",
+                     inner.as_uri(), "sub")
+                _git(outer, "commit", "-m", "add submodule")
+            except subprocess.CalledProcessError as exc:  # pragma: no cover
+                self.skipTest(f"git refused to create a submodule here: {exc}")
+
+            covered = covered_paths(outer)
+            self.assertIn("sub", covered, "the gitlink must be a covered path")
+            self.assertTrue((outer / "sub").is_dir())
+
+            lock = create_input_lock(outer)
+            try:
+                outcome = lock.acquire(sorted(covered))
+            finally:
+                lock.release()
+
+            self.assertFalse(outcome.enforced)
+            self.assertTrue(any(item.startswith("sub ") for item in outcome.refused),
+                            outcome.refused)
+            self.assertNotIn("sub", outcome.identities)
+            self.assertTrue(outcome.fully_identified)
+
+            capture = run_capture(
+                outer,
+                [_script("open('ran.txt', 'w', encoding='utf-8').write('x')")],
+                root / "staging")
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.UNPROTECTED)
+            self.assertEqual(capture.exit_code, EXIT_INPUTS_UNPROTECTED)
+            self.assertEqual(capture.checks, ())
+            self.assertFalse((outer / "ran.txt").exists())
+
+    @WINDOWS_ONLY
+    def test_an_enforced_outcome_identifies_every_handle_it_holds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            (repo / "u.txt").write_text("untracked\n", encoding="utf-8")
+
+            lock = create_input_lock(repo)
+            try:
+                outcome = lock.acquire(sorted(covered_paths(repo)))
+            finally:
+                lock.release()
+
+            self.assertTrue(outcome.enforced)
+            self.assertEqual(outcome.locked, len(outcome.identities))
+            self.assertTrue(outcome.fully_identified)
+
+    def test_an_outcome_holding_an_unnamed_handle_is_not_protection(self):
+        # Constructed by hand, because the producer can no longer make
+        # one. The consumer refuses it anyway: two readers, same rule.
+        inconsistent = LockOutcome(True, 3, (), "test", identities={"a.txt": "x"})
+        self.assertFalse(inconsistent.fully_identified)
+
+        boundary = classify_observation(
+            Path("."), Observation(True, True, (), "test"),
+            frozenset({"a.txt"}), (), inconsistent)
+
+        self.assertIs(boundary.verdict, ObservationVerdict.UNPROTECTED)
+        self.assertIn("identified", boundary.reason or "")
+        self.assertFalse(boundary.protection["fully_identified"])
+
+    @WINDOWS_ONLY
+    def test_an_input_on_another_volume_is_refused(self):
+        # Injected serial, because this machine has one volume. A junction
+        # or mount point ABOVE a covered path is what would really do
+        # this, and the per-path reparse check cannot see it.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            lock = WindowsInputLock(repo, expected_serial=0xDEADBEEFDEADBEEF)
+            try:
+                outcome = lock.acquire(sorted(covered_paths(repo)))
+            finally:
+                lock.release()
+
+            self.assertFalse(outcome.enforced)
+            self.assertTrue(any("not the probed volume" in item
+                                for item in outcome.refused), outcome.refused)
+            self.assertEqual(outcome.identities, {})
+
+    @WINDOWS_ONLY
+    def test_a_covered_file_under_an_ancestor_junction_is_still_on_the_volume(self):
+        # The benign half of the same question: a junction that stays on
+        # the probed volume redirects the path and not the guarantee, so
+        # the object is identified, its serial matches, and it is locked.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            real = root / "elsewhere"
+            real.mkdir()
+            (real / "under.txt").write_text("via a junction\n", encoding="utf-8")
+            link = repo / "linked"
+            # errors="replace": mklink answers in the console codepage,
+            # which is not UTF-8 on this machine.
+            made = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(real)],
+                                  capture_output=True, text=True, errors="replace",
+                                  check=False)
+            if made.returncode != 0:  # pragma: no cover - needs the privilege
+                self.skipTest(f"junctions are not available here: {made.stderr.strip()}")
+
+            lock = WindowsInputLock(repo)
+            try:
+                outcome = lock.acquire(["a.txt", "linked/under.txt"])
+                self.assertTrue(outcome.enforced, outcome.refused)
+                self.assertIn("linked/under.txt", outcome.identities)
+                serials = {value.split(":")[0] for value in outcome.identities.values()}
+                self.assertEqual(len(serials), 1, "one volume, one serial")
+                with self.assertRaises(PermissionError):
+                    (real / "under.txt").write_text("through the real path\n",
+                                                    encoding="utf-8")
+            finally:
+                lock.release()
+
+
+class _LockOver:
+    """The real lock, over a caller-chosen set of covered paths."""
+
+    def __init__(self, root: Path, paths: list[str]) -> None:
+        self._inner = create_input_lock(root)
+        self._paths = paths
+
+    def acquire(self, paths):
+        return self._inner.acquire(self._paths)
+
+    def release(self) -> None:
+        self._inner.release()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,10 +1,10 @@
 # GNOSIS — Matriz V1 viva
 
-**Última actualización:** 2026-08-23 · **Unidad:** ADR-0026 + cuatro
+**Última actualización:** 2026-08-23 · **Unidad:** ADR-0026 + cinco
 revisiones independientes (**FAIL CRÍTICO**, **FAIL CRÍTICO
 PROVISIONAL**, **reparación aceptada con cierre en hold**, **FAIL DE
-ALCANCE**) — **F-14 sigue ABIERTO**, entregado para la revisión
-independiente final.
+ALCANCE**, **FAIL PARCIAL/ALTA**) — **F-14 sigue ABIERTO**, entregado
+para una sexta revisión independiente.
 Unidad anterior: ADR-0025 + cuatro addenda (FAIL PARCIAL, FAIL PARCIAL,
 **FAIL CRÍTICO**, **PASS**) — F-34 **CERRADO** por la cuarta revisión,
 sin hallazgos sobre el código `9c6064c` y la evidencia `f02e18e`
@@ -175,6 +175,8 @@ lo ve), y la frontera entera es un mecanismo de Windows.
 | **F-14 (tercera revisión)** — la reparación se acepta y el cierre queda en hold: faltaba atar el handle protegido al objeto identificado, la ventana de adquisición de ~700 cerrojos no estaba cubierta, y la garantía se extrapolaba a cualquier volumen | ADR-0026 addendum 3 | 2026-08-23 | **reparado, pendiente de cuarta revisión** | sección escribible sin handle de archivo rechazada en cuatro formas (error 32); `FILE_ID_INFO` por handle + verificación de ruta final + rechazo de reparse points; identidad **posterior** al bloqueo (`PREPARATION_DRIFT`, salida 7); capacidades de volumen en lista blanca (`fixed` + NTFS; ReFS retirado en el addendum 4). 733 inputs bloqueados e identificados en 0,45 s. 84 pruebas y 7 subtests; veinte mutantes, ninguno sobrevive; sonda de nueve casos |
 
 | **F-14 (cuarta revisión)** — sin hallazgo nuevo contra la arquitectura: el dominio **aceptado** por el código (`NTFS` + `ReFS`) era más ancho que el **demostrado** (`NTFS`). Ninguna ejecución real sobre ReFS, ningún paquete de evidencia lo menciona, y las dos pruebas que lo nombraban sólo lo admitían como alternativa en una aserción que siempre resolvía por NTFS | ADR-0026 addendum 4 | 2026-08-23 | **reparado, pendiente de revisión final** | `_SUPPORTED_FILESYSTEMS = {"NTFS"}`; ReFS pasa a `_CANDIDATE_FILESYSTEMS` y se rechaza con motivo propio antes de abrir un solo input; 87 pruebas y 7 subtests; veintiún mutantes, ninguno sobrevive (MF21 reintroduce ReFS y la suite se pone roja) |
+
+| **F-14 (quinta revisión)** — ruta fail-open: un input cubierto de tipo directorio (gitlink de submódulo) se reabría con `FILE_FLAG_BACKUP_SEMANTICS`, contaba como handle bloqueado y **nunca se identificaba**, así que un resultado podía declarar `enforced=true` sosteniendo un objeto que no sabía nombrar — contra la garantía publicada por el propio módulo | ADR-0026 addendum 5 | 2026-08-23 | **reparado, pendiente de sexta revisión** | los inputs cubiertos de tipo directorio se rechazan **antes** de abrirlos (submódulos declinados, no soportados); no queda ninguna ruta que añada un handle sin identificarlo; invariante `locked == identified` afirmado en el productor y re-comprobado en el consumidor, y registrado como `protection.fully_identified`; todo objeto identificado debe estar en el volumen sondeado por `VolumeSerialNumber` (cierra el reparse point en un ancestro). 94 pruebas y 7 subtests; veintidós mutantes, ninguno sobrevive |
 
 **F-14 está demostrado sobre:** Windows, volumen local, tipo `fixed`,
 filesystem `NTFS`. Y sobre nada más. **ReFS es una extensión candidata

@@ -13,6 +13,13 @@
   memory-mapped view notifies nothing, so a check consumed mutated bytes
   inside a bundle that certified itself. Repaired in addendum 2 by making
   the covered inputs unwritable instead of merely watched.
+- Independent review, round 5 (2026-08-23): **FAIL PARCIAL — ALTA.** The
+  main repair and the evidence were accepted; one fail-open path
+  remained. A directory-like covered input — a submodule gitlink — was
+  reopened with `FILE_FLAG_BACKUP_SEMANTICS`, counted as a locked handle
+  and never identified, so an outcome could say `enforced: true` while
+  holding an object it could not name. Refused rather than supported in
+  addendum 5.
 - Independent review, round 4 (2026-08-23): **FAIL DE ALCANCE** — no new
   finding against the architecture; the accepted domain was wider than
   the demonstrated one. `ReFS` was in the supported set and had never
@@ -24,7 +31,7 @@
   object behind each handle, the window while the locks are taken, and
   the volume the guarantee rests on. All four answered by measurement in
   addendum 3.
-- **A fourth independent review is OUTSTANDING**; F-14 stays OPEN in
+- **A sixth independent review is OUTSTANDING**; F-14 stays OPEN in
   `docs/V1_COMPLIANCE_MATRIX.md` until one returns without findings.
   Three reviews have now found something this unit's own tests and
   mutants did not.
@@ -34,11 +41,11 @@
   has been run on a real volume of that kind. Every other drive type,
   every other filesystem and every UNC path is refused before any input
   is opened.
-- Tests: `tests/test_evidence_binding.py` — **87 tests, 7 subtests**
-  (36, then 20, then 9, then 19, then 3).
-- Mutation check: `scripts/mutation_check_f14.py` — **twenty-one mutants,
-  none survived** (nine, four, three, four, one), declared as data so a
-  reviewer re-runs the claim rather than reading it.
+- Tests: `tests/test_evidence_binding.py` — **94 tests, 7 subtests**
+  (36, then 20, then 9, then 19, then 3, then 7).
+- Mutation check: `scripts/mutation_check_f14.py` — **twenty-two mutants,
+  none survived** (nine, four, three, four, one, one), declared as data
+  so a reviewer re-runs the claim rather than reading it.
 - Break attempts: `scripts/probe_f14_boundary.py` — nine cases, committed
   and re-runnable, containing the defect and its closure side by side.
 - Evidence: `.gnosis/evidence/20260822T212531Z/` — **910 passed, 62
@@ -1054,3 +1061,154 @@ shapes; `FILE_ID_INFO` identity and final-path binding; reparse points
 and hard links; the identity taken after the lock; ABA prevention and
 detection; and the volume probe failing closed. The only change is which
 volumes the last of those calls supported.
+
+## Fifth independent review addendum — 2026-08-23: **FAIL PARCIAL — ALTA**
+
+The main repair and the evidence over the real tree were accepted: 747
+covered, 747 locked, 747 identified, fixed/NTFS, boundary CLEAN,
+961 tests, mypy clean, ruff at baseline, 21/21 mutants caught, and the
+ABA — writable mapping included — closed for ordinary covered files.
+
+One fail-open path was still inside F-14, and it was in the one place
+that had been claiming the strongest guarantee.
+
+### The finding
+
+`WindowsInputLock.acquire` opened each covered path and, when
+`CreateFileW` came back with `ERROR_ACCESS_DENIED`, took a branch
+commented for exactly the case that matters:
+
+```python
+if error == 5:
+    # ERROR_ACCESS_DENIED on a directory-like entry (a submodule
+    # gitlink); retry with the flag that makes a directory openable
+    handle = _kernel32.CreateFileW(
+        str(target), _GENERIC_READ, _FILE_SHARE_READ, None,
+        _OPEN_EXISTING, _FILE_FLAG_BACKUP_SEMANTICS, None)
+    if handle and handle != _INVALID_HANDLE_VALUE:
+        self._handles.append(handle)
+        continue            # <- _identify never runs
+```
+
+That `continue` skipped `_identify`. The handle counted towards
+`locked_inputs`, never reached `identities`, and the outcome could still
+return `enforced: true` — while this module's own `identity_note`, in
+every bundle, says *"every protected handle is recorded by
+FILE_ID_INFO"*. It was not.
+
+And even taken on its own terms the branch proved nothing worth having: a
+handle on a submodule's DIRECTORY says nothing about the bytes inside
+that submodule's working tree, which is what a check would actually read.
+
+### The repair — declined, not extended
+
+Submodule support is not attempted. A directory-like covered input is
+refused **before any open is attempted**, by its attributes rather than
+by the error code it happens to produce:
+
+```python
+if (attributes != _INVALID_FILE_ATTRIBUTES
+        and attributes & _FILE_ATTRIBUTE_DIRECTORY):
+    refused.append(f"{relative} (directory-like covered input; submodule and "
+                   "gitlink semantics are not demonstrated by this boundary)")
+    continue
+```
+
+The `FILE_FLAG_BACKUP_SEMANTICS` retry is gone from `acquire` entirely.
+The flag survives in one place only, `volume_serial_of`, which opens the
+repository root, reads its serial and closes it immediately — it holds
+nothing and appends nothing.
+
+**There is now no path that appends a handle without identifying it.**
+The single `self._handles.append(handle)` is followed immediately by
+`self._identify(...)`, and a problem from it is a refusal.
+
+### The invariant, asserted rather than argued
+
+`locked_inputs` and `identified_objects` describe the same domain, so
+they have to agree. That is now checked twice, on the principle this
+project already paid for in ADR-0025: one rule, and both ends derive
+from it.
+
+- **Producer.** Before returning, `acquire` computes
+  `len(self._handles) - len(identities)` and, if it is not zero, appends
+  a refusal that says so. Unreachable through the branches above, and
+  present precisely because it was reachable once.
+- **Consumer.** `classify_observation` refuses a lock whose
+  `fully_identified` is false with `UNPROTECTED`, whatever `enforced`
+  says. A hand-built inconsistent outcome cannot get past it either, and
+  a test builds one to prove it.
+- **Bundle.** `protection.fully_identified` is recorded, so a reader can
+  check the invariant without re-deriving it.
+
+The other `continue` in the loop — `ERROR_FILE_NOT_FOUND` on a tracked
+path deleted from the working tree — appends no handle and so cannot
+break the invariant. There is nothing to open and nothing to mutate, and
+if such a path reappears during the run the write observer reports it,
+because the path is in the covered set. The two halves cover each other
+here as everywhere else.
+
+### Ancestor reparse points
+
+The per-path check asks `GetFileAttributesW` about the target, which
+cannot see a junction or mount point in an ANCESTOR directory. The answer
+is not another attribute query: it is the `VolumeSerialNumber` that comes
+back inside `FILE_ID_INFO` for every protected object. The root's serial
+is read once from a handle on the root itself, and **an object whose
+serial is not that serial is refused**:
+
+```
+<path> (object is on volume <serial>, not the probed volume <serial>)
+```
+
+A junction above a covered path that stays on the probed volume moves the
+path and not the guarantee: the object is identified, its serial matches,
+its final path resolves to what the lock holds, and writing through the
+REAL path is refused by the share mode. That case is a test, built with
+`mklink /J`. A junction that crosses to another volume is refused; that
+one is tested by injecting the expected serial, because this machine has
+exactly one volume — the same device used for the ReFS and network
+refusals, and for the same reason.
+
+Reading the serial per covered input turned a 0.5 s acquisition into
+7.4 s, so it is read once and cached: 761 inputs locked and identified in
+**0.66 s**.
+
+### Tests
+
+Seven added:
+
+- a directory covered input is refused before it is opened, and the
+  invariant still holds in the refusal;
+- a directory handle cannot pass as a protected input — through
+  `run_capture`: `UNPROTECTED`, exit 6, zero checks, side-effect file
+  absent;
+- **a real submodule**, created with `git submodule add` from a local
+  URI, whose gitlink is a covered path: refused, zero checks;
+- an enforced outcome identifies every handle it holds;
+- an outcome holding an unnamed handle is not protection — built by hand,
+  refused by the consumer;
+- an input on another volume is refused;
+- a covered file under an ancestor junction stays on the probed volume,
+  is identified, and cannot be written through its real path.
+
+### Mutation check
+
+**MF22** restores the defect verbatim, in three edits at once, because
+removing any one of them alone would not reproduce it: the directory
+refusal is disabled, the `FILE_FLAG_BACKUP_SEMANTICS` retry with its
+unidentified `append` is put back, and the producer-side invariant is
+switched off. The suite goes red. Twenty-two mutants now, none survived.
+
+### What is still not closed
+
+- **F-14 remains OPEN.** Five reviews, five findings this unit's own
+  tests did not have.
+- **Submodules are refused, not supported.** A repository with a gitlink
+  cannot produce valid evidence through this capture until the objects
+  inside the submodule's working tree are locked and identified too.
+- Everything named in the previous four addenda stands: attributes can
+  still change on a covered input; `.git/` is counted rather than judged,
+  which is F-17; the boundary is Windows on a local `fixed` NTFS volume;
+  ReFS is a candidate, not a guarantee.
+- **F-15..F-18 remain open and untouched.**

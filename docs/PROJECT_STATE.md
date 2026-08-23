@@ -3,7 +3,7 @@
 **Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION; THE PROBE HAS A CALLER; MULTI-CREDENTIAL ROTATION
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
-**Last update:** 2026-08-23 (F-34 closed; F-14 repaired five times and still open; the stale lines below are F-19..F-32, still open)
+**Last update:** 2026-08-23 (F-34 closed; F-14 repaired six times and still open; the stale lines below are F-19..F-32, still open)
 
 ## Kernel hardening (post-Phase -1)
 
@@ -554,11 +554,39 @@ bundle, then move the string.
 **The demonstrated domain: Windows, local volume, `fixed`, `NTFS`. ReFS
 is a candidate extension pending real validation, not a guarantee.**
 
-**F-14 is still NOT closed.** Repaired five times now, tested (87 tests,
-7 subtests) and mutation-checked (twenty-one mutants, none survived), it
-awaits the FINAL independent review. Four reviews have each found
-something this unit's own tests and mutants did not. It closes when a
-review returns without findings.
+**Fifth independent review (2026-08-23): FAIL PARCIAL — ALTA.** The main
+repair and the evidence over the real tree were accepted. One fail-open
+path remained, in the place claiming the strongest guarantee: a covered
+input that is a DIRECTORY — a submodule gitlink — made `CreateFileW` fail
+with ERROR_ACCESS_DENIED, was reopened with `FILE_FLAG_BACKUP_SEMANTICS`,
+appended to the handle list and never passed to `_identify`. It counted
+towards `locked_inputs`, never reached `identities`, and the outcome
+could still say `enforced: true` — while every bundle carried this
+module's own line, "every protected handle is recorded by FILE_ID_INFO".
+A handle on a submodule's directory also proves nothing about the bytes
+inside it that a check would read.
+
+Declined rather than extended. A directory-like covered input is refused
+BEFORE any open, by its attributes rather than by the error it happens to
+produce; the `FILE_FLAG_BACKUP_SEMANTICS` retry is gone from `acquire`
+(the flag survives only in `volume_serial_of`, which opens the root,
+reads and closes); and there is now no path that appends a handle without
+identifying it. The invariant is asserted rather than argued: the
+producer refuses when handles and identities disagree, the consumer
+refuses such an outcome whatever `enforced` says, and the bundle records
+`protection.fully_identified`.
+
+The ancestor reparse point is closed by the same data: the
+`VolumeSerialNumber` inside `FILE_ID_INFO` must equal the root's, so a
+junction or mount point above a covered path cannot put the input on a
+volume that was never demonstrated. Read once and cached — per-input it
+cost 7.4 s, cached 0.66 s for 761 inputs.
+
+**F-14 is still NOT closed.** Repaired six times now, tested (94 tests,
+7 subtests) and mutation-checked (twenty-two mutants, none survived), it
+awaits a SIXTH independent review. Five reviews have each found something
+this unit's own tests and mutants did not. It closes when a review
+returns without findings.
 
 **Overlap recorded, not claimed:** F-15 (the unused primitive) is what
 this script now uses; F-16 (capture order) no longer affects the binding

@@ -437,6 +437,19 @@ def classify_observation(
             len(observation.events), 0, tuple(lock.refused), len(covered),
             tuple(allowed), lock.reason or "the covered inputs were not made unwritable",
             protection=protection, locked_identity=prepared)
+    if lock is not None and not lock.fully_identified:
+        # The producer can no longer build this, and the consumer refuses
+        # it anyway. `locked_inputs` and `identified_objects` describe the
+        # same domain, so an outcome that says enforced while holding a
+        # handle it cannot name is not protection — the fifth review found
+        # exactly one such path.
+        return Boundary(
+            ObservationVerdict.UNPROTECTED, observation.mechanism,
+            len(observation.events), 0,
+            (f"{lock.locked} handle(s) held, {len(lock.identities)} identified",),
+            len(covered), tuple(allowed),
+            "an enforced lock held handles that were never identified",
+            protection=protection, locked_identity=prepared)
     if drift:
         # The tree moved between the fingerprint and the moment the inputs
         # became unwritable. Nothing ran, and the identity in the bundle

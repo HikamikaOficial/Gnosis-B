@@ -29,6 +29,12 @@ semantics all of this rests on.
 MF21 is the fourth review's: the accepted domain must not be wider than
 the demonstrated one.
 
+MF22 is the fifth review's: a directory-like covered input — a submodule
+gitlink is the realistic case — was reopened with a flag that makes a
+directory openable, counted as a locked handle, and never identified. It
+restores all three halves of that path at once, because removing any one
+of them alone would not reproduce the defect.
+
     PYTHONUTF8=1 .venv/Scripts/python.exe scripts/mutation_check_f14.py
 
 Writes the transcript to stdout and, with `--out <path>`, to a file an
@@ -279,6 +285,35 @@ MUTANTS: list[Mutant] = [
         [(LOCK,
           '    _SUPPORTED_FILESYSTEMS = frozenset({"NTFS"})',
           '    _SUPPORTED_FILESYSTEMS = frozenset({"NTFS", "ReFS"})')],
+    ),
+    # MF22 is the FIFTH independent review's finding, verbatim: a
+    # directory-like covered input reopened with FILE_FLAG_BACKUP_SEMANTICS,
+    # appended to the handle list, and never identified.
+    Mutant(
+        "MF22", "a directory-like covered input is reopened with "
+                "FILE_FLAG_BACKUP_SEMANTICS and counted as locked without "
+                "ever being identified",
+        [(LOCK,
+          """                if (attributes != _INVALID_FILE_ATTRIBUTES
+                        and attributes & _FILE_ATTRIBUTE_DIRECTORY):""",
+          """                if False:"""),
+         (LOCK,
+          """                    refused.append(f"{relative} (error {error})")
+                    continue""",
+          """                    if error == 5:
+                        handle = _kernel32.CreateFileW(
+                            str(target), _GENERIC_READ, _FILE_SHARE_READ, None,
+                            _OPEN_EXISTING, _FILE_FLAG_BACKUP_SEMANTICS, None)
+                        if handle and handle != _INVALID_HANDLE_VALUE:
+                            self._handles.append(handle)
+                            continue
+                    refused.append(f"{relative} (error {error})")
+                    continue"""),
+         (LOCK,
+          """            unidentified = (len(self._handles) - held_before) - len(identities)
+            if unidentified > 0:""",
+          """            unidentified = 0
+            if False:""")],
     ),
 ]
 
