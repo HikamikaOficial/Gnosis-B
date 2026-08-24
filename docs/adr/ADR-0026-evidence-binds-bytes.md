@@ -1626,6 +1626,40 @@ tests.
 - Everything named in the previous six addenda stands.
 - **F-15..F-18 remain open and untouched.**
 
+### Evidence
+
+`.gnosis/evidence/20260824T200836Z/` — **992 passed, 67 subtests**, mypy
+strict clean over 58 source files, ruff at 19 against a baseline of 19.
+Clean tree at `04b851e`.
+
+```json
+"boundary": {
+  "verdict": "CLEAN", "observed_events": 64, "violations": [],
+  "allowed_events": 24, "machinery_events": 40, "covered_files": 2942,
+  "out_of_scope": ["external/repositories/", ".gnosis/lab/…", …],
+  "allowed_writes": [".git/", "__pycache__", …, ".codegraph"],
+  "protection": { "enforced": true, "locked_inputs": 2942,
+                  "identified_objects": 2942, "fully_identified": true }
+}
+```
+
+**2,942 covered inputs, up from 775.** The difference is the ignored
+files that were never inside the boundary: 2,130 of them are `.venv`.
+Every one is locked and identified, `fully_identified` is true, and both
+declared lists are in the bundle for a reviewer to argue with.
+
+Four artifacts beyond the gate transcripts:
+
+- `ignored-input-attack-before.txt` — the bypass as it was: check reads
+  `MALICIOUS`, `boundary: CLEAN`, `evidence_valid: true`, exit 0.
+- `ignored-input-attack-after.txt` — the same script against the repair:
+  the write is `REFUSED PermissionError`, the check reads `ORIGINAL`, and
+  the attempt is still an observed event on a covered path, so
+  `INPUTS_MUTATED`, exit 4.
+- `mutation-check.f14-round10.txt` — twenty-five mutants, none survived.
+- `probe-f14-boundary.txt` — the ten earlier break attempts re-run
+  against this commit, unchanged.
+
 ### Review-package procedure, corrected
 
 `F14_REVIEW_ROUND7.zip` carried 39 files and `FILE_SHA256.txt` listed 37:

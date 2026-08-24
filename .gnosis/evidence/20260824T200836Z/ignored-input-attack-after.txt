@@ -1,0 +1,29 @@
+F-14 — A GIT-IGNORED FILE THAT A CHECK ACTUALLY READS
+==============================================================================
+tree:   92d35769de7acc4172e142257e743ed2536ab843
+python: 3.12.14
+
+[1] IS THE IGNORED INPUT INSIDE THE BOUNDARY?
+  covered paths                     : ['.gitignore', 'a.txt', 'ignored-input.txt']
+  ignored-input.txt covered         : True
+  present in the fingerprint        : False
+
+[2] THE RUN
+  bytes before the check            : ORIGINAL
+  the meddler write                : REFUSED PermissionError
+  what the CHECK read               : ORIGINAL
+  bytes after the restore           : ORIGINAL
+  PRE == POST                       : True
+  locked_inputs                     : 3
+  identified_objects                : 3
+  observed events                   : 36
+  violations                        : ['modified: ignored-input.txt']
+  boundary                          : INPUTS_MUTATED
+  evidence_valid                    : False
+  all_passed                        : False
+  exit_code                         : 4
+
+[3] VERDICT
+  a check consumed MALICIOUS        : False
+  the bundle called itself evidence : False
+  BYPASS REPRODUCED                 : False
