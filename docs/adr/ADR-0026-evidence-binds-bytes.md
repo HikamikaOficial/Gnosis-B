@@ -1394,6 +1394,39 @@ the capture did (`UNPROTECTED`, exit 6, zero checks). The transcript
 still ends with `BROKEN: B0`, which remains the reconstructed
 observation-only design and is there on purpose.
 
+### Evidence
+
+`.gnosis/evidence/20260824T032013Z/` — **977 passed, 67 subtests**, mypy
+strict clean over 58 source files, ruff at 19 findings against a baseline
+of 19. Clean tree at `29efab4`.
+
+```json
+"tree_identity": { "binding": "BOUND", "identical": true,
+                   "pre": {"digest": "c613bb70…eba009"} },
+"boundary": {
+  "verdict": "CLEAN", "observed_events": 65, "violations": [],
+  "allowed_events": 15, "machinery_events": 40, "covered_files": 775,
+  "locked_identity": { "digest": "c613bb70…eba009" },
+  "protection": { "enforced": true, "locked_inputs": 775,
+                  "identified_objects": 775, "fully_identified": true,
+                  "volume": { "supported": true, "drive_type": "fixed",
+                              "filesystem": "NTFS" } } }
+```
+
+775 covered inputs, every one of them reached through a chain with no
+reparse point in it, locked and identified; 65 observed events and no
+violation, now that a structural directory event would be one.
+
+Two artifacts beyond the gate transcripts, added after the capture
+returned; `SUMMARY.json` and `input-identities.json` are as the capture
+wrote them:
+
+- `mutation-check.f14-round8.txt` — twenty-four mutants, none survived.
+- `probe-f14-boundary.txt` — ten cases against this commit. Case J
+  records both halves of the answer: `the OS does NOT prevent it: True`
+  — the junction really does retarget while the object is held — and
+  `boundary: UNPROTECTED, checks that ran: 0, exit_code: 6`.
+
 ### What is still not closed
 
 - **F-14 remains OPEN.** Six reviews, six findings this unit's own tests
