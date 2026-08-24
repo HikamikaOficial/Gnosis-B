@@ -13,6 +13,14 @@
   memory-mapped view notifies nothing, so a check consumed mutated bytes
   inside a bundle that certified itself. Repaired in addendum 2 by making
   the covered inputs unwritable instead of merely watched.
+- Independent review, round 6 (2026-08-24): **FAIL PARCIAL — ALTA.** The
+  reparse check asked whether the TARGET was a reparse point and never
+  whether the PATH used to reach it could be redirected. Measured: a
+  junction above a covered input was retargeted to another directory on
+  the same volume while a handle on the object was held, and the lexical
+  path read the other directory. The classifier also forgave every
+  directory event because the path was a directory again by the time it
+  looked. Both refused in addendum 6.
 - Independent review, round 5 (2026-08-23): **FAIL PARCIAL — ALTA.** The
   main repair and the evidence were accepted; one fail-open path
   remained. A directory-like covered input — a submodule gitlink — was
@@ -31,7 +39,7 @@
   object behind each handle, the window while the locks are taken, and
   the volume the guarantee rests on. All four answered by measurement in
   addendum 3.
-- **A sixth independent review is OUTSTANDING**; F-14 stays OPEN in
+- **A seventh independent review is OUTSTANDING**; F-14 stays OPEN in
   `docs/V1_COMPLIANCE_MATRIX.md` until one returns without findings.
   Three reviews have now found something this unit's own tests and
   mutants did not.
@@ -41,13 +49,16 @@
   has been run on a real volume of that kind. Every other drive type,
   every other filesystem and every UNC path is refused before any input
   is opened.
-- Tests: `tests/test_evidence_binding.py` — **94 tests, 7 subtests**
-  (36, then 20, then 9, then 19, then 3, then 7).
-- Mutation check: `scripts/mutation_check_f14.py` — **twenty-two mutants,
-  none survived** (nine, four, three, four, one, one), declared as data
-  so a reviewer re-runs the claim rather than reading it.
-- Break attempts: `scripts/probe_f14_boundary.py` — nine cases, committed
-  and re-runnable, containing the defect and its closure side by side.
+- Tests: `tests/test_evidence_binding.py` — **103 tests, 7 subtests**
+  (36, then 20, then 9, then 19, then 3, then 7, then 10 with one
+  rewritten).
+- Mutation check: `scripts/mutation_check_f14.py` — **twenty-four
+  mutants, none survived** (nine, four, three, four, one, one, two),
+  declared as data so a reviewer re-runs the claim rather than reading
+  it.
+- Break attempts: `scripts/probe_f14_boundary.py` — ten cases in four
+  groups, committed and re-runnable, containing the defect and its
+  closure side by side.
 - Evidence: `.gnosis/evidence/20260822T212531Z/` — **910 passed, 62
   subtests**, mypy strict clean over 56 source files, ruff at **19
   findings against a baseline of 19** (0 added). Captured against a CLEAN
@@ -1242,6 +1253,154 @@ wrote them:
   cannot produce valid evidence through this capture until the objects
   inside the submodule's working tree are locked and identified too.
 - Everything named in the previous four addenda stands: attributes can
+  still change on a covered input; `.git/` is counted rather than judged,
+  which is F-17; the boundary is Windows on a local `fixed` NTFS volume;
+  ReFS is a candidate, not a guarantee.
+- **F-15..F-18 remain open and untouched.**
+
+## Sixth independent review addendum — 2026-08-24: **FAIL PARCIAL — ALTA**
+
+The fifth repair was accepted in full: no `append` without `_identify`,
+`fully_identified` in producer, consumer and bundle, 761 = 761 = 761,
+968 tests, 22/22 mutants, gitlinks refused. None of that is reopened
+here.
+
+What the review found is that the reparse check had been asking the
+wrong question. It asked whether the TARGET was a reparse point. It never
+asked whether the PATH USED TO REACH IT could be pointed somewhere else.
+
+### The attack, measured before it was fixed
+
+```
+repo\linked -> dirA           lock: enforced=True over dirA\under.py
+rmdir linked                  succeeded WHILE a handle on dirA\under.py was held
+mklink /J linked dirB         succeeded
+read repo\linked\under.py  -> SWAPPED-B
+rmdir linked; mklink /J linked dirA
+read repo\linked\under.py  -> ORIGINAL-A       (the tree looks untouched)
+```
+
+Every line of that is a run on this machine, not a hypothesis. The lock
+held the right object and a check reading the lexical path got a
+different one. A junction is a directory entry: holding a handle on a
+file underneath it protects the FILE, not the NAME. The
+`VolumeSerialNumber` check cannot see it either — `dirA` and `dirB` are
+on the same NTFS volume, so both objects carry the same serial.
+
+The review also found the second half, in `classify_observation`:
+
+```python
+elif (repo / path).is_dir():
+    allowed_count += 1
+```
+
+Any directory event was forgiven — `added`, `removed`, `renamed_from`,
+`renamed_to` — purely because the path happened to be a directory again
+by the time the classifier looked. A junction removed and recreated
+against another target leaves exactly that shape. The attack would have
+been observed and then excused.
+
+### The repair — refuse the chain, judge the structure
+
+**Refuse the chain.** `reparse_in_chain()` walks from the drive down to a
+path and returns the first component that can redirect resolution; an
+unreadable component counts as one, because a link that cannot be
+examined is not a link that can be trusted. It is applied twice:
+
+- once to the repository root and every ancestor above it, at the start
+  of `acquire`. If the root is reached through a redirection, every
+  covered path inherits it and nothing below can be trusted, so the
+  capture stops with `enforced: false`, zero handles taken.
+- once per covered input, over every directory component between the
+  root and the file, cached per directory because hundreds of inputs
+  share a handful of ancestors. The refusal names the component:
+  `<path> (ancestor <dir> is a reparse point; the path used to reach this
+  input can be redirected while the object stays locked)`.
+
+Junction support is not attempted. It is declined, exactly as submodules
+are: protecting one means protecting the resolution chain as well as the
+object, and that is a different architecture from the one this unit has
+demonstrated.
+
+**Judge the structure.** The classifier now forgives exactly one thing
+about a directory, and it forgives it because it is a fact about the
+filesystem rather than a concession:
+
+```python
+elif event.action == "modified" and (repo / path).is_dir():
+```
+
+A directory's timestamp moves whenever its entries move, and the entries
+produce their own events. Creating, removing or renaming a directory is
+a structural change to the tree and goes through the ordinary rules:
+allowed prefix, machinery, git-ignore, otherwise a violation.
+
+The measured cost of the chain walk is nothing: 775 covered inputs
+locked, identified and chain-checked in **0.52 s** warm.
+
+### One existing test changed, and its assertion was the defect
+
+`test_a_covered_file_under_an_ancestor_junction_is_still_on_the_volume`
+asserted that such an input WAS accepted — "the junction redirects the
+path and not the guarantee". That sentence is now known to be false, and
+it is renamed
+`test_a_covered_file_under_an_ancestor_junction_is_refused` with the
+opposite assertion. The volume-serial property it also covered is
+unaffected and is still tested by the injected-serial case.
+
+### Tests
+
+Ten added, in two classes.
+
+`TestAnAncestorCannotRedirectTheInput`:
+
+- the retarget attack, end to end: the capture refuses
+  (`UNPROTECTED`, exit 6, zero checks, side-effect file absent) **and**
+  the same test then demonstrates that the retarget really is possible on
+  this platform while a handle on the object is held, so the refusal is
+  load-bearing rather than defensive decoration;
+- a repository root reached through a junction is refused before a single
+  handle is taken;
+- a plain chain is still accepted, including a nested directory;
+- the chain walker names the component that redirects.
+
+`TestStructuralDirectoryEventsAreJudged`:
+
+- a directory removed and recreated is a violation;
+- a directory renamed and restored is a violation;
+- a directory whose timestamp moved is still forgiven — the false
+  positive the branch exists to avoid;
+- an ignored directory created during a run is still allowed;
+- a directory created and removed inside a check is caught end to end
+  (`INPUTS_MUTATED`, exit 4).
+
+### Mutation check
+
+Two added, one per half, and both go red:
+
+| Mutant | Result |
+|---|---|
+| MF23 an ancestor junction is accepted again (root chain and per-path check both disabled) | **red** |
+| MF24 a directory event is forgiven for being a directory | **red** |
+
+Twenty-four mutants now, none survived. MF1..MF22 are unchanged.
+
+### The probe grows a fourth group
+
+`scripts/probe_f14_boundary.py` now runs ten cases. Group 4 is case J:
+the junction retarget, printing whether the OS prevented it (it does
+not), what the lexical path read after the swap (`SWAPPED-B`), and what
+the capture did (`UNPROTECTED`, exit 6, zero checks). The transcript
+still ends with `BROKEN: B0`, which remains the reconstructed
+observation-only design and is there on purpose.
+
+### What is still not closed
+
+- **F-14 remains OPEN.** Six reviews, six findings this unit's own tests
+  did not have.
+- **Junctions, mount points and symlinks anywhere in the resolution
+  chain are refused, not supported**, alongside submodules.
+- Everything named in the previous five addenda stands: attributes can
   still change on a covered input; `.git/` is counted rather than judged,
   which is F-17; the boundary is Windows on a local `fixed` NTFS volume;
   ReFS is a candidate, not a guarantee.

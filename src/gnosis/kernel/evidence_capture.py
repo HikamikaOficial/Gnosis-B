@@ -427,6 +427,12 @@ def classify_observation(
     is a path that is neither explicitly allowed nor ignored by git —
     that second case is how a file created and deleted inside the run
     gets caught, since it is in neither fingerprint.
+
+    Directories are judged the same way as anything else, with one
+    exception that is a fact about the filesystem rather than a
+    concession: a directory's own timestamp moves when its entries move,
+    so a `modified` event on a directory is allowed. Creating, removing
+    or renaming one is not.
     """
     allowed = (BARRIER_DIR, *allowed_writes)
     protection: Mapping[str, Any] = lock.to_dict() if lock is not None else {}
@@ -481,10 +487,14 @@ def classify_observation(
             machinery += 1
         elif _is_allowed_path(path, allowed):
             allowed_count += 1
-        elif (repo / path).is_dir():
-            # A directory's own timestamp moves when its entries move. The
-            # entries produce their own events; the container is not a
-            # covered input.
+        elif event.action == "modified" and (repo / path).is_dir():
+            # A directory's own timestamp moves when its entries move, and
+            # the entries produce their own events, so THAT is forgiven.
+            # Nothing else about a directory is: the sixth review pointed
+            # out that this branch used to swallow added/removed/renamed
+            # too, purely because the path happened to be a directory
+            # again by the time the classifier looked. A junction removed
+            # and recreated against another target is exactly that shape.
             allowed_count += 1
         else:
             unknown.setdefault(path, event.action)

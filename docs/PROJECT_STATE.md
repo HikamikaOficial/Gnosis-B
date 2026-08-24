@@ -3,7 +3,7 @@
 **Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION; THE PROBE HAS A CALLER; MULTI-CREDENTIAL ROTATION
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
-**Last update:** 2026-08-23 (F-34 closed; F-14 repaired six times and still open; the stale lines below are F-19..F-32, still open)
+**Last update:** 2026-08-24 (F-34 closed; F-14 repaired seven times and still open; the stale lines below are F-19..F-32, still open)
 
 ## Kernel hardening (post-Phase -1)
 
@@ -582,11 +582,37 @@ junction or mount point above a covered path cannot put the input on a
 volume that was never demonstrated. Read once and cached — per-input it
 cost 7.4 s, cached 0.66 s for 761 inputs.
 
-**F-14 is still NOT closed.** Repaired six times now, tested (94 tests,
-7 subtests) and mutation-checked (twenty-two mutants, none survived), it
-awaits a SIXTH independent review. Five reviews have each found something
-this unit's own tests and mutants did not. It closes when a review
-returns without findings.
+**Sixth independent review (2026-08-24): FAIL PARCIAL — ALTA.** The
+reparse check asked whether the TARGET was a reparse point and never
+whether the PATH used to reach it could be redirected. Measured on this
+machine: `repo\linked -> dirA`, lock enforced over `dirA\under.py`,
+then `rmdir linked` and `mklink /J linked dirB` both SUCCEEDED while a
+handle on the object was held, and `repo\linked\under.py` read
+`SWAPPED-B`. Restoring the junction made the tree look untouched. A
+junction is a directory entry: holding the file protects the file, not
+the name, and the volume serial cannot see it because both directories
+are on the same NTFS volume. The second half was in
+`classify_observation`, which forgave every directory event — added,
+removed, renamed — purely because the path was a directory again by the
+time it looked, which is exactly what a junction removed and recreated
+leaves behind.
+
+Refused rather than supported. `reparse_in_chain()` walks from the drive
+down and returns the first component that can redirect; an unreadable
+component counts as one. It runs over the repository root and all its
+ancestors once, and over every directory between the root and each
+covered input, cached. One reparse point anywhere refuses the capture
+before a check runs. The classifier now forgives exactly one thing about
+a directory, `modified`, because its timestamp moves when its entries
+move; creating, removing or renaming one is judged like anything else.
+Cost of the chain walk: 775 inputs locked, identified and checked in
+0.52 s warm.
+
+**F-14 is still NOT closed.** Repaired seven times now, tested (103
+tests, 7 subtests) and mutation-checked (twenty-four mutants, none
+survived), it awaits a SEVENTH independent review. Six reviews have each
+found something this unit's own tests and mutants did not. It closes when
+a review returns without findings.
 
 **Overlap recorded, not claimed:** F-15 (the unused primitive) is what
 this script now uses; F-16 (capture order) no longer affects the binding

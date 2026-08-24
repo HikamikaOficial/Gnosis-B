@@ -71,6 +71,29 @@ directory — a junction or a mount point above the covered path, which the
 per-path reparse check cannot see — from placing an input on a volume
 whose semantics were never demonstrated.
 
+A sixth review found that the per-path reparse check was looking at the
+wrong thing. It asked whether the TARGET was a reparse point; it never
+asked whether the PATH USED TO REACH IT could be redirected. Measured on
+this machine, with the previous code:
+
+    repo\\linked -> dirA          lock: enforced=True over dirA\\a.py
+    rmdir linked; mklink /J linked dirB   -> succeeded WHILE the handle
+                                             on dirA\\a.py was held
+    read repo\\linked\\a.py       -> SWAPPED-B
+    rmdir linked; mklink /J linked dirA   -> the tree looks untouched
+
+The lock held the right object and the check read a different one,
+because a junction is a directory entry and holding a handle on a file
+underneath it protects the file, not the name. The volume serial does not
+help: dirA and dirB are on the same NTFS volume and their objects carry
+the same serial.
+
+So the whole resolution chain has to be plain. Every directory component
+between the repository root and a covered input is checked, the root's
+own chain up to the drive is checked once, and a single reparse point
+anywhere in either refuses the capture before a check runs. Junction
+support is not attempted; it is declined, exactly as submodules are.
+
 What this does NOT cover, stated rather than implied:
 
 - **Paths that do not exist yet.** A file created during the run cannot
@@ -82,6 +105,9 @@ What this does NOT cover, stated rather than implied:
 - **File attributes.** `chmod` still succeeds. It cannot grant write
   access while the share mode stands, and it is reported by the observer.
 - **`.git` and ignored files**, which are not covered inputs.
+- **Any path reached through a junction, mount point or symlink.**
+  Refused, not supported. Protecting one means protecting the resolution
+  chain as well as the object, and that is a different architecture.
 - **Submodules and any other directory-like covered entry.** Refused, not
   supported. Supporting one means locking and identifying the objects
   inside its working tree, and that has not been demonstrated.
@@ -342,6 +368,28 @@ if _IS_WINDOWS:
                 "FILE_ID_INFO with local share-mode semantics")
         return VolumeCapabilities(True, drive_type, filesystem)
 
+    def reparse_in_chain(path: Path) -> str | None:
+        """The first component of `path` that can redirect resolution.
+
+        Walks from the drive down to `path` itself. An unreadable
+        component counts as a redirection: a link that cannot be examined
+        is not a link that can be trusted.
+        """
+        chain: list[Path] = []
+        current = path
+        while True:
+            chain.append(current)
+            if current.parent == current:
+                break
+            current = current.parent
+        for component in reversed(chain):
+            attributes = _kernel32.GetFileAttributesW(str(component))
+            if attributes == _INVALID_FILE_ATTRIBUTES:
+                return f"{component} (attributes unreadable)"
+            if attributes & _FILE_ATTRIBUTE_REPARSE_POINT:
+                return f"{component} (reparse point)"
+        return None
+
     def probe_volume(path: Path) -> VolumeCapabilities:
         """Ask the volume whether it provides what the boundary relies on."""
         resolved = str(path.resolve())
@@ -396,6 +444,19 @@ if _IS_WINDOWS:
             # input turned a 0.5s acquisition into a 7s one.
             self.expected_serial = serial
 
+            root_redirect = reparse_in_chain(self.root)
+            if root_redirect is not None:
+                # If the root is reached through a redirection, every
+                # covered path inherits it and nothing below can be
+                # trusted to resolve to the object that was locked.
+                return LockOutcome(
+                    False, 0, tuple(sorted(paths)), MECHANISM,
+                    f"the repository root is reached through a redirection: "
+                    f"{root_redirect}; the boundary does not protect a resolution "
+                    "chain it does not own",
+                    volume=volume)
+            ancestors: dict[str, str | None] = {}
+
             refused: list[str] = []
             identities: dict[str, str] = {}
             # Counted from here, not from zero: a caller may acquire in
@@ -405,6 +466,10 @@ if _IS_WINDOWS:
             held_before = len(self._handles)
             for relative in sorted(paths):
                 target = self.root / relative
+                redirect = self._redirectable_ancestor(relative, ancestors)
+                if redirect is not None:
+                    refused.append(redirect)
+                    continue
                 attributes = _kernel32.GetFileAttributesW(str(target))
                 if (attributes != _INVALID_FILE_ATTRIBUTES
                         and attributes & _FILE_ATTRIBUTE_REPARSE_POINT):
@@ -463,6 +528,37 @@ if _IS_WINDOWS:
                     identities=identities, volume=volume)
             return LockOutcome(True, len(self._handles), (), MECHANISM,
                                identities=identities, volume=volume)
+
+        def _redirectable_ancestor(self, relative: str,
+                                   cache: dict[str, str | None]) -> str | None:
+            """Refuse an input whose PATH can be pointed somewhere else.
+
+            The sixth review's finding. Holding a handle on the object
+            protects the object; it does not stop the junction above it
+            from being removed and recreated against a different
+            directory while a check reads the lexical path. Cached per
+            directory: hundreds of covered inputs share a handful of
+            ancestors.
+            """
+            current = self.root
+            for part in relative.replace("\\", "/").split("/")[:-1]:
+                current = current / part
+                key = str(current).lower()
+                if key not in cache:
+                    attributes = _kernel32.GetFileAttributesW(str(current))
+                    if attributes == _INVALID_FILE_ATTRIBUTES:
+                        cache[key] = "attributes unreadable"
+                    elif attributes & _FILE_ATTRIBUTE_REPARSE_POINT:
+                        cache[key] = "reparse point"
+                    else:
+                        cache[key] = None
+                problem = cache[key]
+                if problem is not None:
+                    return (f"{relative} (ancestor "
+                            f"{current.relative_to(self.root).as_posix()} is a "
+                            f"{problem}; the path used to reach this input can be "
+                            "redirected while the object stays locked)")
+            return None
 
         def _identify(self, relative: str, target: Path, handle: int,
                       identities: dict[str, str]) -> str | None:

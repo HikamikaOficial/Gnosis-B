@@ -61,10 +61,12 @@ from gnosis.kernel.input_lock import (
     classify_volume,
     create_input_lock,
     probe_volume,
+    reparse_in_chain,
 )
 from gnosis.kernel.write_observer import (
     Observation,
     UnavailableObserver,
+    WriteEvent,
     create_write_observer,
 )
 
@@ -1717,10 +1719,12 @@ class TestNoProtectedHandleEscapesIdentification(unittest.TestCase):
             self.assertEqual(outcome.identities, {})
 
     @WINDOWS_ONLY
-    def test_a_covered_file_under_an_ancestor_junction_is_still_on_the_volume(self):
-        # The benign half of the same question: a junction that stays on
-        # the probed volume redirects the path and not the guarantee, so
-        # the object is identified, its serial matches, and it is locked.
+    def test_a_covered_file_under_an_ancestor_junction_is_refused(self):
+        # This test asserted the opposite until the sixth review, and the
+        # thing it asserted was the defect: the object was identified and
+        # locked, its serial matched, and the PATH used to reach it could
+        # still be pointed at a different directory. Holding the object
+        # does not hold the name.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = _make_repo(root)
@@ -1728,26 +1732,24 @@ class TestNoProtectedHandleEscapesIdentification(unittest.TestCase):
             real.mkdir()
             (real / "under.txt").write_text("via a junction\n", encoding="utf-8")
             link = repo / "linked"
-            # errors="replace": mklink answers in the console codepage,
-            # which is not UTF-8 on this machine.
-            made = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(real)],
-                                  capture_output=True, text=True, errors="replace",
-                                  check=False)
-            if made.returncode != 0:  # pragma: no cover - needs the privilege
-                self.skipTest(f"junctions are not available here: {made.stderr.strip()}")
+            if not _junction(link, real):  # pragma: no cover - needs the privilege
+                self.skipTest("junctions are not available here")
 
             lock = WindowsInputLock(repo)
             try:
                 outcome = lock.acquire(["a.txt", "linked/under.txt"])
-                self.assertTrue(outcome.enforced, outcome.refused)
-                self.assertIn("linked/under.txt", outcome.identities)
-                serials = {value.split(":")[0] for value in outcome.identities.values()}
-                self.assertEqual(len(serials), 1, "one volume, one serial")
-                with self.assertRaises(PermissionError):
-                    (real / "under.txt").write_text("through the real path\n",
-                                                    encoding="utf-8")
             finally:
                 lock.release()
+                link.rmdir()
+
+            self.assertFalse(outcome.enforced)
+            self.assertNotIn("linked/under.txt", outcome.identities)
+            self.assertTrue(any("ancestor linked is a reparse point" in item
+                                for item in outcome.refused), outcome.refused)
+            # The plain sibling is not collateral damage: it is refused
+            # only because the whole acquisition is, and it was never
+            # identified as protected on its own.
+            self.assertTrue(outcome.fully_identified)
 
 
 class _LockOver:
@@ -1762,6 +1764,227 @@ class _LockOver:
 
     def release(self) -> None:
         self._inner.release()
+
+
+def _junction(link: Path, target: Path) -> bool:
+    """A directory junction, which needs no elevation on Windows.
+
+    `errors="replace"`: mklink answers in the console codepage, which is
+    not UTF-8 on this machine.
+    """
+    made = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                          capture_output=True, text=True, errors="replace", check=False)
+    return made.returncode == 0
+
+
+class TestAnAncestorCannotRedirectTheInput(unittest.TestCase):
+    """Sixth review: the lock held the object and not the name.
+
+    A junction is a directory entry. A handle on a file underneath it
+    stops the FILE being written, renamed or deleted, and does nothing at
+    all about the junction, which can be removed and recreated against
+    another directory while a check reads the lexical path. Both
+    directories can sit on the same NTFS volume, so the file id's volume
+    serial cannot see it either.
+    """
+
+    @WINDOWS_ONLY
+    def test_the_retarget_attack_is_refused_before_any_check_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            first, second = root / "dirA", root / "dirB"
+            first.mkdir()
+            second.mkdir()
+            (first / "under.py").write_text("ORIGINAL-A\n", encoding="utf-8")
+            (second / "under.py").write_text("SWAPPED-B\n", encoding="utf-8")
+            link = repo / "linked"
+            if not _junction(link, first):  # pragma: no cover
+                self.skipTest("junctions are not available here")
+
+            try:
+                capture = run_capture(
+                    repo,
+                    [_script("open('ran.txt', 'w', encoding='utf-8').write('x')")],
+                    root / "staging",
+                    input_lock=lambda _: _LockOver(repo, ["a.txt", "linked/under.py"]))
+
+                self.assertIs(capture.boundary.verdict, ObservationVerdict.UNPROTECTED)
+                self.assertEqual(capture.exit_code, EXIT_INPUTS_UNPROTECTED)
+                self.assertEqual(capture.checks, ())
+                self.assertFalse((repo / "ran.txt").exists())
+                self.assertFalse(capture.evidence_valid)
+                self.assertFalse(capture.boundary.protection["enforced"])
+
+                # And the attack the refusal exists for is real on this
+                # platform, not hypothetical: the junction retargets while
+                # a handle on dirA/under.py is held, and the lexical path
+                # then reads the other directory.
+                held = WindowsInputLock(repo)
+                self.assertTrue(held.acquire(["a.txt"]).enforced)
+                try:
+                    keep = open(first / "under.py", "rb")  # noqa: SIM115
+                    try:
+                        link.rmdir()
+                        self.assertTrue(_junction(link, second))
+                        self.assertEqual(
+                            (link / "under.py").read_text(encoding="utf-8").strip(),
+                            "SWAPPED-B", "the retarget is possible on this platform")
+                        link.rmdir()
+                        self.assertTrue(_junction(link, first))
+                        self.assertEqual(
+                            (link / "under.py").read_text(encoding="utf-8").strip(),
+                            "ORIGINAL-A", "and it restores invisibly")
+                    finally:
+                        keep.close()
+                finally:
+                    held.release()
+            finally:
+                if link.exists():
+                    link.rmdir()
+
+    @WINDOWS_ONLY
+    def test_a_root_reached_through_a_junction_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            door = root / "door"
+            if not _junction(door, repo):  # pragma: no cover
+                self.skipTest("junctions are not available here")
+
+            lock = WindowsInputLock(door)
+            try:
+                outcome = lock.acquire(["a.txt"])
+            finally:
+                lock.release()
+                door.rmdir()
+
+            self.assertFalse(outcome.enforced)
+            self.assertEqual(outcome.locked, 0)
+            self.assertEqual(outcome.identities, {})
+            self.assertIn("reached through a redirection", outcome.reason or "")
+
+    @WINDOWS_ONLY
+    def test_a_plain_chain_is_still_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            (repo / "pkg").mkdir()
+            (repo / "pkg" / "deep.txt").write_text("deep\n", encoding="utf-8")
+
+            lock = WindowsInputLock(repo)
+            try:
+                outcome = lock.acquire(["a.txt", "pkg/deep.txt"])
+            finally:
+                lock.release()
+
+            self.assertTrue(outcome.enforced, outcome.refused)
+            self.assertEqual(set(outcome.identities), {"a.txt", "pkg/deep.txt"})
+
+    def test_the_chain_walker_names_the_component_that_redirects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real = root / "real"
+            real.mkdir()
+            link = root / "link"
+            if not _junction(link, real):  # pragma: no cover
+                self.skipTest("junctions are not available here")
+            try:
+                self.assertIsNone(reparse_in_chain(real))
+                found = reparse_in_chain(link / "deeper")
+                self.assertIsNotNone(found)
+                self.assertIn("reparse point", found or "")
+            finally:
+                link.rmdir()
+
+
+class TestStructuralDirectoryEventsAreJudged(unittest.TestCase):
+    """Sixth review, second half: `is_dir()` at the END forgave too much.
+
+    A directory's timestamp moves whenever its entries move, so a
+    `modified` event on one is noise. Creating, removing or renaming a
+    directory is not noise, and the classifier used to allow all four
+    actions purely because the path happened to be a directory again by
+    the time it looked — which is precisely what a junction removed and
+    recreated against another target leaves behind.
+    """
+
+    def _classify(self, repo: Path, events: tuple[WriteEvent, ...]) -> Boundary:
+        return classify_observation(
+            repo, Observation(True, True, events, "test"), frozenset({"a.txt"}), (),
+            LockOutcome(True, 1, (), "test", identities={"a.txt": "id"}))
+
+    def test_a_directory_removed_and_recreated_is_a_violation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_repo(Path(tmp))
+            (repo / "linked").mkdir()
+
+            boundary = self._classify(repo, (
+                WriteEvent("removed", "linked"),
+                WriteEvent("added", "linked"),
+            ))
+
+            self.assertIs(boundary.verdict, ObservationVerdict.INPUTS_MUTATED)
+            self.assertTrue(any("linked" in item for item in boundary.violations))
+
+    def test_a_directory_renamed_and_restored_is_a_violation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_repo(Path(tmp))
+            (repo / "linked").mkdir()
+
+            boundary = self._classify(repo, (
+                WriteEvent("renamed_from", "linked"),
+                WriteEvent("renamed_to", "linked"),
+            ))
+
+            self.assertIs(boundary.verdict, ObservationVerdict.INPUTS_MUTATED)
+
+    def test_a_directory_whose_timestamp_moved_is_still_forgiven(self):
+        # The false positive this branch exists to avoid: every child
+        # write bumps the container's timestamp, and the child has its
+        # own event.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_repo(Path(tmp))
+            (repo / "linked").mkdir()
+
+            boundary = self._classify(repo, (WriteEvent("modified", "linked"),))
+
+            self.assertIs(boundary.verdict, ObservationVerdict.CLEAN)
+            self.assertEqual(boundary.allowed_events, 1)
+
+    def test_an_ignored_directory_created_during_a_run_is_still_allowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+            (repo / ".gitignore").write_text(".mypy_cache/\n", encoding="utf-8")
+            _git(repo, "add", ".gitignore")
+            _git(repo, "commit", "-m", "ignore the cache")
+
+            capture = run_capture(repo, [_script(
+                "import os",
+                "os.makedirs('.mypy_cache', exist_ok=True)",
+                "open('.mypy_cache/data.json', 'w', encoding='utf-8').write('{}\\n')",
+            )], root / "staging")
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
+            self.assertTrue(capture.evidence_valid)
+
+    def test_a_directory_created_and_removed_during_a_check_is_caught(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _make_repo(root)
+
+            capture = run_capture(repo, [_script(
+                "import os",
+                "os.mkdir('ghostdir')",
+                "os.rmdir('ghostdir')",
+            )], root / "staging")
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.INPUTS_MUTATED)
+            self.assertEqual(capture.exit_code, EXIT_INPUTS_MUTATED)
+            self.assertFalse(capture.evidence_valid)
+            self.assertTrue(any("ghostdir" in item
+                                for item in capture.boundary.violations))
 
 
 if __name__ == "__main__":

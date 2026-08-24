@@ -146,8 +146,25 @@ when an ADR with captured evidence backs it.
   reparse point is closed by requiring every object's
   `VolumeSerialNumber` to be the root's. 94 tests, 7 subtests;
   twenty-two mutants, none survived (MF22 restores the defect in three
-  edits at once). **Next action: hand this unit to a SIXTH independent
-  review.** It is not closed until one returns without findings.
+  edits at once).
+
+- **Sixth independent review (2026-08-24): FAIL PARCIAL — ALTA. The lock
+  held the object and not the path.** The reparse check looked at the
+  target and never at the chain used to reach it. Measured: a junction
+  above a covered input was removed and recreated against another
+  directory on the same volume WHILE a handle on the object was held, and
+  the lexical path then read the other directory; restoring it made the
+  tree look untouched. `classify_observation` also forgave every
+  directory event because the path was a directory again at the end —
+  precisely the trace that attack leaves. Refused rather than supported:
+  `reparse_in_chain()` walks the root's own chain once and every
+  directory between the root and each covered input, and one reparse
+  point anywhere means `UNPROTECTED`, exit 6, zero checks; the classifier
+  forgives only `modified` on a directory. 103 tests, 7 subtests;
+  twenty-four mutants, none survived (MF23 and MF24, one per half). The
+  probe is ten cases in four groups. **Next action: hand this unit to a
+  SEVENTH independent review.** It is not closed until one returns
+  without findings.
 
 - **Observed overlap with F-15..F-18, none of them marked repaired:**
   F-15's suggested correction is what this script now does, but the

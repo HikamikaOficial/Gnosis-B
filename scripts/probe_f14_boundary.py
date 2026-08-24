@@ -7,7 +7,7 @@ respect to this repository: every tree it builds is a throwaway git repo
 in the system temp directory, and every ordering is a handshake on a
 pipe — there is not one sleep in the synchronisation.
 
-Nine cases, in three groups.
+Ten cases, in four groups.
 
 OBSERVATION ONLY — the design the second review broke, reconstructed here
 with a lock that claims enforcement and locks nothing, so the write
@@ -30,6 +30,11 @@ PREVENTION, the check itself is the attacker:
   A2  the check opens a covered input for writing
   B2  the check maps a covered input writable
 
+PREVENTION, with the PATH as the attacker:
+
+  J   a junction ABOVE a covered input, retargeted to another directory
+      on the same volume while a handle on the object is held
+
 Each case prints what the review asked to see separately: whether the
 mutation was observable BY THE CHECK, whether the endpoints agree,
 whether a notification arrived, the boundary verdict, and evidence_valid.
@@ -49,7 +54,11 @@ if str(REPO / "src") not in sys.path:
     sys.path.insert(0, str(REPO / "src"))
 
 from gnosis.kernel.evidence_capture import CheckCommand, run_capture  # noqa: E402
-from gnosis.kernel.input_lock import LockOutcome, VolumeCapabilities  # noqa: E402
+from gnosis.kernel.input_lock import (  # noqa: E402
+    LockOutcome,
+    VolumeCapabilities,
+    WindowsInputLock,
+)
 
 MEDDLER = HERE / "probe_f14_meddler.py"
 LINES: list[str] = []
@@ -220,6 +229,89 @@ def holder_case(title: str, mode: str, root: Path, name: str) -> bool:
                   extra=f"the check's side effect happened   : {ran}")
 
 
+def junction_case(root: Path) -> bool:
+    """J — the sixth review's attack: retarget the ancestor, not the file."""
+    say("### J — an ancestor junction, retargeted while the object stays locked")
+    repo = make_repo(root, "j")
+    first, second = root / "dirA", root / "dirB"
+    first.mkdir()
+    second.mkdir()
+    (first / "under.py").write_text("ORIGINAL-A\n", encoding="utf-8")
+    (second / "under.py").write_text("SWAPPED-B\n", encoding="utf-8")
+    link = repo / "linked"
+    made = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(first)],
+                          capture_output=True, text=True, errors="replace", check=False)
+    if made.returncode != 0:
+        say("  junctions are not available here; case skipped")
+        say()
+        return False
+
+    try:
+        lock = WindowsInputLock(repo)
+        outcome = lock.acquire(["a.txt", "linked/under.py"])
+        say(f"  lock over linked/under.py         : enforced={outcome.enforced}")
+        for item in outcome.refused:
+            say(f"    refused: {item}")
+
+        # Is the attack real on this platform? Hold the object and try.
+        keeper = WindowsInputLock(repo)
+        keeper.acquire(["a.txt"])
+        handle = open(first / "under.py", "rb")  # noqa: SIM115
+        try:
+            link.rmdir()
+            retargeted = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link), str(second)],
+                capture_output=True, text=True, errors="replace", check=False)
+            through = (link / "under.py").read_text(encoding="utf-8").strip()
+            link.rmdir()
+            subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(first)],
+                           capture_output=True, text=True, errors="replace", check=False)
+            restored = (link / "under.py").read_text(encoding="utf-8").strip()
+        finally:
+            handle.close()
+            keeper.release()
+            lock.release()
+
+        say(f"  retarget while the file is held   : {retargeted.returncode == 0}")
+        say(f"  lexical path then reads           : {through}")
+        say(f"  after restoring, it reads         : {restored}")
+        say(f"  -> the OS does NOT prevent it     : {through == 'SWAPPED-B'}")
+
+        capture = run_capture(
+            repo,
+            [CheckCommand("check", (sys.executable, "-c",
+                                    "open('ran.txt','w',encoding='utf-8').write('x')"))],
+            root / "s-j", input_lock=lambda _: _LockOverPaths(repo,
+                                                              ["a.txt",
+                                                               "linked/under.py"]))
+        say(f"  boundary                          : {capture.boundary.verdict.value}")
+        say(f"  checks that ran                   : {len(capture.checks)}")
+        say(f"  evidence_valid                    : {capture.summary['evidence_valid']}")
+        say(f"  exit_code                         : {capture.exit_code}")
+        broke = bool(capture.checks) and bool(capture.summary["evidence_valid"])
+        say(f"  VERDICT                           : "
+            f"{'BROKEN - a check ran over a redirectable path' if broke else 'HELD'}")
+        say()
+        return broke
+    finally:
+        if link.exists():
+            link.rmdir()
+
+
+class _LockOverPaths:
+    """The real lock, over a caller-chosen set of covered paths."""
+
+    def __init__(self, root: Path, paths: list[str]) -> None:
+        self._inner = WindowsInputLock(root)
+        self._paths = paths
+
+    def acquire(self, paths: list[str]) -> LockOutcome:
+        return self._inner.acquire(self._paths)
+
+    def release(self) -> None:
+        self._inner.release()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", type=Path, default=None)
@@ -266,11 +358,17 @@ def main() -> int:
                       "mmap", root, "b2", hollow=False):
             broke.append("B2")
 
+        say("GROUP 4 — PREVENTION, with the PATH as the attacker")
+        say()
+        if junction_case(root):
+            broke.append("J")
+
     say("=" * 78)
     say(f"BROKEN: {', '.join(broke) if broke else 'none'}")
     say("Expected: A0 held (a raw write does notify), B0 BROKEN (a mapped write")
-    say("need not — that is why prevention exists), and everything in groups 2")
-    say("and 3 held once the covered inputs are unwritable.")
+    say("need not — that is why prevention exists), everything in groups 2 and 3")
+    say("held once the covered inputs are unwritable, and J held once a covered")
+    say("input reached through a junction is refused before any check runs.")
 
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)

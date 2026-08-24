@@ -35,6 +35,12 @@ directory openable, counted as a locked handle, and never identified. It
 restores all three halves of that path at once, because removing any one
 of them alone would not reproduce the defect.
 
+MF23 and MF24 are the sixth review's: the lock protected the object and
+not the path used to reach it, so a junction above a covered input could
+be retargeted mid-run; and the classifier forgave any directory event
+because the path was a directory again by the time it looked, which is
+what a junction removed and recreated leaves behind.
+
     PYTHONUTF8=1 .venv/Scripts/python.exe scripts/mutation_check_f14.py
 
 Writes the transcript to stdout and, with `--out <path>`, to a file an
@@ -314,6 +320,32 @@ MUTANTS: list[Mutant] = [
             if unidentified > 0:""",
           """            unidentified = 0
             if False:""")],
+    ),
+    # MF23 and MF24 are the SIXTH review's two halves: the lock held the
+    # object and not the name, and the classifier forgave a directory
+    # that was a directory again by the time it looked.
+    Mutant(
+        "MF23", "an ancestor junction is accepted again, so the path used "
+                "to reach a covered input can be retargeted while the "
+                "object stays locked",
+        [(LOCK,
+          """                redirect = self._redirectable_ancestor(relative, ancestors)
+                if redirect is not None:
+                    refused.append(redirect)
+                    continue""",
+          """                redirect = None"""),
+         (LOCK,
+          """            root_redirect = reparse_in_chain(self.root)
+            if root_redirect is not None:""",
+          """            root_redirect = None
+            if False:""")],
+    ),
+    Mutant(
+        "MF24", "a directory event is forgiven for being a directory, so "
+                "remove-and-recreate of a structural component passes",
+        [(CAPTURE,
+          '        elif event.action == "modified" and (repo / path).is_dir():',
+          "        elif (repo / path).is_dir():")],
     ),
 ]
 
