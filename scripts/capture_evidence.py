@@ -106,6 +106,12 @@ ALLOWED_WRITES: tuple[str, ...] = (
     ".zerker/",             # ZMem's local store, held open by its server
     ".m3/",                 # M3's local index
     "memory/",              # local memory databases and indexes
+    # Measured, not assumed: the first capture run under this policy
+    # caught the code-intelligence suite writing a CodeGraph index into a
+    # dataset fixture. The index is an output of the checks; the fixture
+    # around it is not, and OUTPUT is matched before OUT_OF_SCOPE so this
+    # carves out only the generated part.
+    ".codegraph",
 )
 
 # OUT_OF_SCOPE — the evidence makes NO claim about these bytes, because

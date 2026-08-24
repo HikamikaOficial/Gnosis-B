@@ -2086,6 +2086,17 @@ class TestIgnoredFilesAreNotOutsideTheBoundary(unittest.TestCase):
         self.assertIs(classify_path("external/repo/a", outputs, scope),
                       PathClass.OUT_OF_SCOPE)
 
+    def test_a_generated_artefact_can_be_carved_out_of_an_unclaimed_root(self):
+        # The first capture under this policy caught the suite writing an
+        # index into a dataset fixture that had been declared out of
+        # scope. OUTPUT is matched first so the generated part can be
+        # named precisely without claiming the fixture around it.
+        outputs, scope = (".codegraph",), ("datasets/",)
+        self.assertIs(classify_path("datasets/fixture/.codegraph/db", outputs, scope),
+                      PathClass.OUTPUT)
+        self.assertIs(classify_path("datasets/fixture/source.py", outputs, scope),
+                      PathClass.OUT_OF_SCOPE)
+
     # -- A ------------------------------------------------------------------
     @WINDOWS_ONLY
     def test_an_ignored_input_a_check_reads_is_locked_against_it(self):

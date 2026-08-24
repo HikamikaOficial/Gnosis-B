@@ -635,8 +635,8 @@ accident. The measurement also found `.zerker/memory.sqlite` held open by
 the ZMem server, which is why an OUTPUT class is a necessity rather than
 a convenience.
 
-**F-14 is still NOT closed.** Repaired eight times now, tested (117
-tests, 7 subtests) and mutation-checked (twenty-five mutants, none
+**F-14 is still NOT closed.** Repaired eight times now, tested (118
+tests, 19 subtests) and mutation-checked (twenty-five mutants, none
 survived), it awaits an EIGHTH independent review. Seven reviews have
 each found something this unit's own tests and mutants did not.
 

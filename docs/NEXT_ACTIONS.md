@@ -175,8 +175,8 @@ when an ADR with captured evidence backs it.
   ignored included), OUTPUT declared, OUT_OF_SCOPE declared and any event
   there a violation — and `git check-ignore` removed as an authority.
   Measured: 2,944 inputs in 2.3 s, against 90,237 and 1,218 s if the
-  nested clones are expanded; `.venv` (2,130 files) is now an INPUT. 117
-  tests, 7 subtests; twenty-five mutants, none survived. **Next action:
+  nested clones are expanded; `.venv` (2,130 files) is now an INPUT. 118
+  tests, 19 subtests; twenty-five mutants, none survived. **Next action:
   hand this unit to an EIGHTH independent review.** It is not closed
   until one returns without findings.
 

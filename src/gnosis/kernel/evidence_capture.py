@@ -182,10 +182,13 @@ def classify_path(path: str, outputs: Sequence[str],
     matched against any component, so `__pycache__` covers every nesting
     of it without naming each one.
     """
+    if _is_allowed_path(path, outputs):
+        # Checked first so a generated artefact can be carved out of an
+        # otherwise unclaimed root: the index a test builds inside a
+        # read-only fixture is an OUTPUT, the fixture around it is not.
+        return PathClass.OUTPUT
     if _is_allowed_path(path, out_of_scope):
         return PathClass.OUT_OF_SCOPE
-    if _is_allowed_path(path, outputs):
-        return PathClass.OUTPUT
     return PathClass.INPUT
 
 

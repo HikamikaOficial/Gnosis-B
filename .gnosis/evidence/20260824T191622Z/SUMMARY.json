@@ -1,0 +1,213 @@
+{
+  "all_passed": false,
+  "boundary": {
+    "allowed_events": 7,
+    "allowed_writes": [
+      ".gnosis-capture-barrier",
+      ".git/",
+      "__pycache__",
+      ".pytest_cache/",
+      ".mypy_cache/",
+      ".ruff_cache/",
+      ".gnosis/runtime/",
+      ".gnosis/logs/",
+      ".gnosis/traces/",
+      ".gnosis/artifacts/",
+      ".gnosis/tmp/",
+      ".gnosis/state/",
+      ".gnosis/workspaces/",
+      ".zerker/",
+      ".m3/",
+      "memory/"
+    ],
+    "authority": "the write stream, not a comparison of endpoints: a change that undoes itself before the second fingerprint is still a change",
+    "covered_files": 2930,
+    "identity_of_what_ran": "locked_identity is taken AFTER every covered input is unwritable, so it describes the bytes the checks will actually read; it must equal the pre-check identity or the capture is refused",
+    "input_policy": "every path git can enumerate \u2014 tracked, untracked AND ignored \u2014 is an INPUT unless it is under a declared OUTPUT root (may change) or a declared OUT_OF_SCOPE root (not claimed, and any event there is a violation). git check-ignore is not consulted: what git thinks of a path says nothing about whether a check reads it",
+    "locked_identity": {
+      "available": true,
+      "digest": "75077e4bbd3eefd93ee59813014e108e10524e30b7edfb78eb17ead51e0de5ca",
+      "fingerprint": {
+        "branch": "master",
+        "head_sha": "b0ebc36e28dcdc07c267d6d6fd7b8376aa6528e7",
+        "is_repo": true,
+        "patch_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        "status_sha256": "a419ce2ecd74a3f6fa0f21290740238ed077af6f87c759fcc861d213a46140fc",
+        "untracked": {
+          ".stfolder/syncthing-folder-c9ceae.txt": "0cf037252917faaef03b3c68f4ae5d7311f2f4e1d4fd29cbaebe45dfcebff398",
+          "PROJECT_REPORT.md": "98f306634c9c837d081e72392a876027903b276b7dd88e8bff40585770f6c21b"
+        }
+      },
+      "reason": null,
+      "ts": "2026-08-24T19:16:56.018985+00:00"
+    },
+    "machinery_events": 40,
+    "machinery_note": "writes under .git/ are counted, not judged: git updates its own index while merely reading the tree, and .git is not a covered input. Tamper-evidence for the machinery itself is F-17 and is not repaired here",
+    "mechanism": "ReadDirectoryChangesW(recursive)",
+    "observed_events": 64,
+    "out_of_scope": [
+      "external/repositories/",
+      ".gnosis/lab/code-intelligence/candidates/",
+      ".gnosis/lab/code-intelligence/tools/",
+      ".gnosis/lab/code-intelligence/datasets/",
+      ".gnosis/lab/memory/candidates/",
+      ".gnosis/lab/memory/datasets/"
+    ],
+    "protection": {
+      "enforced": true,
+      "fully_identified": true,
+      "identified_objects": 2930,
+      "identity_digest": "dc05cfb649e83ebde47df1c80330ee9b4df1ffcc919c1326af2ded0bc361ec8f",
+      "identity_note": "every protected handle is recorded by FILE_ID_INFO (volume serial plus 128-bit file id) and verified to still resolve to the path it was opened by; the full map is input-identities.json in this bundle",
+      "locked_inputs": 2930,
+      "mechanism": "CreateFileW(GENERIC_READ, FILE_SHARE_READ)",
+      "reason": null,
+      "refused": [],
+      "volume": {
+        "drive_type": "fixed",
+        "filesystem": "NTFS",
+        "reason": null,
+        "supported": true
+      }
+    },
+    "reason": null,
+    "verdict": "INPUTS_MUTATED",
+    "violations": [
+      "added: .gnosis/lab/code-intelligence/datasets/fixture-repo/.codegraph/codegraph.db-wal (declared out of scope)",
+      "modified: .gnosis/lab/code-intelligence/datasets/fixture-repo/.codegraph (declared out of scope)",
+      "added: .gnosis/lab/code-intelligence/datasets/fixture-repo/.codegraph/codegraph.db-shm (declared out of scope)",
+      "modified: .gnosis/lab/code-intelligence/datasets/fixture-repo/.codegraph/codegraph.db-shm (declared out of scope)",
+      "removed: .gnosis/lab/code-intelligence/datasets/fixture-repo/.codegraph/codegraph.db-shm (declared out of scope)",
+      "removed: .gnosis/lab/code-intelligence/datasets/fixture-repo/.codegraph/codegraph.db-wal (declared out of scope)"
+    ]
+  },
+  "bundle_staged_outside_repo": true,
+  "captured_at": "2026-08-24T19:32:46.820005+00:00",
+  "checks_all_zero_exit": false,
+  "checks_verdict": "FAILED",
+  "evidence_valid": false,
+  "exit_code": 4,
+  "gates_clean": false,
+  "non_zero_exits": [
+    "pytest",
+    "ruff"
+  ],
+  "python": "3.12.14",
+  "results": [
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "tests/",
+        "-q"
+      ],
+      "duration_s": 946.69,
+      "exit_code": 1,
+      "name": "pytest",
+      "outcome": "FAILED",
+      "tail": "1 failed, 990 passed, 67 subtests passed in 942.14s (0:15:42)"
+    },
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "mypy",
+        "src/gnosis"
+      ],
+      "duration_s": 3.08,
+      "exit_code": 0,
+      "name": "mypy",
+      "outcome": "PASSED",
+      "tail": "Success: no issues found in 58 source files"
+    },
+    {
+      "argv": [
+        "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\.venv\\Scripts\\python.exe",
+        "-m",
+        "ruff",
+        "check",
+        "src/gnosis",
+        "tests",
+        "--no-cache",
+        "--output-format=concise"
+      ],
+      "duration_s": 0.2,
+      "exit_code": 1,
+      "lint_baseline": 19,
+      "lint_findings": 19,
+      "name": "ruff",
+      "outcome": "WITHIN_LINT_BASELINE",
+      "tail": "No fixes available (6 hidden fixes can be enabled with the `--unsafe-fixes` option).",
+      "verdict": "known backlog, not above baseline"
+    },
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "duration_s": 0.08,
+      "exit_code": 0,
+      "name": "git-head",
+      "outcome": "PASSED",
+      "tail": "b0ebc36e28dcdc07c267d6d6fd7b8376aa6528e7"
+    },
+    {
+      "argv": [
+        "git",
+        "status",
+        "--porcelain"
+      ],
+      "duration_s": 0.08,
+      "exit_code": 0,
+      "name": "git-status",
+      "outcome": "PASSED",
+      "tail": "?? PROJECT_REPORT.md"
+    }
+  ],
+  "tree_identity": {
+    "binding": "BOUND",
+    "blind_spot": "git-ignored files are not enumerated by content_fingerprint (build caches, .venv, the ignored parts of .gnosis/)",
+    "covers": "from immediately before the first check to immediately after the last one; the bundle is published afterwards and is deliberately not part of the identified tree",
+    "drift": [],
+    "identical": true,
+    "post": {
+      "available": true,
+      "digest": "75077e4bbd3eefd93ee59813014e108e10524e30b7edfb78eb17ead51e0de5ca",
+      "fingerprint": {
+        "branch": "master",
+        "head_sha": "b0ebc36e28dcdc07c267d6d6fd7b8376aa6528e7",
+        "is_repo": true,
+        "patch_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        "status_sha256": "a419ce2ecd74a3f6fa0f21290740238ed077af6f87c759fcc861d213a46140fc",
+        "untracked": {
+          ".stfolder/syncthing-folder-c9ceae.txt": "0cf037252917faaef03b3c68f4ae5d7311f2f4e1d4fd29cbaebe45dfcebff398",
+          "PROJECT_REPORT.md": "98f306634c9c837d081e72392a876027903b276b7dd88e8bff40585770f6c21b"
+        }
+      },
+      "reason": null,
+      "ts": "2026-08-24T19:32:46.808898+00:00"
+    },
+    "pre": {
+      "available": true,
+      "digest": "75077e4bbd3eefd93ee59813014e108e10524e30b7edfb78eb17ead51e0de5ca",
+      "fingerprint": {
+        "branch": "master",
+        "head_sha": "b0ebc36e28dcdc07c267d6d6fd7b8376aa6528e7",
+        "is_repo": true,
+        "patch_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+        "status_sha256": "a419ce2ecd74a3f6fa0f21290740238ed077af6f87c759fcc861d213a46140fc",
+        "untracked": {
+          ".stfolder/syncthing-folder-c9ceae.txt": "0cf037252917faaef03b3c68f4ae5d7311f2f4e1d4fd29cbaebe45dfcebff398",
+          "PROJECT_REPORT.md": "98f306634c9c837d081e72392a876027903b276b7dd88e8bff40585770f6c21b"
+        }
+      },
+      "reason": null,
+      "ts": "2026-08-24T19:16:22.866438+00:00"
+    },
+    "primitive": "gnosis.kernel.git_evidence.content_fingerprint",
+    "reason": null
+  },
+  "verdict": "INVALID EVIDENCE: a covered input was written during the capture and the endpoints do not show it; see boundary.violations"
+}

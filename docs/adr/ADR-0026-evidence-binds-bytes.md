@@ -59,7 +59,7 @@
   has been run on a real volume of that kind. Every other drive type,
   every other filesystem and every UNC path is refused before any input
   is opened.
-- Tests: `tests/test_evidence_binding.py` — **117 tests, 7 subtests**
+- Tests: `tests/test_evidence_binding.py` — **118 tests, 19 subtests**
   (36, 20, 9, 19, 3, 7, 10, then 16 with two inverted).
 - Mutation check: `scripts/mutation_check_f14.py` — **twenty-five
   mutants, none survived** (nine, four, three, four, one, one, two, one),
@@ -1583,6 +1583,32 @@ MF13's anchor moved with the code it names and its meaning is unchanged.
 **MF25** is new and restores the finding in both halves at once — ignored
 files leave the input domain AND `git check-ignore` is consulted again —
 because either alone leaves the other half of the repair standing.
+
+### The first protected capture falsified one of its own declarations
+
+Worth recording, because it is the mechanism doing its job to its author.
+The first full capture under this policy came back **exit 4**, with six
+violations, all of them:
+
+```
+added:    .gnosis/lab/code-intelligence/datasets/fixture-repo/.codegraph/codegraph.db-wal
+modified: .gnosis/lab/code-intelligence/datasets/fixture-repo/.codegraph
+removed:  .gnosis/lab/code-intelligence/datasets/fixture-repo/.codegraph/codegraph.db-shm
+                                                        … (declared out of scope)
+```
+
+`.gnosis/lab/code-intelligence/datasets/` had been declared OUT_OF_SCOPE
+on the strength of `.gitignore` calling it rebuildable — and the
+code-intelligence suite writes a CodeGraph index into it. The
+declaration said nothing writes there and the declaration was wrong.
+Under the old rule the writes were git-ignored and would have passed in
+silence; under the new one they stopped the capture.
+
+The repair is a carve-out rather than a widening: `classify_path` now
+matches OUTPUT **before** OUT_OF_SCOPE, and `.codegraph` is declared an
+OUTPUT segment. The generated index may change; the fixture around it is
+still unclaimed. Both the ordering and the carve-out have their own
+tests.
 
 ### What is still not closed
 
