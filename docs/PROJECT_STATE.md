@@ -3,7 +3,7 @@
 **Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION; THE PROBE HAS A CALLER; MULTI-CREDENTIAL ROTATION
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
-**Last update:** 2026-08-24 (F-34 closed; F-14 repaired eight times and still open; the stale lines below are F-19..F-32, still open)
+**Last update:** 2026-08-25 (F-34 closed; F-14 repaired nine times and still open; the stale lines below are F-19..F-32, still open)
 
 ## Kernel hardening (post-Phase -1)
 
@@ -635,10 +635,49 @@ accident. The measurement also found `.zerker/memory.sqlite` held open by
 the ZMem server, which is why an OUTPUT class is a necessity rather than
 a convenience.
 
-**F-14 is still NOT closed.** Repaired eight times now, tested (118
-tests, 19 subtests) and mutation-checked (twenty-five mutants, none
-survived), it awaits an EIGHTH independent review. Seven reviews have
-each found something this unit's own tests and mutants did not.
+**Eighth independent review (2026-08-25): FAIL ALTO.** The review took
+this unit's own residual risk no. 3 and made it the finding: an ignored
+INPUT was covered, locked and identified by object, and its BYTES were
+nowhere in the evidence. Three guarantees had been running under one
+word. A file id says WHICH object. A lock says the object did not change
+while the checks ran. Neither says WHAT was in it, and F-14's sentence is
+about bytes. Nearly 2,000 of the 2,958 inputs were `.venv` — the
+interpreter and the tools that produced the result — inside the boundary
+by object and outside it by content.
+
+Every input is now hashed through the handle that holds it:
+`handle_digest()` seeks the locking handle to zero and reads it with
+`ReadFile`, so the bytes hashed cannot be a second, different object
+opened by the same path. `LockOutcome.content_digests` is the per-file
+map, `content_digest` is the aggregate and is deliberately a different
+number from `identity_digest`, and `fully_bound` (`locked ==
+len(content_digests)`) is asserted at the producer, where an unreadable
+handle is a refusal, and re-checked at the consumer, where an
+enforced-but-unhashed lock is UNPROTECTED with its own wording.
+`input-manifest.json` ships the map so a third party re-derives the claim
+from the files instead of believing the summary.
+
+`.venv` stays an INPUT and is bound by the same rule — option (A), chosen
+on a measurement: the whole input set is 2,958 files and 99.4 MB, hashed
+in 2.39 s warm. A fourth TOOLCHAIN class with version-based provenance
+would have been more machinery for a weaker guarantee, since two
+toolchains can report identical nominal versions and differ in bytes.
+
+OUT_OF_SCOPE is deleted from the code rather than emptied. Of the two
+admissible models, "prove no check can consume it" was tested and failed:
+a directory handle opened with `FILE_SHARE_NONE` blocks *listing* the
+directory and does not block opening files inside it by path. So the
+class is bound instead, at the measured price of 88,424 files and 2.4 GB
+— 1,170 s to hash cold, 1,218 s to lock cold. `covered_paths` now expands
+the directory entries git reports for nested clones instead of leaving
+them to be refused. Whatever already exists under a declared OUTPUT root
+when a capture begins is hashed into `outputs_at_start`, so a file
+planted there and read by a check is named rather than anonymous.
+
+**F-14 is still NOT closed.** Repaired nine times now, tested (127
+tests) and mutation-checked (twenty-nine mutants, none survived), it
+awaits a NINTH independent review. Eight reviews have each found
+something this unit's own tests and mutants did not.
 
 **Overlap recorded, not claimed:** F-15 (the unused primitive) is what
 this script now uses; F-16 (capture order) no longer affects the binding
@@ -648,6 +687,16 @@ chain and no signature**; F-18 is untouched. None of them are marked
 repaired. The addendum adds one more overlap, also unclaimed: `.git/`
 writes are counted and not judged, so a hook installed during a capture
 is outside this boundary and inside F-17's.
+
+**Round nine measured the flakiness instead of describing it.** The
+family is wider than the single test named below:
+`test_concurrent_workers_never_run_a_brief_twice` and
+`test_a_brief_never_ends_up_in_two_directories_at_once` both fail with
+`PermissionError(13)` on concurrent file operations. Isolated and run in
+alternation on the same machine, they failed 5 times in 20 against a
+pristine export of HEAD `43bc232` and 3 times in 20 against the
+round-nine tree. None of the twelve `gnosis` modules they import is one
+this unit changed.
 
 **The baseline was not green at the start of this unit, and not because
 of it.** The full suite at `aea62b0` returned 1 failed, 873 passed:

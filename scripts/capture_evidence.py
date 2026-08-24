@@ -43,9 +43,9 @@ Exit codes are distinct on purpose:
     7  the tree moved while the boundary was being built
 
 Every path git can enumerate — tracked, untracked AND ignored — is an
-INPUT unless this file declares it an OUTPUT (the checks write there) or
-OUT_OF_SCOPE (the evidence claims nothing about it, and an event there
-invalidates the capture). Being git-ignored exempts nothing.
+INPUT unless this file declares it an OUTPUT, and every INPUT is locked
+AND hashed. Being git-ignored exempts nothing, and there is no class for
+bytes the evidence cannot state.
 
 A second review then broke the observation: a write made through a
 memory-mapped view need not generate any notification at all. So the
@@ -114,29 +114,13 @@ ALLOWED_WRITES: tuple[str, ...] = (
     ".codegraph",
 )
 
-# OUT_OF_SCOPE — the evidence makes NO claim about these bytes, because
-# enumerating them is not affordable: they are nested clones. Measured
-# rather than guessed — expanding them is 90,237 paths and 1,218s to
-# lock, against 2,944 paths and 2.3s for the input set as declared here.
-#
-# Out of scope is NOT the same as allowed. These roots are not locked and
-# not identified, and any observed event under one INVALIDATES the
-# capture, because the declaration says nothing writes there and an event
-# says the declaration was wrong. What the declaration does not cover is
-# a change made BEFORE the capture starts; the bundle names the roots so
-# a reader knows the shape of what is not claimed.
-OUT_OF_SCOPE: tuple[str, ...] = (
-    # Constitution: READ-ONLY SOURCE, never executed, never imported.
-    "external/repositories/",
-    # .gitignore: "reproducible installs (uv venvs, npm, portable
-    # downloads); fixture/dataset dirs are rebuildable and contain nested
-    # git repos".
-    ".gnosis/lab/code-intelligence/candidates/",
-    ".gnosis/lab/code-intelligence/tools/",
-    ".gnosis/lab/code-intelligence/datasets/",
-    ".gnosis/lab/memory/candidates/",
-    ".gnosis/lab/memory/datasets/",
-)
+# There is no third class. An eighth review pointed out that a root the
+# evidence cannot state is a silent input channel however loudly it is
+# declared, so OUT_OF_SCOPE is gone. The nested clones under
+# external/repositories/ and .gnosis/lab/**/{candidates,tools,datasets}
+# are INPUTs now like everything else: 88,424 files and 2.4 GB of them,
+# measured, and that cost is the price of the guarantee rather than a
+# reason to weaken it.
 
 COMMANDS: list[CheckCommand] = [
     CheckCommand("pytest", (sys.executable, "-m", "pytest", "tests/", "-q")),
@@ -184,8 +168,7 @@ def main() -> int:
     scratch = staging.parent / f"{staging.name}.scratch"
     try:
         capture = run_capture(REPO, COMMANDS, staging, lint_baseline=lint_baseline(),
-                              allowed_writes=ALLOWED_WRITES,
-                              out_of_scope=OUT_OF_SCOPE, scratch=scratch)
+                              allowed_writes=ALLOWED_WRITES, scratch=scratch)
         out_dir = publish_bundle(staging, EVIDENCE_ROOT / stamp)
     finally:
         shutil.rmtree(staging, ignore_errors=True)

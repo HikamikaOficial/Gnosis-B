@@ -48,6 +48,16 @@ real, and the answers are measured rather than argued:
   `FILE_ID_INFO`, does not demonstrably provide them, so the boundary
   refuses to claim it does.
 
+An eighth review named what all of this still was not. A file id says
+WHICH object; a lock says the object did not change while the checks
+ran. Neither says WHAT the bytes were, and evidence that cannot be
+re-derived from its own record is not durable. So every input is now
+hashed — SHA-256, read through the very handle that holds it unwritable,
+so the bytes hashed are provably the bytes the checks read — and the
+manifest goes into the bundle. Path, size, timestamps, file id, git
+status and the lock itself are all recorded, and none of them is the
+identity.
+
 A fifth review found the one path that escaped all of that. A covered
 entry that is a DIRECTORY — a submodule gitlink is the realistic case —
 made `CreateFileW` fail with `ERROR_ACCESS_DENIED`, and the code reopened
@@ -123,6 +133,7 @@ finding out before it.
 """
 from __future__ import annotations
 
+import hashlib
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -173,11 +184,32 @@ class LockOutcome:
     reason: str | None = None
     identities: Mapping[str, str] = field(default_factory=dict)
     volume: VolumeCapabilities | None = None
+    content_digests: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def identity_digest(self) -> str:
         """One hash over every protected object, by path and by file id."""
         return hash_canonical(sorted(self.identities.items()))
+
+    @property
+    def content_digest(self) -> str:
+        """One hash over the BYTES of every protected input.
+
+        Distinct from `identity_digest` on purpose. That one answers
+        "which objects"; this one answers "which bytes", and only the
+        second can be re-derived by a third party from the files.
+        """
+        return hash_canonical(sorted(self.content_digests.items()))
+
+    @property
+    def fully_bound(self) -> bool:
+        """Every handle held has a content digest, not just a file id.
+
+        The eighth review's invariant. `fully_identified` can be true
+        while this is false, which is exactly the state it was in:
+        covered, locked, identified by object, and byte-unknown.
+        """
+        return self.locked == len(self.content_digests)
 
     @property
     def fully_identified(self) -> bool:
@@ -202,7 +234,17 @@ class LockOutcome:
             "identified_objects": len(self.identities),
             "fully_identified": self.fully_identified,
             "identity_digest": self.identity_digest,
+            "byte_bound_inputs": len(self.content_digests),
+            "fully_bound": self.fully_bound,
+            "content_digest": self.content_digest,
             "volume": self.volume.to_dict() if self.volume is not None else None,
+            "content_note": (
+                "content_digest is SHA-256 over the bytes of every protected "
+                "input, each read through the handle that holds it unwritable, so "
+                "the bytes hashed are the bytes the checks read; the full map is "
+                "input-manifest.json in this bundle. A file id is not a content "
+                "identity and neither is a lock"
+            ),
             "identity_note": (
                 "every protected handle is recorded by FILE_ID_INFO (volume serial "
                 "plus 128-bit file id) and verified to still resolve to the path it "
@@ -228,6 +270,9 @@ class UnavailableLock:
         return LockOutcome(False, 0, tuple(paths), self.mechanism, self.reason,
                            volume=VolumeCapabilities(False, "unknown", "unknown",
                                                      self.reason))
+
+    def content_digests(self) -> dict[str, str]:
+        return {}
 
     def release(self) -> None:
         return None
@@ -281,6 +326,12 @@ if _IS_WINDOWS:
     _kernel32.CreateFileW.restype = wintypes.HANDLE
     _kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
     _kernel32.CloseHandle.restype = wintypes.BOOL
+    _kernel32.ReadFile.argtypes = (wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+                                   wintypes.LPVOID, wintypes.LPVOID)
+    _kernel32.ReadFile.restype = wintypes.BOOL
+    _kernel32.SetFilePointerEx.argtypes = (wintypes.HANDLE, ctypes.c_longlong,
+                                           wintypes.LPVOID, wintypes.DWORD)
+    _kernel32.SetFilePointerEx.restype = wintypes.BOOL
     _kernel32.GetFileAttributesW.argtypes = (wintypes.LPCWSTR,)
     _kernel32.GetFileAttributesW.restype = wintypes.DWORD
     _kernel32.GetFileInformationByHandleEx.argtypes = (
@@ -390,6 +441,26 @@ if _IS_WINDOWS:
                 return f"{component} (reparse point)"
         return None
 
+    def handle_digest(handle: int) -> str | None:
+        """SHA-256 of a file, read through the handle that locks it.
+
+        Reading by path would be a second open and a second object; this
+        cannot be pointed anywhere else, because the handle IS the thing
+        keeping the file unwritable.
+        """
+        if not _kernel32.SetFilePointerEx(handle, 0, None, 0):  # FILE_BEGIN
+            return None
+        digest = hashlib.sha256()
+        buffer = ctypes.create_string_buffer(1 << 20)
+        read = wintypes.DWORD()
+        while True:
+            if not _kernel32.ReadFile(handle, buffer, len(buffer),
+                                      ctypes.byref(read), None):
+                return None
+            if read.value == 0:
+                return digest.hexdigest()
+            digest.update(buffer.raw[:read.value])
+
     def probe_volume(path: Path) -> VolumeCapabilities:
         """Ask the volume whether it provides what the boundary relies on."""
         resolved = str(path.resolve())
@@ -424,6 +495,7 @@ if _IS_WINDOWS:
         # refusal is only testable if the expected serial can be supplied.
         expected_serial: int | None = None
         _handles: list[int] = field(default_factory=list)
+        _digests: dict[str, str] = field(default_factory=dict)
 
         def acquire(self, paths: Sequence[str]) -> LockOutcome:
             probe = self.volume_probe or probe_volume
@@ -509,6 +581,12 @@ if _IS_WINDOWS:
                 if problem is not None:
                     refused.append(problem)
 
+            unbound = (len(self._handles) - held_before) - len(self._digests)
+            if unbound > 0:
+                # The eighth review's invariant, at the producer: a
+                # handle without a content digest is a locked object
+                # whose bytes the evidence cannot state.
+                refused.append(f"{unbound} protected handle(s) were never hashed")
             unidentified = (len(self._handles) - held_before) - len(identities)
             if unidentified > 0:
                 # Unreachable through the branches above, and checked
@@ -525,9 +603,11 @@ if _IS_WINDOWS:
                     False, len(self._handles), tuple(refused), MECHANISM,
                     f"{len(refused)} covered input(s) could not be protected as "
                     "the objects the capture identified",
-                    identities=identities, volume=volume)
+                    identities=identities, volume=volume,
+                    content_digests=dict(self._digests))
             return LockOutcome(True, len(self._handles), (), MECHANISM,
-                               identities=identities, volume=volume)
+                               identities=identities, volume=volume,
+                               content_digests=dict(self._digests))
 
         def _redirectable_ancestor(self, relative: str,
                                    cache: dict[str, str | None]) -> str | None:
@@ -591,8 +671,16 @@ if _IS_WINDOWS:
             final = final.removeprefix("\\\\?\\")
             if final.lower() != expected.lower():
                 return f"{relative} (path resolves to {final})"
+            digest = handle_digest(handle)
+            if digest is None:
+                return f"{relative} (bytes could not be read for hashing)"
             identities[relative] = f"{serial:016x}:{file_id}"
+            self._digests[relative] = digest
             return None
+
+        def content_digests(self) -> dict[str, str]:
+            """Path to SHA-256 for everything this lock is holding."""
+            return dict(self._digests)
 
         def release(self) -> None:
             for handle in self._handles:

@@ -74,34 +74,37 @@ still said `CLEAN`, `evidence_valid: true`, `all_passed: true`.
 So every path in the working tree now belongs to exactly one declared
 class, and the default is the conservative one::
 
-    INPUT          covered, locked, identified. Everything git reports —
-                   tracked, untracked AND ignored — that is not under a
-                   declared root below. An undeclared path is an INPUT.
+    INPUT          covered, locked, IDENTIFIED BY FILE ID AND HASHED.
+                   Everything git reports — tracked, untracked AND
+                   ignored, with nested-clone directory entries expanded
+                   — that is not under a declared OUTPUT root. An
+                   undeclared path is an INPUT.
     OUTPUT         a declared root the checks legitimately write: caches,
-                   runtime state, artifacts. Events there are allowed.
-    OUT_OF_SCOPE   a declared root the evidence makes no claim about,
-                   because enumerating it is not affordable. NOT locked,
-                   NOT identified, and any event under it INVALIDATES the
-                   capture — "outside the claim" is not "allowed".
+                   runtime state, artifacts. Events there are allowed,
+                   and whatever already existed there when the capture
+                   began is hashed, so nothing planted under one can be
+                   read as an unnamed input.
 
 `git check-ignore` is no longer consulted anywhere. The classes are
 declared by the caller, recorded in the bundle, and a reviewer can
 challenge any single declaration.
 
-Known blind spot, stated rather than implied: an OUT_OF_SCOPE root is
-described by nothing, so a modification made to one BEFORE the capture
-starts is not part of the identity. The bundle names those roots so the
-reader knows the shape of what is not claimed.
+**And identity means bytes.** A file id says which object and a lock says
+it did not change; neither says what was in it. Every input is hashed
+through the handle that holds it, and the manifest is in the bundle, so
+the evidence can be re-derived by a third party from the files rather
+than believed.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
@@ -165,17 +168,23 @@ class ChecksVerdict(Enum):
 class PathClass(Enum):
     """Which side of the evidence boundary a path is on.
 
-    Three classes and no fourth. There is deliberately no "ignored" class:
-    what git thinks of a path says nothing about whether a check reads it.
+    TWO classes, and the eighth review is why there is no third. There
+    used to be an OUT_OF_SCOPE class for roots too large to enumerate:
+    not locked, not identified, not hashed, and any event there a
+    violation. That last part made it honest about CHANGES and said
+    nothing at all about READS, so an unbound root was still a silent
+    input channel. A class whose contents cannot be stated is not a
+    class the evidence can carry, so it is gone.
+
+    Both remaining classes are byte-bound. They differ in what may
+    change: an INPUT may not, an OUTPUT may.
     """
 
     INPUT = "INPUT"
     OUTPUT = "OUTPUT"
-    OUT_OF_SCOPE = "OUT_OF_SCOPE"
 
 
-def classify_path(path: str, outputs: Sequence[str],
-                  out_of_scope: Sequence[str]) -> PathClass:
+def classify_path(path: str, outputs: Sequence[str]) -> PathClass:
     """The declared class of one path. Undeclared means INPUT.
 
     An entry with a slash is a prefix; one without is a directory name
@@ -183,12 +192,7 @@ def classify_path(path: str, outputs: Sequence[str],
     of it without naming each one.
     """
     if _is_allowed_path(path, outputs):
-        # Checked first so a generated artefact can be carved out of an
-        # otherwise unclaimed root: the index a test builds inside a
-        # read-only fixture is an OUTPUT, the fixture around it is not.
         return PathClass.OUTPUT
-    if _is_allowed_path(path, out_of_scope):
-        return PathClass.OUT_OF_SCOPE
     return PathClass.INPUT
 
 
@@ -367,31 +371,56 @@ def _git_lines(repo: Path, args: Sequence[str]) -> list[str]:
     return [line for line in proc.stdout.split("\0") if line]
 
 
-def covered_paths(repo: Path, outputs: Sequence[str] = (),
-                  out_of_scope: Sequence[str] = ()) -> frozenset[str]:
+def covered_paths(repo: Path, outputs: Sequence[str] = ()) -> frozenset[str]:
     """Every file the boundary is a statement about.
 
     Tracked, untracked AND ignored — everything git can enumerate —
-    minus the paths the caller has declared as OUTPUT or OUT_OF_SCOPE.
-    Ignored files used to be excluded here and in `content_fingerprint`,
-    which is how a git-ignored input could be swapped underneath a check
-    without anything noticing.
+    minus the paths the caller has declared as OUTPUT. Ignored files used
+    to be excluded here and in `content_fingerprint`, which is how a
+    git-ignored input could be swapped underneath a check without
+    anything noticing.
 
-    An ignored DIRECTORY that git reports as one entry (a nested clone it
-    will not descend into) stays in the set and is refused by the lock as
-    a directory-like input. That is deliberate: an input set that cannot
-    be enumerated is not silently narrowed, it is declared out of scope
-    by a human or it stops the capture.
+    An ignored DIRECTORY that git reports as one entry — a nested clone it
+    will not descend into — is expanded here by walking it. Git declining
+    to look inside is not a reason for the evidence to decline too.
     """
     tracked = _git_lines(repo, ["ls-files", "-z"])
     status = _git_lines(repo, ["status", "--porcelain", "-z", "--untracked-files=all"])
     untracked = [entry[3:] for entry in status if entry.startswith("?? ")]
-    ignored = _git_lines(
-        repo, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard"])
+    ignored: list[str] = []
+    for entry in _git_lines(
+            repo, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard"]):
+        candidate = entry.replace("\\", "/")
+        if not candidate.endswith("/"):
+            ignored.append(candidate)
+            continue
+        for found in (repo / candidate).rglob("*"):
+            if found.is_file():
+                ignored.append(found.relative_to(repo).as_posix())
     return frozenset(
         candidate for candidate in
         (path.replace("\\", "/") for path in (*tracked, *untracked, *ignored))
-        if classify_path(candidate, outputs, out_of_scope) is PathClass.INPUT)
+        if classify_path(candidate, outputs) is PathClass.INPUT)
+
+
+def output_paths(repo: Path, outputs: Sequence[str] = ()) -> frozenset[str]:
+    """Files that already exist under a declared OUTPUT root.
+
+    They are not locked — an output is allowed to change — but they are
+    hashed, because a file planted under an output root before a capture
+    and then read by a check would otherwise be an unnamed input. The
+    eighth review asked for that specifically.
+    """
+    found: list[str] = []
+    for root in outputs:
+        if "/" not in root:
+            continue
+        base = repo / root
+        if not base.is_dir():
+            continue
+        found.extend(item.relative_to(repo).as_posix()
+                     for item in base.rglob("*") if item.is_file())
+    return frozenset(found)
 
 
 def _is_allowed_path(path: str, allowed: Sequence[str]) -> bool:
@@ -418,7 +447,6 @@ class Boundary:
     covered_files: int
     allowed_writes: tuple[str, ...]
     reason: str | None = None
-    out_of_scope: tuple[str, ...] = ()
     machinery_events: int = 0
     protection: Mapping[str, Any] = field(default_factory=dict)
     locked_identity: Mapping[str, Any] = field(default_factory=dict)
@@ -437,13 +465,13 @@ class Boundary:
             "violations": list(self.violations),
             "covered_files": self.covered_files,
             "allowed_writes": list(self.allowed_writes),
-            "out_of_scope": list(self.out_of_scope),
             "input_policy": (
-                "every path git can enumerate — tracked, untracked AND ignored — "
-                "is an INPUT unless it is under a declared OUTPUT root (may change) "
-                "or a declared OUT_OF_SCOPE root (not claimed, and any event there "
-                "is a violation). git check-ignore is not consulted: what git thinks "
-                "of a path says nothing about whether a check reads it"
+                "every path git can enumerate — tracked, untracked AND ignored, "
+                "with directory entries for nested clones expanded — is an INPUT "
+                "unless it is under a declared OUTPUT root. INPUTs are locked and "
+                "hashed; an OUTPUT's pre-existing bytes are hashed too, so nothing "
+                "planted under one can be read as an unnamed input. There is no "
+                "unbound class, and git check-ignore is not consulted"
             ),
             "reason": self.reason,
             "protection": dict(self.protection),
@@ -474,7 +502,6 @@ def classify_observation(
     lock: LockOutcome | None = None,
     drift: Sequence[str] = (),
     locked_identity: Mapping[str, Any] | None = None,
-    out_of_scope: Sequence[str] = (),
 ) -> Boundary:
     """Turn prevention plus a stream of writes into one verdict.
 
@@ -495,10 +522,9 @@ def classify_observation(
     so a `modified` event on a directory is allowed. Creating, removing
     or renaming one is not.
 
-    `git check-ignore` is not consulted. An OUT_OF_SCOPE root is a
-    violation when it moves, not an allowance: the evidence makes no
-    claim about those bytes, and a change there means the assumption
-    that nothing touches them was wrong.
+    `git check-ignore` is not consulted, and there is no unbound class
+    left for a path to fall into: every path is an INPUT whose bytes are
+    hashed or a declared OUTPUT whose pre-existing bytes are hashed.
     """
     allowed = (BARRIER_DIR, *allowed_writes)
     protection: Mapping[str, Any] = lock.to_dict() if lock is not None else {}
@@ -508,8 +534,18 @@ def classify_observation(
             ObservationVerdict.UNPROTECTED, observation.mechanism,
             len(observation.events), 0, tuple(lock.refused), len(covered),
             tuple(allowed), lock.reason or "the covered inputs were not made unwritable",
-            protection=protection, locked_identity=prepared,
-            out_of_scope=tuple(out_of_scope))
+            protection=protection, locked_identity=prepared)
+    if lock is not None and not lock.fully_bound:
+        # The eighth review's invariant at the consumer. A lock can be
+        # enforced and fully identified while the bytes behind it were
+        # never hashed, and that state is not evidence.
+        return Boundary(
+            ObservationVerdict.UNPROTECTED, observation.mechanism,
+            len(observation.events), 0,
+            (f"{lock.locked} handle(s) held, {len(lock.content_digests)} hashed",),
+            len(covered), tuple(allowed),
+            "an enforced lock held inputs whose bytes were never hashed",
+            protection=protection, locked_identity=prepared)
     if lock is not None and not lock.fully_identified:
         # The producer can no longer build this, and the consumer refuses
         # it anyway. `locked_inputs` and `identified_objects` describe the
@@ -522,8 +558,7 @@ def classify_observation(
             (f"{lock.locked} handle(s) held, {len(lock.identities)} identified",),
             len(covered), tuple(allowed),
             "an enforced lock held handles that were never identified",
-            protection=protection, locked_identity=prepared,
-            out_of_scope=tuple(out_of_scope))
+            protection=protection, locked_identity=prepared)
     if drift:
         # The tree moved between the fingerprint and the moment the inputs
         # became unwritable. Nothing ran, and the identity in the bundle
@@ -532,15 +567,13 @@ def classify_observation(
             ObservationVerdict.PREPARATION_DRIFT, observation.mechanism,
             len(observation.events), 0, tuple(drift), len(covered), tuple(allowed),
             "the tree changed while the boundary was being built",
-            protection=protection, locked_identity=prepared,
-            out_of_scope=tuple(out_of_scope))
+            protection=protection, locked_identity=prepared)
     if not observation.available or not observation.complete:
         return Boundary(
             ObservationVerdict.UNOBSERVED, observation.mechanism,
             len(observation.events), 0, (), len(covered), tuple(allowed),
             observation.reason or "the write observer could not promise a complete stream",
-            protection=protection, locked_identity=prepared,
-            out_of_scope=tuple(out_of_scope))
+            protection=protection, locked_identity=prepared)
 
     violations: list[str] = []
     allowed_count = 0
@@ -557,11 +590,6 @@ def classify_observation(
             machinery += 1
         elif _is_allowed_path(path, allowed):
             allowed_count += 1
-        elif _is_allowed_path(path, out_of_scope):
-            # Declared outside the claim, which is not the same as
-            # allowed: the declaration says nothing writes here, and an
-            # event says the declaration was wrong.
-            violations.append(f"{event.action}: {path} (declared out of scope)")
         elif event.action == "modified" and (repo / path).is_dir():
             # A directory's own timestamp moves when its entries move, and
             # the entries produce their own events, so THAT is forgiven.
@@ -586,7 +614,7 @@ def classify_observation(
     return Boundary(verdict, observation.mechanism, len(observation.events),
                     allowed_count, tuple(dict.fromkeys(violations)), len(covered),
                     tuple(allowed), machinery_events=machinery, protection=protection,
-                    locked_identity=prepared, out_of_scope=tuple(out_of_scope))
+                    locked_identity=prepared)
 
 
 @dataclass(frozen=True)
@@ -837,6 +865,47 @@ def _preparation_drift(pre: TreeIdentity, prepared: TreeIdentity) -> tuple[str, 
     return describe_drift(pre.fingerprint, prepared.fingerprint) or ("digest",)
 
 
+def file_digests(repo: Path, paths: Iterable[str]) -> dict[str, str]:
+    """SHA-256 of files that are not locked, read by path.
+
+    Used for the pre-existing contents of OUTPUT roots. Weaker than the
+    INPUT manifest by construction — an output is allowed to change, so
+    this says what was there when the capture began, not what stayed —
+    and that is exactly its job: bytes planted under an output root
+    before a run are named rather than anonymous.
+    """
+    digests: dict[str, str] = {}
+    for relative in sorted(paths):
+        target = repo / relative
+        try:
+            digest = hashlib.sha256()
+            with target.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1 << 20), b""):
+                    digest.update(chunk)
+        except OSError as exc:
+            digests[relative] = f"unreadable: {exc}"
+            continue
+        digests[relative] = digest.hexdigest()
+    return digests
+
+
+def write_manifest(staging: Path, inputs: Mapping[str, str],
+                   outputs: Mapping[str, str]) -> Path:
+    """The bytes this capture is about, as a file a third party can check."""
+    path = staging / "input-manifest.json"
+    path.write_text(json.dumps({
+        "note": (
+            "SHA-256 per path. `inputs` were read through the handles that held "
+            "them unwritable, so they are the bytes the checks read. "
+            "`outputs_at_start` is what already existed under a declared OUTPUT "
+            "root when the capture began; those may legitimately change."
+        ),
+        "inputs": dict(sorted(inputs.items())),
+        "outputs_at_start": dict(sorted(outputs.items())),
+    }, indent=2, sort_keys=False), encoding="utf-8")
+    return path
+
+
 def write_identities(staging: Path, identities: Mapping[str, str]) -> Path:
     """Which filesystem object each protected path actually was."""
     path = staging / "input-identities.json"
@@ -865,7 +934,6 @@ def run_capture(
     observer: Callable[[Path], WriteObserver] = create_write_observer,
     input_lock: Callable[[Path], InputLock] = create_input_lock,
     allowed_writes: Sequence[str] = (),
-    out_of_scope: Sequence[str] = (),
     scratch: Path | None = None,
     now: Callable[[], str] = _utc_now,
 ) -> Capture:
@@ -906,7 +974,7 @@ def run_capture(
     try:
         pre = identity(repo)
         if pre.available:
-            covered = covered_paths(repo, allowed_writes, out_of_scope)
+            covered = covered_paths(repo, allowed_writes)
             env = check_environment(scratch)
             lock = input_lock(repo)
             lock_outcome = lock.acquire(sorted(covered))
@@ -920,6 +988,8 @@ def run_capture(
                     prepared = identity(repo)
                     drift = _preparation_drift(pre, prepared)
                     write_identities(staging, lock_outcome.identities)
+                    write_manifest(staging, lock_outcome.content_digests,
+                                   file_digests(repo, output_paths(repo, allowed_writes)))
                     if not drift:
                         # Nothing runs against inputs that anything could
                         # still write. Discovering that after the suite is
@@ -940,8 +1010,7 @@ def run_capture(
     binding = bind_tree(pre, post)
     boundary = classify_observation(repo, observation, covered, allowed_writes,
                                     lock_outcome, drift,
-                                    prepared.to_dict() if prepared is not None else None,
-                                    out_of_scope)
+                                    prepared.to_dict() if prepared is not None else None)
     checks_verdict = _checks_verdict(results)
     summary = build_summary(
         binding, results, checks_verdict, boundary,

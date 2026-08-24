@@ -1667,3 +1667,171 @@ the manifest cannot hash itself, and `REVIEW_SCOPE.txt` was written after
 it. The generator now writes `REVIEW_SCOPE.txt` first and the manifest
 last, so exactly one file — the manifest — is unlisted, and it says so in
 its own footer.
+
+## Eighth independent review addendum — 2026-08-25: **FAIL ALTO**
+
+The review took this unit's own residual and made it the finding, which
+is the right call: I wrote it down and then shipped around it.
+
+> An ignored INPUT is covered, locked and identified by object, but its
+> BYTES are not in `content_fingerprint`.
+
+Three guarantees had been running together under one word. A **file id**
+says WHICH object. A **lock** says the object did not change while the
+checks ran. Neither says WHAT was in it, and F-14's original sentence is
+about bytes: *evidence must identify the exact bytes that passed the
+tests*. Two thousand of the inputs — the whole of `.venv`, which is to
+say the interpreter and the tools themselves — were inside the boundary
+by object and outside it by content.
+
+### Every input is hashed, through the handle that holds it
+
+`handle_digest()` seeks the locked handle to zero and reads it with
+`ReadFile`, so the bytes hashed are read through the very handle that is
+keeping the file unwritable. Not by path: a second open would be a second
+object, and this cannot be pointed anywhere else.
+
+- `LockOutcome.content_digests` — path to SHA-256 for every locked input.
+- `LockOutcome.content_digest` — one hash over that map, and deliberately
+  a different number from `identity_digest`. One answers "which
+  objects", the other "which bytes".
+- `LockOutcome.fully_bound` — `locked == len(content_digests)`. Checked
+  at the producer, where a handle that cannot be read is a refusal, and
+  again at the consumer, where an enforced-but-unhashed lock is
+  `UNPROTECTED`. That is a DIFFERENT failure from `fully_identified` and
+  says so in its own words.
+- `input-manifest.json` — the map, in the bundle, so a third party
+  re-derives the claim from the files instead of believing it.
+
+Path, size, timestamps, file id, git status and the lock are all still
+recorded. None of them is the identity.
+
+### `.venv`: option (A), and the measurement is why
+
+Measured before choosing: the whole INPUT set is **2,958 files and
+99.4 MB**, hashed in **2.39 s warm** (37.5 s cold). A fourth TOOLCHAIN
+class with a provenance manifest would have been more machinery for a
+weaker guarantee and no saving. `.venv` stays an INPUT and is byte-bound
+like everything else, so two toolchains reporting the same versions with
+different bytes produce different evidence — by the same rule as any
+other file, with no special case to get wrong.
+
+### OUT_OF_SCOPE is gone
+
+The review gave two admissible models. Both were tested.
+
+**Model (a) — prove no check can consume it.** A directory handle opened
+with `FILE_SHARE_NONE` blocks *listing* the directory and does **not**
+block opening files inside it by path; measured, both reads succeeded.
+There is no share-mode seal, so the model cannot be demonstrated.
+
+**Model (b) — bind it.** That is what shipped. The class is deleted from
+the code, not merely emptied of entries, so no future declaration can
+re-create an unbound root. `covered_paths` now expands the directory
+entries git reports for nested clones instead of leaving them to be
+refused: git declining to descend is not a reason for the evidence to
+decline too.
+
+The price, measured rather than estimated: **88,424 files and 2.4 GB**
+under what used to be the out-of-scope roots — 1,170 s to hash cold and
+1,218 s to lock cold. Paid. A class whose contents cannot be stated is a
+silent input channel however loudly it is declared, and "outside the
+claim" was doing no work that "unbound" was not also doing.
+
+### OUTPUT cannot smuggle a prior input
+
+Whatever already exists under a declared OUTPUT root when the capture
+begins is hashed into `outputs_at_start`. An output is still allowed to
+change — that is what the class is for — but a file planted there before
+a run and read by a check is now named in the manifest rather than
+anonymous. The digest is honest about what it is: bytes at the start, not
+bytes throughout.
+
+### Tests
+
+Eight added in `TestEveryInputIsByteBound`, one per mandated item and
+three more that pin the invariant itself:
+
+| Item | Test |
+|---|---|
+| 9 — same path, metadata and file id, different bytes | `test_same_path_and_metadata_different_bytes_differ_in_identity` |
+| 10 — changed bytes change the durable identity | `test_changing_the_bytes_between_captures_changes_the_durable_identity` |
+| 11 — locked and named but unhashed is not evidence | `test_a_locked_but_unhashed_input_cannot_produce_valid_evidence` (end to end, `evidence_valid` false, exit 6) and `test_an_outcome_holding_an_unhashed_input_is_not_protection` (the classifier alone) |
+| 12 — a toolchain artefact is bound by the same rule | `test_a_toolchain_artefact_is_an_input_and_its_bytes_are_bound` |
+| 13 — a TOOLCHAIN class with nominal versions | **not applicable**: option (A) was chosen, so there is no such class to test. Item 12 is the form the question takes here |
+| 14 — a check depending on a formerly out-of-scope file | `test_a_check_depending_on_a_formerly_unclaimed_file_reads_named_bytes` |
+| 15 — content planted under an OUTPUT root | `test_content_planted_under_an_output_root_is_still_named` |
+| — | `test_the_manifest_is_re_derivable_from_the_files`, `test_every_locked_input_is_hashed` |
+
+Item 11 is tested twice on purpose. The producer can no longer build an
+unbound outcome — the invariant refuses before `acquire` returns — so the
+consumer's half is only reachable by handing it one, which
+`_ForgetfulLock` does: the real lock with the digests thrown away after
+the fact.
+
+The file went from **118 tests to 127**: fourteen added, five deleted,
+six adapted. The five deleted are the ones that described OUT_OF_SCOPE —
+a class that no longer exists cannot keep a test that says it behaves
+correctly — and `test_there_is_no_class_for_bytes_the_evidence_cannot_state`
+is what replaces them, asserting on `PathClass` itself that no third
+member can come back. The six adapted are fixtures that build a
+`LockOutcome` by hand and now have to supply digests;
+`test_an_outcome_holding_an_unnamed_handle_is_not_protection` was split
+from its byte-invariant twin so that the file-id failure and the
+byte failure are each tested alone, because they are different failures
+with different wording.
+
+### Mutation check
+
+Four added, one per line of the review's item 16, and MF25's anchor moved
+with the code it names. Twenty-nine mutants, none survived.
+
+| Mutant | Removes | Result |
+|---|---|---|
+| MF26 | the byte binding of every input, ignored ones included — identities are still recorded, the digests are empty | **red** |
+| MF27 | the expansion of an ignored nested clone, which is what put the former out-of-scope content inside a bound class | **red** |
+| MF28 | the hashing of content that already exists under an OUTPUT root | **red** |
+| MF29 | the consumer's check that every locked input was hashed | **red** |
+
+Item 16's second line — "toolchain identity, if introduced" — has no
+mutant because no TOOLCHAIN class was introduced. MF26 is the mutant that
+covers `.venv`, by covering every input without exception.
+
+### What is still not closed
+
+- **F-14 remains OPEN.** Eight reviews, eight findings.
+- **An OUTPUT's bytes are stated at the start and not throughout.** That
+  is the class's definition rather than a gap, but a check that reads an
+  output written by an earlier check in the same capture reads bytes no
+  digest names.
+- **The manifest is bytes at lock time.** It says what was there when
+  nothing could change it any more; it is not a history of how the tree
+  got that way.
+- **Captures are slower.** The input set went from 2,958 files to
+  ~91,000, and the wall-clock cost of the lock and the hash is now the
+  dominant part of a capture on a cold cache.
+- **F-15..F-18 remain open and untouched.**
+- **The full suite is not green, and not because of this unit.** Two
+  concurrency tests in `tests/test_work_queue.py` —
+  `test_concurrent_workers_never_run_a_brief_twice` and
+  `test_a_brief_never_ends_up_in_two_directories_at_once` — fail with
+  `PermissionError(13)` on concurrent file operations. Measured rather
+  than assumed: the same two tests, isolated, failed **5 times in 20**
+  against a pristine export of HEAD `43bc232` and **3 times in 20**
+  against this tree, in alternating runs on the same machine. The twelve
+  `gnosis` modules those tests import include none of the three this unit
+  changed. Same family as the flake recorded in addendum 5, wider than
+  first thought; left alone, because making `tests/` deterministic is not
+  a change F-14's evidence should carry.
+
+### The mutation runner has a hole this round exposed
+
+Two runs were killed mid-flight — one by a ten-minute foreground cap, one
+by the harness — and each left a mutant applied to `evidence_capture.py`
+(MF15, then MF12). The `finally` that restores the sources runs on Ctrl-C
+and does not survive a hard kill, exactly as the module docstring says.
+Both were caught by re-checking every anchor against the tree and
+reverted, and the run that produced the transcript was launched detached
+so nothing could stop it at ten minutes. The transcript's own `RESTORED:`
+line is the check that matters: it re-runs the suite against the restored
+tree, and it is green.

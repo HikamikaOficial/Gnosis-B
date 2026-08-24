@@ -44,6 +44,10 @@ what a junction removed and recreated leaves behind.
 MF25 is the seventh review's: `git ignores it` was authority for `it
 cannot affect the result`, and an ignored file can be a real input.
 
+MF26..MF29 are the eighth review's: covered, locked and identified by
+object is not the same as byte-bound, and evidence that cannot be
+re-derived from the files is not durable.
+
     PYTHONUTF8=1 .venv/Scripts/python.exe scripts/mutation_check_f14.py
 
 Writes the transcript to stdout and, with `--out <path>`, to a file an
@@ -358,9 +362,9 @@ MUTANTS: list[Mutant] = [
         "MF25", "git-ignored paths leave the input domain and are "
                 "forgiven again when they change",
         [(CAPTURE,
-          """    ignored = _git_lines(
-        repo, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard"])""",
-          "    ignored = []"),
+          """    for entry in _git_lines(
+            repo, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard"]):""",
+          "    for entry in []:"),
          (CAPTURE,
           """    for path, action in sorted(unknown.items()):
         # No `git check-ignore` here, and that is the seventh review's
@@ -378,6 +382,44 @@ MUTANTS: list[Mutant] = [
             allowed_count += 1
         else:
             violations.append(f"{action}: {path}")""")],
+    ),
+    # MF26..MF29 are the EIGHTH review's: a file id says which object and
+    # a lock says it did not move, and neither states the bytes.
+    Mutant(
+        "MF26", "inputs are identified by file id but never hashed, so "
+                "the evidence cannot state what was in them",
+        [(LOCK,
+          """            digest = handle_digest(handle)
+            if digest is None:
+                return f"{relative} (bytes could not be read for hashing)"
+            identities[relative] = f"{serial:016x}:{file_id}"
+            self._digests[relative] = digest""",
+          '            identities[relative] = f"{serial:016x}:{file_id}"\n'
+          '            self._digests[relative] = ""')],
+    ),
+    Mutant(
+        "MF27", "an ignored nested clone is dropped from the input domain "
+                "instead of expanded, so its bytes leave the boundary",
+        [(CAPTURE,
+          """        for found in (repo / candidate).rglob("*"):
+            if found.is_file():
+                ignored.append(found.relative_to(repo).as_posix())""",
+          "        continue")],
+    ),
+    Mutant(
+        "MF28", "content already sitting under an OUTPUT root is not "
+                "hashed, so a planted file can be read as an unnamed input",
+        [(CAPTURE,
+          """                    write_manifest(staging, lock_outcome.content_digests,
+                                   file_digests(repo, output_paths(repo, allowed_writes)))""",
+          "                    write_manifest(staging, lock_outcome.content_digests, {})")],
+    ),
+    Mutant(
+        "MF29", "the consumer stops checking that every locked input was "
+                "hashed",
+        [(CAPTURE,
+          "    if lock is not None and not lock.fully_bound:",
+          "    if False:")],
     ),
 ]
 

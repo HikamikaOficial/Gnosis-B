@@ -11,6 +11,7 @@ capture that only ever ran against a stub would prove the stub.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -627,6 +628,8 @@ class _NoPrevention:
     """
 
     def acquire(self, paths):
+        # locked=0, so the byte-bound invariant is satisfied vacuously:
+        # this lock holds nothing and therefore hashes nothing.
         return LockOutcome(True, 0, (), "none (prevention disabled for this test)")
 
     def release(self) -> None:
@@ -1206,10 +1209,13 @@ class _PausingLock:
         second = self._inner.acquire(ordered[1:])
         identities = dict(first.identities)
         identities.update(second.identities)
+        digests = dict(first.content_digests)
+        digests.update(second.content_digests)
         return LockOutcome(
             first.enforced and second.enforced, second.locked,
             first.refused + second.refused, first.mechanism,
-            first.reason or second.reason, identities, first.volume)
+            first.reason or second.reason, identities, first.volume,
+            content_digests=digests)
 
     def release(self) -> None:
         self._inner.release()
@@ -1700,8 +1706,13 @@ class TestNoProtectedHandleEscapesIdentification(unittest.TestCase):
     def test_an_outcome_holding_an_unnamed_handle_is_not_protection(self):
         # Constructed by hand, because the producer can no longer make
         # one. The consumer refuses it anyway: two readers, same rule.
-        inconsistent = LockOutcome(True, 3, (), "test", identities={"a.txt": "x"})
+        # The digests are supplied so that the FILE ID invariant is the
+        # one under test here and not the byte invariant beside it.
+        inconsistent = LockOutcome(
+            True, 3, (), "test", identities={"a.txt": "x"},
+            content_digests={"a.txt": "s", "b.txt": "s", "c.txt": "s"})
         self.assertFalse(inconsistent.fully_identified)
+        self.assertTrue(inconsistent.fully_bound)
 
         boundary = classify_observation(
             Path("."), Observation(True, True, (), "test"),
@@ -1710,6 +1721,25 @@ class TestNoProtectedHandleEscapesIdentification(unittest.TestCase):
         self.assertIs(boundary.verdict, ObservationVerdict.UNPROTECTED)
         self.assertIn("identified", boundary.reason or "")
         self.assertFalse(boundary.protection["fully_identified"])
+
+    def test_an_outcome_holding_an_unhashed_input_is_not_protection(self):
+        # The eighth review's invariant, and a DIFFERENT failure from the
+        # one above: every handle is named, and the bytes behind them
+        # were never hashed.
+        unhashed = LockOutcome(
+            True, 2, (), "test",
+            identities={"a.txt": "x", "b.txt": "y"},
+            content_digests={"a.txt": "s"})
+        self.assertTrue(unhashed.fully_identified)
+        self.assertFalse(unhashed.fully_bound)
+
+        boundary = classify_observation(
+            Path("."), Observation(True, True, (), "test"),
+            frozenset({"a.txt"}), (), unhashed)
+
+        self.assertIs(boundary.verdict, ObservationVerdict.UNPROTECTED)
+        self.assertIn("hashed", boundary.reason or "")
+        self.assertFalse(boundary.protection["fully_bound"])
 
     @WINDOWS_ONLY
     def test_an_input_on_another_volume_is_refused(self):
@@ -1762,6 +1792,29 @@ class TestNoProtectedHandleEscapesIdentification(unittest.TestCase):
             # only because the whole acquisition is, and it was never
             # identified as protected on its own.
             self.assertTrue(outcome.fully_identified)
+
+
+class _ForgetfulLock:
+    """The real lock with the hashes thrown away after the fact.
+
+    The producer cannot build this any more — the byte invariant refuses
+    before `acquire` returns — so the only way to ask the CONSUMER the
+    review's eleventh question is to hand it an outcome that is enforced,
+    fully identified, and missing the digests.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self._inner = create_input_lock(root)
+
+    def acquire(self, paths):
+        outcome = self._inner.acquire(paths)
+        return LockOutcome(
+            outcome.enforced, outcome.locked, outcome.refused, outcome.mechanism,
+            outcome.reason, identities=dict(outcome.identities),
+            volume=outcome.volume, content_digests={})
+
+    def release(self) -> None:
+        self._inner.release()
 
 
 class _LockOver:
@@ -1924,7 +1977,8 @@ class TestStructuralDirectoryEventsAreJudged(unittest.TestCase):
     def _classify(self, repo: Path, events: tuple[WriteEvent, ...]) -> Boundary:
         return classify_observation(
             repo, Observation(True, True, events, "test"), frozenset({"a.txt"}), (),
-            LockOutcome(True, 1, (), "test", identities={"a.txt": "id"}))
+            LockOutcome(True, 1, (), "test", identities={"a.txt": "id"},
+                        content_digests={"a.txt": "sha"}))
 
     def test_a_directory_removed_and_recreated_is_a_violation(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2066,36 +2120,37 @@ class TestIgnoredFilesAreNotOutsideTheBoundary(unittest.TestCase):
             self.assertNotIn("build-cache/x.bin", covered)
             self.assertIn("ignored-input.txt", covered)
 
-    def test_a_declared_out_of_scope_root_is_not_an_input_either(self):
+    def test_an_ignored_nested_clone_is_expanded_rather_than_dropped(self):
+        # git reports a nested repository as one directory entry and will
+        # not descend into it. The eighth review's point: git declining to
+        # look is not a reason for the evidence to decline too.
         with tempfile.TemporaryDirectory() as tmp:
-            repo = _repo_with_ignored_input(Path(tmp))
-            (repo / "build-cache").mkdir()
-            (repo / "build-cache" / "x.bin").write_text("clone\n", encoding="utf-8")
+            root = Path(tmp)
+            repo = _repo_with_ignored_input(root)
+            nested = repo / "vendor" / "clone"
+            nested.mkdir(parents=True)
+            _git(nested, "init")
+            (nested / "code.py").write_text("vendored\n", encoding="utf-8")
+            (repo / ".gitignore").write_text(
+                "ignored-input.txt\nbuild-cache/\nvendor/\n", encoding="utf-8")
 
-            covered = covered_paths(repo, (), ("build-cache/",))
+            covered = covered_paths(repo)
 
-            self.assertNotIn("build-cache/x.bin", covered)
+            self.assertIn("vendor/clone/code.py", covered)
+            self.assertFalse(any(path.endswith("/") for path in covered))
 
-    def test_the_three_classes_are_decided_by_declaration_not_by_git(self):
-        outputs, scope = (".mypy_cache/", "__pycache__"), ("external/",)
-        self.assertIs(classify_path("src/a.py", outputs, scope), PathClass.INPUT)
-        self.assertIs(classify_path(".env", outputs, scope), PathClass.INPUT)
-        self.assertIs(classify_path(".mypy_cache/x", outputs, scope), PathClass.OUTPUT)
-        self.assertIs(classify_path("src/__pycache__/a.pyc", outputs, scope),
-                      PathClass.OUTPUT)
-        self.assertIs(classify_path("external/repo/a", outputs, scope),
-                      PathClass.OUT_OF_SCOPE)
+    def test_the_two_classes_are_decided_by_declaration_not_by_git(self):
+        outputs = (".mypy_cache/", "__pycache__")
+        self.assertIs(classify_path("src/a.py", outputs), PathClass.INPUT)
+        self.assertIs(classify_path(".env", outputs), PathClass.INPUT)
+        self.assertIs(classify_path("external/repo/a", outputs), PathClass.INPUT)
+        self.assertIs(classify_path(".mypy_cache/x", outputs), PathClass.OUTPUT)
+        self.assertIs(classify_path("src/__pycache__/a.pyc", outputs), PathClass.OUTPUT)
 
-    def test_a_generated_artefact_can_be_carved_out_of_an_unclaimed_root(self):
-        # The first capture under this policy caught the suite writing an
-        # index into a dataset fixture that had been declared out of
-        # scope. OUTPUT is matched first so the generated part can be
-        # named precisely without claiming the fixture around it.
-        outputs, scope = (".codegraph",), ("datasets/",)
-        self.assertIs(classify_path("datasets/fixture/.codegraph/db", outputs, scope),
-                      PathClass.OUTPUT)
-        self.assertIs(classify_path("datasets/fixture/source.py", outputs, scope),
-                      PathClass.OUT_OF_SCOPE)
+    def test_there_is_no_class_for_bytes_the_evidence_cannot_state(self):
+        # The eighth review removed the third one. Whatever a caller
+        # declares, a path is either an INPUT or an OUTPUT.
+        self.assertEqual({member.name for member in PathClass}, {"INPUT", "OUTPUT"})
 
     # -- A ------------------------------------------------------------------
     @WINDOWS_ONLY
@@ -2230,7 +2285,8 @@ class TestIgnoredFilesAreNotOutsideTheBoundary(unittest.TestCase):
             self.assertIn("build-cache/x.bin", covered_paths(repo))
 
     @WINDOWS_ONLY
-    def test_an_out_of_scope_root_that_moves_invalidates_rather_than_passes(self):
+    def test_a_root_nobody_declared_is_an_input_and_therefore_locked(self):
+        # What used to be declarable as out of scope is simply an INPUT.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = _repo_with_ignored_input(root)
@@ -2238,13 +2294,17 @@ class TestIgnoredFilesAreNotOutsideTheBoundary(unittest.TestCase):
             (repo / "build-cache" / "x.bin").write_text("before\n", encoding="utf-8")
 
             capture = run_capture(repo, [_script(
-                "open('build-cache/x.bin', 'w', encoding='utf-8').write('after\\n')",
-            )], root / "staging", out_of_scope=("build-cache/",))
+                "try:",
+                "    open('build-cache/x.bin', 'w', encoding='utf-8').write('after\\n')",
+                "    print('WROTE')",
+                "except OSError as exc:",
+                "    print('REFUSED', type(exc).__name__)",
+            )], root / "staging")
 
-            self.assertIs(capture.boundary.verdict, ObservationVerdict.INPUTS_MUTATED)
-            self.assertFalse(capture.evidence_valid)
-            self.assertTrue(any("out of scope" in item
-                                for item in capture.boundary.violations))
+            self.assertIn("REFUSED", capture.checks[0].tail)
+            manifest = json.loads(
+                (capture.bundle / "input-manifest.json").read_text(encoding="utf-8"))
+            self.assertIn("build-cache/x.bin", manifest["inputs"])
 
     def test_the_bundle_records_the_declared_classes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2252,18 +2312,17 @@ class TestIgnoredFilesAreNotOutsideTheBoundary(unittest.TestCase):
             repo = _repo_with_ignored_input(root)
 
             capture = run_capture(repo, [_script("pass")], root / "staging",
-                                  allowed_writes=("build-cache/",),
-                                  out_of_scope=("vendor/",))
+                                  allowed_writes=("build-cache/",))
 
             written = json.loads(
                 (capture.bundle / "SUMMARY.json").read_text(encoding="utf-8"))
             boundary = written["boundary"]
             self.assertIn("build-cache/", boundary["allowed_writes"])
-            self.assertIn("vendor/", boundary["out_of_scope"])
             self.assertIn("git check-ignore is not consulted",
                           boundary["input_policy"])
+            self.assertIn("no unbound class", boundary["input_policy"])
 
-    def test_the_capture_script_declares_all_three_classes(self):
+    def test_the_capture_script_declares_only_outputs(self):
         path = REPO / "scripts" / "capture_evidence.py"
         spec = importlib.util.spec_from_file_location("capture_policy_under_test", path)
         if spec is None or spec.loader is None:
@@ -2273,11 +2332,207 @@ class TestIgnoredFilesAreNotOutsideTheBoundary(unittest.TestCase):
 
         self.assertIn(".git/", script.ALLOWED_WRITES)
         self.assertIn("__pycache__", script.ALLOWED_WRITES)
-        self.assertIn("external/repositories/", script.OUT_OF_SCOPE)
-        # .venv is the toolchain: it is an INPUT, not an output and not
-        # out of scope, and nothing may quietly move it there.
+        # There is no second list any more, and .venv is in neither: the
+        # toolchain is an INPUT, locked and hashed like everything else.
+        self.assertFalse(hasattr(script, "OUT_OF_SCOPE"))
         self.assertNotIn(".venv/", script.ALLOWED_WRITES)
-        self.assertNotIn(".venv/", script.OUT_OF_SCOPE)
+        self.assertNotIn("external/repositories/", script.ALLOWED_WRITES)
+
+
+class TestEveryInputIsByteBound(unittest.TestCase):
+    """Eighth review: a file id is not a content identity, and neither is a lock.
+
+    An object identity says WHICH file. A lock says it did not change
+    while the checks ran. Only a hash says WHAT was in it, and only a
+    hash lets a third party re-derive the claim from the files instead of
+    believing the bundle.
+    """
+
+    @staticmethod
+    def _capture(root: Path, name: str, contents: str, **kwargs):
+        repo = _repo_with_ignored_input(root, name)
+        (repo / "ignored-input.txt").write_text(contents, encoding="utf-8")
+        return run_capture(repo, [_script("pass")], root / f"s-{name}", **kwargs), repo
+
+    # -- 9 ------------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_same_path_and_metadata_different_bytes_differ_in_identity(self):
+        # Two fixtures a metadata-based identity cannot tell apart: same
+        # relative path, same size, same timestamps, and each file id is
+        # valid for its own volume. Only the bytes differ.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first, first_repo = self._capture(root, "one", "AAAAAAAA\n")
+            stat = (first_repo / "ignored-input.txt").stat()
+            second, second_repo = self._capture(root, "two", "BBBBBBBB\n")
+            os.utime(second_repo / "ignored-input.txt", (stat.st_atime, stat.st_mtime))
+
+            first_manifest = json.loads(
+                (first.bundle / "input-manifest.json").read_text(encoding="utf-8"))
+            second_manifest = json.loads(
+                (second.bundle / "input-manifest.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(
+                (first_repo / "ignored-input.txt").stat().st_size,
+                (second_repo / "ignored-input.txt").stat().st_size)
+            self.assertNotEqual(
+                first_manifest["inputs"]["ignored-input.txt"],
+                second_manifest["inputs"]["ignored-input.txt"])
+            self.assertNotEqual(
+                first.boundary.protection["content_digest"],
+                second.boundary.protection["content_digest"])
+
+    # -- 10 -----------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_changing_the_bytes_between_captures_changes_the_durable_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_ignored_input(root)
+
+            before = run_capture(repo, [_script("pass")], root / "before")
+            (repo / "ignored-input.txt").write_text("CHANGED\n", encoding="utf-8")
+            after = run_capture(repo, [_script("pass")], root / "after")
+
+            self.assertTrue(before.evidence_valid)
+            self.assertTrue(after.evidence_valid)
+            self.assertNotEqual(before.boundary.protection["content_digest"],
+                                after.boundary.protection["content_digest"])
+            # And the file id did NOT have to change for that to be true.
+            self.assertEqual(before.boundary.protection["identified_objects"],
+                             after.boundary.protection["identified_objects"])
+
+    # -- 11 -----------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_a_locked_but_unhashed_input_cannot_produce_valid_evidence(self):
+        # End to end, not at the classifier: the capture that holds an
+        # ignored input by a named handle and never hashed it is not
+        # allowed to call itself evidence, and it says which of the two
+        # invariants it failed.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_ignored_input(root)
+
+            capture = run_capture(repo, [_script("pass")], root / "staging",
+                                  input_lock=lambda _: _ForgetfulLock(repo))
+
+            self.assertFalse(capture.evidence_valid)
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.UNPROTECTED)
+            self.assertIn("hashed", capture.boundary.reason or "")
+            self.assertTrue(capture.boundary.protection["fully_identified"])
+            self.assertFalse(capture.boundary.protection["fully_bound"])
+            self.assertEqual(capture.exit_code, 6)
+
+    # -- 12 -----------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_a_toolchain_artefact_is_an_input_and_its_bytes_are_bound(self):
+        # .venv stays INPUT rather than becoming a fourth class, so this
+        # is the same rule as everything else: change one byte of a tool
+        # and the identity changes.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_ignored_input(root)
+            (repo / ".gitignore").write_text(
+                "ignored-input.txt\nbuild-cache/\n.venv/\n", encoding="utf-8")
+            venv = repo / ".venv" / "Lib"
+            venv.mkdir(parents=True)
+            (venv / "tool.py").write_text("VERSION = '1.0'\n", encoding="utf-8")
+
+            before = run_capture(repo, [_script("pass")], root / "before")
+            manifest = json.loads(
+                (before.bundle / "input-manifest.json").read_text(encoding="utf-8"))
+            self.assertIn(".venv/Lib/tool.py", manifest["inputs"])
+
+            # Same declared version, one different byte.
+            (venv / "tool.py").write_text("VERSION = '1.O'\n", encoding="utf-8")
+            after = run_capture(repo, [_script("pass")], root / "after")
+
+            self.assertNotEqual(before.boundary.protection["content_digest"],
+                                after.boundary.protection["content_digest"])
+
+    # -- 14 -----------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_a_check_depending_on_a_formerly_unclaimed_file_reads_named_bytes(self):
+        # There is no out-of-scope class to hide in any more. A nested
+        # clone git will not descend into is expanded, locked and hashed,
+        # so a check that reads it reads bytes the evidence states.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_ignored_input(root)
+            (repo / ".gitignore").write_text(
+                "ignored-input.txt\nbuild-cache/\nvendor/\n", encoding="utf-8")
+            nested = repo / "vendor" / "clone"
+            nested.mkdir(parents=True)
+            _git(nested, "init")
+            (nested / "data.txt").write_text("VENDORED\n", encoding="utf-8")
+
+            capture = run_capture(repo, [_script(
+                "print(open('vendor/clone/data.txt', encoding='utf-8').read().strip())",
+            )], root / "staging")
+
+            self.assertEqual(capture.checks[0].tail, "VENDORED")
+            manifest = json.loads(
+                (capture.bundle / "input-manifest.json").read_text(encoding="utf-8"))
+            self.assertIn("vendor/clone/data.txt", manifest["inputs"])
+            self.assertRegex(manifest["inputs"]["vendor/clone/data.txt"],
+                             r"\A[0-9a-f]{64}\Z")
+
+    # -- 15 -----------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_content_planted_under_an_output_root_is_still_named(self):
+        # The OUTPUT escape must not become a way to introduce an
+        # unidentified prior input: whatever already exists under an
+        # output root when the capture begins is hashed.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_ignored_input(root)
+            (repo / "build-cache").mkdir()
+            (repo / "build-cache" / "planted.txt").write_text(
+                "PLANTED\n", encoding="utf-8")
+
+            capture = run_capture(repo, [_script(
+                "print(open('build-cache/planted.txt', encoding='utf-8').read().strip())",
+            )], root / "staging", allowed_writes=("build-cache/",))
+
+            self.assertEqual(capture.checks[0].tail, "PLANTED")
+            manifest = json.loads(
+                (capture.bundle / "input-manifest.json").read_text(encoding="utf-8"))
+            self.assertIn("build-cache/planted.txt", manifest["outputs_at_start"])
+            self.assertRegex(manifest["outputs_at_start"]["build-cache/planted.txt"],
+                             r"\A[0-9a-f]{64}\Z")
+
+    # -- the manifest itself -------------------------------------------------
+    @WINDOWS_ONLY
+    def test_the_manifest_is_re_derivable_from_the_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_ignored_input(root)
+
+            capture = run_capture(repo, [_script("pass")], root / "staging")
+
+            manifest = json.loads(
+                (capture.bundle / "input-manifest.json").read_text(encoding="utf-8"))
+            for relative, recorded in manifest["inputs"].items():
+                with self.subTest(path=relative):
+                    self.assertEqual(
+                        hashlib.sha256((repo / relative).read_bytes()).hexdigest(),
+                        recorded)
+            self.assertEqual(capture.boundary.protection["content_digest"],
+                             hash_canonical(sorted(manifest["inputs"].items())))
+
+    @WINDOWS_ONLY
+    def test_every_locked_input_is_hashed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_ignored_input(root)
+
+            capture = run_capture(repo, [_script("pass")], root / "staging")
+            protection = capture.boundary.protection
+
+            self.assertEqual(protection["locked_inputs"],
+                             protection["byte_bound_inputs"])
+            self.assertTrue(protection["fully_bound"])
+            self.assertNotEqual(protection["content_digest"],
+                                protection["identity_digest"])
 
 
 if __name__ == "__main__":

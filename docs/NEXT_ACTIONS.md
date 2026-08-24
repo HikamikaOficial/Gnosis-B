@@ -176,9 +176,34 @@ when an ADR with captured evidence backs it.
   there a violation — and `git check-ignore` removed as an authority.
   Measured: 2,944 inputs in 2.3 s, against 90,237 and 1,218 s if the
   nested clones are expanded; `.venv` (2,130 files) is now an INPUT. 118
-  tests, 19 subtests; twenty-five mutants, none survived. **Next action:
-  hand this unit to an EIGHTH independent review.** It is not closed
-  until one returns without findings.
+  tests, 19 subtests; twenty-five mutants, none survived.
+
+- **Eighth independent review (2026-08-25): FAIL ALTO — covered, locked
+  and identified is not byte-bound.** The review used this unit's own
+  residual risk no. 3 as the finding. Object identity (`FILE_ID_INFO`:
+  WHICH file), temporal stability (the lock: it did not change while the
+  checks ran) and cryptographic content identity (WHAT was in it) are
+  three separate guarantees, and holding two read like holding three:
+  nearly 2,000 of the 2,958 inputs were `.venv`, inside the boundary by
+  object and outside it by content. Repaired by hashing every input
+  THROUGH the handle that holds it (`SetFilePointerEx` + `ReadFile`, not
+  a second open by path), a `content_digest` deliberately distinct from
+  `identity_digest`, a `fully_bound` invariant asserted at the producer
+  and re-checked at the consumer with its own failure wording, and
+  `input-manifest.json` in the bundle so a third party re-derives the
+  claim from the files. `.venv` stays an INPUT (option A) because the
+  measurement said so: 2,958 files / 99.4 MB in 2.39 s warm, against a
+  TOOLCHAIN class whose version-based provenance cannot separate two
+  toolchains with equal nominal versions and different bytes.
+  **OUT_OF_SCOPE is deleted from the code**, not emptied: the "prove no
+  check can consume it" model was tested and failed — a directory handle
+  with `FILE_SHARE_NONE` blocks *listing* and does not block opening the
+  files inside it by path — so the price is paid instead, measured at
+  88,424 files and 2.4 GB, 1,170 s to hash cold. Pre-existing content
+  under a declared OUTPUT root is hashed into `outputs_at_start`, so it
+  cannot be an anonymous prior input. 127 tests; twenty-nine mutants,
+  none survived. **Next action: hand this unit to a NINTH independent
+  review.** It is not closed until one returns without findings.
 
 - **Observed overlap with F-15..F-18, none of them marked repaired:**
   F-15's suggested correction is what this script now does, but the
