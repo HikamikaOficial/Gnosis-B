@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -40,9 +41,11 @@ from gnosis.kernel.evidence_capture import (
     ChecksVerdict,
     EmptyCaptureError,
     ObservationVerdict,
+    PathClass,
     TreeIdentity,
     bind_tree,
     classify_observation,
+    classify_path,
     count_lint_findings,
     covered_paths,
     describe_drift,
@@ -797,7 +800,10 @@ class TestATransientChangeIsStillAChange(unittest.TestCase):
             capture = run_capture(repo, [check], root / "staging")
             self._assert_caught(capture, "build-output/report.txt")
 
-    def test_a_git_ignored_cache_written_during_a_check_is_not_a_violation(self):
+    def test_a_git_ignored_cache_is_allowed_only_when_it_is_declared(self):
+        # This asserted that being git-ignored was enough, which is the
+        # equivalence the seventh review refused. Declaring the root is
+        # what allows it now; git's opinion is not consulted at all.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = _make_repo(root)
@@ -810,11 +816,17 @@ class TestATransientChangeIsStillAChange(unittest.TestCase):
                 "os.makedirs('.mypy_cache', exist_ok=True)",
                 "open('.mypy_cache/data.json', 'w', encoding='utf-8').write('{}\\n')",
             )
-            capture = run_capture(repo, [check], root / "staging")
 
-            self.assertIs(capture.binding.verdict, BindingVerdict.BOUND)
-            self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
-            self.assertTrue(capture.evidence_valid)
+            undeclared = run_capture(repo, [check], root / "undeclared")
+            self.assertIs(undeclared.boundary.verdict, ObservationVerdict.INPUTS_MUTATED)
+            self.assertFalse(undeclared.evidence_valid)
+
+            shutil.rmtree(repo / ".mypy_cache")
+            declared = run_capture(repo, [check], root / "declared",
+                                   allowed_writes=(".mypy_cache/",))
+            self.assertIs(declared.binding.verdict, BindingVerdict.BOUND)
+            self.assertIs(declared.boundary.verdict, ObservationVerdict.CLEAN)
+            self.assertTrue(declared.evidence_valid)
 
     def test_writes_to_git_itself_are_counted_not_judged(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1952,7 +1964,9 @@ class TestStructuralDirectoryEventsAreJudged(unittest.TestCase):
             self.assertIs(boundary.verdict, ObservationVerdict.CLEAN)
             self.assertEqual(boundary.allowed_events, 1)
 
-    def test_an_ignored_directory_created_during_a_run_is_still_allowed(self):
+    def test_a_declared_output_directory_created_during_a_run_is_allowed(self):
+        # Was "an ignored directory ... is still allowed". Being ignored
+        # is not the authority any more; the declaration is.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = _make_repo(root)
@@ -1964,7 +1978,7 @@ class TestStructuralDirectoryEventsAreJudged(unittest.TestCase):
                 "import os",
                 "os.makedirs('.mypy_cache', exist_ok=True)",
                 "open('.mypy_cache/data.json', 'w', encoding='utf-8').write('{}\\n')",
-            )], root / "staging")
+            )], root / "staging", allowed_writes=(".mypy_cache/",))
 
             self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
             self.assertTrue(capture.evidence_valid)
@@ -1985,6 +1999,274 @@ class TestStructuralDirectoryEventsAreJudged(unittest.TestCase):
             self.assertFalse(capture.evidence_valid)
             self.assertTrue(any("ghostdir" in item
                                 for item in capture.boundary.violations))
+
+
+def _repo_with_ignored_input(root: Path, name: str = "repo") -> Path:
+    """A repo whose real input git has been told to ignore."""
+    repo = root / name
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test")
+    _git(repo, "config", "commit.gpgsign", "false")
+    (repo / ".gitignore").write_text("ignored-input.txt\nbuild-cache/\n",
+                                     encoding="utf-8")
+    (repo / "a.txt").write_text("tracked\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore", "a.txt")
+    _git(repo, "commit", "-m", "init")
+    (repo / "ignored-input.txt").write_text("ORIGINAL\n", encoding="utf-8")
+    return repo
+
+
+IGNORED_ABA = (
+    "import os\n"
+    "try:\n"
+    "    handle = open('ignored-input.txt', 'r+b')\n"
+    "except OSError as exc:\n"
+    "    print('REFUSED', type(exc).__name__)\n"
+    "else:\n"
+    "    original = handle.read()\n"
+    "    handle.seek(0)\n"
+    "    handle.write(b'MALICIOUS')\n"
+    "    handle.flush()\n"
+    "    print('READ', open('ignored-input.txt', encoding='utf-8').read().strip())\n"
+    "    handle.seek(0)\n"
+    "    handle.write(original)\n"
+    "    handle.close()\n"
+)
+
+
+class TestIgnoredFilesAreNotOutsideTheBoundary(unittest.TestCase):
+    """Seventh review: `git ignores it` was being used as authority.
+
+    An ignored file can be a real input — a `.env`, a local config, a
+    fixture, a database, or the interpreter and tools in `.venv`. The
+    reproduction that opened this round had a check read MALICIOUS out of
+    an ignored file while the bundle reported CLEAN, evidence_valid true
+    and all_passed true.
+    """
+
+    def test_the_input_domain_includes_ignored_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo_with_ignored_input(Path(tmp))
+
+            covered = covered_paths(repo)
+
+            self.assertIn("ignored-input.txt", covered)
+            self.assertIn("a.txt", covered)
+
+    def test_a_declared_output_root_is_not_an_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo_with_ignored_input(Path(tmp))
+            (repo / "build-cache").mkdir()
+            (repo / "build-cache" / "x.bin").write_text("cache\n", encoding="utf-8")
+
+            covered = covered_paths(repo, ("build-cache/",))
+
+            self.assertNotIn("build-cache/x.bin", covered)
+            self.assertIn("ignored-input.txt", covered)
+
+    def test_a_declared_out_of_scope_root_is_not_an_input_either(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _repo_with_ignored_input(Path(tmp))
+            (repo / "build-cache").mkdir()
+            (repo / "build-cache" / "x.bin").write_text("clone\n", encoding="utf-8")
+
+            covered = covered_paths(repo, (), ("build-cache/",))
+
+            self.assertNotIn("build-cache/x.bin", covered)
+
+    def test_the_three_classes_are_decided_by_declaration_not_by_git(self):
+        outputs, scope = (".mypy_cache/", "__pycache__"), ("external/",)
+        self.assertIs(classify_path("src/a.py", outputs, scope), PathClass.INPUT)
+        self.assertIs(classify_path(".env", outputs, scope), PathClass.INPUT)
+        self.assertIs(classify_path(".mypy_cache/x", outputs, scope), PathClass.OUTPUT)
+        self.assertIs(classify_path("src/__pycache__/a.pyc", outputs, scope),
+                      PathClass.OUTPUT)
+        self.assertIs(classify_path("external/repo/a", outputs, scope),
+                      PathClass.OUT_OF_SCOPE)
+
+    # -- A ------------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_an_ignored_input_a_check_reads_is_locked_against_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_ignored_input(root)
+            before = (repo / "ignored-input.txt").read_bytes()
+
+            capture = run_capture(
+                repo, [CheckCommand("check", (sys.executable, "-c", IGNORED_ABA))],
+                root / "staging")
+
+            self.assertIn("REFUSED", capture.checks[0].tail)
+            self.assertEqual((repo / "ignored-input.txt").read_bytes(), before)
+            self.assertEqual(capture.boundary.protection["locked_inputs"], 3)
+            self.assertEqual(capture.boundary.protection["identified_objects"], 3)
+
+    # -- B ------------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_an_ignored_input_aba_cannot_produce_valid_evidence(self):
+        # With prevention off, so the OBSERVATION half is the one under
+        # test: the write succeeds and must still invalidate.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_ignored_input(root)
+
+            capture = run_capture(
+                repo, [CheckCommand("check", (sys.executable, "-c", IGNORED_ABA))],
+                root / "staging", input_lock=_no_prevention)
+
+            self.assertIn("READ MALICIOUS", capture.checks[0].tail)
+            self.assertIs(capture.binding.verdict, BindingVerdict.BOUND)
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.INPUTS_MUTATED)
+            self.assertFalse(capture.evidence_valid)
+            self.assertFalse(capture.summary["all_passed"])
+            self.assertTrue(any("ignored-input.txt" in item
+                                for item in capture.boundary.violations))
+
+    # -- C ------------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_an_ignored_file_created_during_a_run_is_not_silently_an_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_ignored_input(root)
+            (repo / ".gitignore").write_text(
+                "ignored-input.txt\nbuild-cache/\nlate.txt\n", encoding="utf-8")
+            _git(repo, "commit", "-am", "ignore late.txt")
+
+            capture = run_capture(repo, [_script(
+                "open('late.txt', 'w', encoding='utf-8').write('APPEARED\\n')",
+                "print(open('late.txt', encoding='utf-8').read().strip())",
+            )], root / "staging")
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.INPUTS_MUTATED)
+            self.assertFalse(capture.evidence_valid)
+            self.assertTrue(any("late.txt" in item
+                                for item in capture.boundary.violations))
+
+    # -- D ------------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_an_ignored_input_deleted_and_recreated_is_caught(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_ignored_input(root)
+
+            capture = run_capture(repo, [_script(
+                "import os",
+                "os.remove('ignored-input.txt')",
+                "open('ignored-input.txt', 'w', encoding='utf-8').write('ORIGINAL\\n')",
+            )], root / "staging", input_lock=_no_prevention)
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.INPUTS_MUTATED)
+            self.assertFalse(capture.evidence_valid)
+
+    @WINDOWS_ONLY
+    def test_an_ignored_input_cannot_be_deleted_while_it_is_locked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_ignored_input(root)
+
+            capture = run_capture(repo, [_script(
+                "import os",
+                "try:",
+                "    os.remove('ignored-input.txt')",
+                "    print('DELETED')",
+                "except OSError as exc:",
+                "    print('REFUSED', type(exc).__name__)",
+            )], root / "staging")
+
+            self.assertIn("REFUSED", capture.checks[0].tail)
+            self.assertTrue((repo / "ignored-input.txt").exists())
+
+    # -- E ------------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_a_declared_cache_may_change_without_invalidating_anything(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_ignored_input(root)
+            (repo / "build-cache").mkdir()
+            (repo / "build-cache" / "x.bin").write_text("before\n", encoding="utf-8")
+
+            capture = run_capture(repo, [_script(
+                "open('build-cache/x.bin', 'w', encoding='utf-8').write('after\\n')",
+                "open('build-cache/y.bin', 'w', encoding='utf-8').write('new\\n')",
+            )], root / "staging", allowed_writes=("build-cache/",))
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
+            self.assertTrue(capture.evidence_valid)
+            self.assertEqual(capture.exit_code, EXIT_OK)
+
+    # -- F ------------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_an_undeclared_ignored_path_is_not_authorised_by_gitignore(self):
+        # The same writes as the test above, with the declaration removed.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_ignored_input(root)
+            (repo / "build-cache").mkdir()
+            (repo / "build-cache" / "x.bin").write_text("before\n", encoding="utf-8")
+
+            capture = run_capture(repo, [_script(
+                "try:",
+                "    open('build-cache/x.bin', 'w', encoding='utf-8').write('after\\n')",
+                "    print('WROTE')",
+                "except OSError as exc:",
+                "    print('REFUSED', type(exc).__name__)",
+            )], root / "staging")
+
+            # It is a covered input now, so the write is refused outright.
+            self.assertIn("REFUSED", capture.checks[0].tail)
+            self.assertIn("build-cache/x.bin", covered_paths(repo))
+
+    @WINDOWS_ONLY
+    def test_an_out_of_scope_root_that_moves_invalidates_rather_than_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_ignored_input(root)
+            (repo / "build-cache").mkdir()
+            (repo / "build-cache" / "x.bin").write_text("before\n", encoding="utf-8")
+
+            capture = run_capture(repo, [_script(
+                "open('build-cache/x.bin', 'w', encoding='utf-8').write('after\\n')",
+            )], root / "staging", out_of_scope=("build-cache/",))
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.INPUTS_MUTATED)
+            self.assertFalse(capture.evidence_valid)
+            self.assertTrue(any("out of scope" in item
+                                for item in capture.boundary.violations))
+
+    def test_the_bundle_records_the_declared_classes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = _repo_with_ignored_input(root)
+
+            capture = run_capture(repo, [_script("pass")], root / "staging",
+                                  allowed_writes=("build-cache/",),
+                                  out_of_scope=("vendor/",))
+
+            written = json.loads(
+                (capture.bundle / "SUMMARY.json").read_text(encoding="utf-8"))
+            boundary = written["boundary"]
+            self.assertIn("build-cache/", boundary["allowed_writes"])
+            self.assertIn("vendor/", boundary["out_of_scope"])
+            self.assertIn("git check-ignore is not consulted",
+                          boundary["input_policy"])
+
+    def test_the_capture_script_declares_all_three_classes(self):
+        path = REPO / "scripts" / "capture_evidence.py"
+        spec = importlib.util.spec_from_file_location("capture_policy_under_test", path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"{path} could not be loaded")
+        script = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(script)
+
+        self.assertIn(".git/", script.ALLOWED_WRITES)
+        self.assertIn("__pycache__", script.ALLOWED_WRITES)
+        self.assertIn("external/repositories/", script.OUT_OF_SCOPE)
+        # .venv is the toolchain: it is an INPUT, not an output and not
+        # out of scope, and nothing may quietly move it there.
+        self.assertNotIn(".venv/", script.ALLOWED_WRITES)
+        self.assertNotIn(".venv/", script.OUT_OF_SCOPE)
 
 
 if __name__ == "__main__":

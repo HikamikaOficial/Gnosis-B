@@ -40,6 +40,12 @@ Exit codes are distinct on purpose:
     4  a covered input was written during the run, endpoints notwithstanding
     5  the interval could not be observed — no mechanism, or an incomplete one
     6  the covered inputs could not be made unwritable, so nothing ran
+    7  the tree moved while the boundary was being built
+
+Every path git can enumerate — tracked, untracked AND ignored — is an
+INPUT unless this file declares it an OUTPUT (the checks write there) or
+OUT_OF_SCOPE (the evidence claims nothing about it, and an event there
+invalidates the capture). Being git-ignored exempts nothing.
 
 A second review then broke the observation: a write made through a
 memory-mapped view need not generate any notification at all. So the
@@ -72,20 +78,58 @@ from gnosis.kernel.evidence_capture import (  # noqa: E402
 EVIDENCE_ROOT = REPO / ".gnosis" / "evidence"
 LINT_BASELINE = REPO / ".gnosis" / "state" / "lint_baseline.json"
 
-# Places inside the tree a check may legitimately write. Kept short on
-# purpose: everything a check writes that CAN be redirected is redirected
-# out of the tree entirely (see `check_environment`), so this list is
-# what is left rather than a convenience. `.git/` is here because git
-# updates its index while reading the tree, and `.git` is not a covered
-# input — content_fingerprint does not hash it. The cache directories are
-# belt and braces: they are redirected and git-ignored already, and
-# naming them keeps a reader from having to derive that.
+# THE DECLARED PATH POLICY. Every path git can enumerate is an INPUT —
+# covered, locked, identified — unless it appears below. Nothing is
+# exempt for being git-ignored: the seventh review showed a check reading
+# MALICIOUS out of an ignored file while the bundle said evidence_valid.
+#
+# Each entry is a claim a reviewer can challenge on its own. An entry
+# with a slash is a path prefix; one without is a directory name matched
+# against any component.
+
+# OUTPUT — the checks legitimately write here, so events are allowed.
+# Everything that CAN be redirected out of the tree already is (see
+# `check_environment`); this is what is left.
 ALLOWED_WRITES: tuple[str, ...] = (
-    ".git/",
+    ".git/",                # git rewrites its index while reading the tree
+    "__pycache__",          # bytecode, redirected but named for the reader
     ".pytest_cache/",
     ".mypy_cache/",
     ".ruff_cache/",
-    "__pycache__",
+    ".gnosis/runtime/",     # kernel runtime state
+    ".gnosis/logs/",
+    ".gnosis/traces/",
+    ".gnosis/artifacts/",
+    ".gnosis/tmp/",
+    ".gnosis/state/",       # lease/claim/lint-baseline stores
+    ".gnosis/workspaces/",  # governed execution worktrees
+    ".zerker/",             # ZMem's local store, held open by its server
+    ".m3/",                 # M3's local index
+    "memory/",              # local memory databases and indexes
+)
+
+# OUT_OF_SCOPE — the evidence makes NO claim about these bytes, because
+# enumerating them is not affordable: they are nested clones. Measured
+# rather than guessed — expanding them is 90,237 paths and 1,218s to
+# lock, against 2,944 paths and 2.3s for the input set as declared here.
+#
+# Out of scope is NOT the same as allowed. These roots are not locked and
+# not identified, and any observed event under one INVALIDATES the
+# capture, because the declaration says nothing writes there and an event
+# says the declaration was wrong. What the declaration does not cover is
+# a change made BEFORE the capture starts; the bundle names the roots so
+# a reader knows the shape of what is not claimed.
+OUT_OF_SCOPE: tuple[str, ...] = (
+    # Constitution: READ-ONLY SOURCE, never executed, never imported.
+    "external/repositories/",
+    # .gitignore: "reproducible installs (uv venvs, npm, portable
+    # downloads); fixture/dataset dirs are rebuildable and contain nested
+    # git repos".
+    ".gnosis/lab/code-intelligence/candidates/",
+    ".gnosis/lab/code-intelligence/tools/",
+    ".gnosis/lab/code-intelligence/datasets/",
+    ".gnosis/lab/memory/candidates/",
+    ".gnosis/lab/memory/datasets/",
 )
 
 COMMANDS: list[CheckCommand] = [
@@ -134,7 +178,8 @@ def main() -> int:
     scratch = staging.parent / f"{staging.name}.scratch"
     try:
         capture = run_capture(REPO, COMMANDS, staging, lint_baseline=lint_baseline(),
-                              allowed_writes=ALLOWED_WRITES, scratch=scratch)
+                              allowed_writes=ALLOWED_WRITES,
+                              out_of_scope=OUT_OF_SCOPE, scratch=scratch)
         out_dir = publish_bundle(staging, EVIDENCE_ROOT / stamp)
     finally:
         shutil.rmtree(staging, ignore_errors=True)

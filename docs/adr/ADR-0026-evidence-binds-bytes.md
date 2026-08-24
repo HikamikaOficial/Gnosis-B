@@ -13,6 +13,12 @@
   memory-mapped view notifies nothing, so a check consumed mutated bytes
   inside a bundle that certified itself. Repaired in addendum 2 by making
   the covered inputs unwritable instead of merely watched.
+- Independent review, round 7 (2026-08-24): **FAIL PARCIAL.** Three
+  places assumed git-ignored files were outside the boundary, which
+  together read as "ignored ⇒ cannot affect the result". Reproduced: a
+  check consumed `MALICIOUS` from an ignored file and the bundle reported
+  CLEAN, `evidence_valid: true`, `all_passed: true`. Repaired in addendum
+  7 with three declared path classes and no use of `git check-ignore`.
 - Independent review, round 6 (2026-08-24): **FAIL PARCIAL — ALTA.** The
   reparse check asked whether the TARGET was a reparse point and never
   whether the PATH used to reach it could be redirected. Measured: a
@@ -39,21 +45,24 @@
   object behind each handle, the window while the locks are taken, and
   the volume the guarantee rests on. All four answered by measurement in
   addendum 3.
-- **A seventh independent review is OUTSTANDING**; F-14 stays OPEN in
+- **An eighth independent review is OUTSTANDING**; F-14 stays OPEN in
   `docs/V1_COMPLIANCE_MATRIX.md` until one returns without findings.
   Three reviews have now found something this unit's own tests and
   mutants did not.
+- Boundary domain: every path git can enumerate — tracked, untracked and
+  **ignored** — is an INPUT unless declared an OUTPUT or OUT_OF_SCOPE
+  root in `scripts/capture_evidence.py`. `git check-ignore` is not an
+  authority anywhere.
 - Demonstrated on: **Windows, local volume, drive type `fixed`,
   filesystem `NTFS`** — and nothing else. `ReFS` is a candidate extension
   pending real validation, refused with its own reason until the probe
   has been run on a real volume of that kind. Every other drive type,
   every other filesystem and every UNC path is refused before any input
   is opened.
-- Tests: `tests/test_evidence_binding.py` — **103 tests, 7 subtests**
-  (36, then 20, then 9, then 19, then 3, then 7, then 10 with one
-  rewritten).
-- Mutation check: `scripts/mutation_check_f14.py` — **twenty-four
-  mutants, none survived** (nine, four, three, four, one, one, two),
+- Tests: `tests/test_evidence_binding.py` — **117 tests, 7 subtests**
+  (36, 20, 9, 19, 3, 7, 10, then 16 with two inverted).
+- Mutation check: `scripts/mutation_check_f14.py` — **twenty-five
+  mutants, none survived** (nine, four, three, four, one, one, two, one),
   declared as data so a reviewer re-runs the claim rather than reading
   it.
 - Break attempts: `scripts/probe_f14_boundary.py` — ten cases in four
@@ -1438,3 +1447,163 @@ wrote them:
   which is F-17; the boundary is Windows on a local `fixed` NTFS volume;
   ReFS is a candidate, not a guarantee.
 - **F-15..F-18 remain open and untouched.**
+
+## Seventh independent review addendum — 2026-08-24: **FAIL PARCIAL**
+
+Everything the previous six rounds repaired was verified and is
+untouched. The new finding is that three separate places all assumed
+git-ignored files were outside the boundary, and together they read as a
+rule nobody would have written down deliberately:
+
+> ignored by git ⇒ cannot affect the result
+
+`content_fingerprint` does not enumerate ignored files, `covered_paths`
+did not add them, and `classify_observation` forgave a change to
+anything `git check-ignore` accepted. An ignored file can be a real
+input: a `.env`, a local config, a database, a fixture, a plugin — or the
+interpreter and the tools in `.venv`, which are what pytest, mypy and
+ruff actually are.
+
+### The bypass, reproduced before anything was changed
+
+```
+covered paths                     : ['.gitignore', 'a.txt']
+ignored-input.txt covered         : False
+present in the fingerprint        : False
+bytes before the check            : ORIGINAL
+what the CHECK read               : MALICIOUS
+bytes after the restore           : ORIGINAL
+PRE == POST                       : True
+violations                        : []
+boundary                          : CLEAN
+evidence_valid                    : True
+all_passed                        : True
+exit_code                         : 0
+```
+
+A check consumed `MALICIOUS` and the bundle certified itself. Every
+guarantee from the previous six rounds held perfectly and none of them
+applied, because the file was never in the set they protect.
+
+### What the measurements decided
+
+The obvious repair — cover every ignored file — was measured before it
+was chosen, and it does not survive contact with this repository:
+
+| | paths | lock time |
+|---|---|---|
+| tracked + untracked only (before) | 789 | 0.5 s |
+| everything ignored, nested clones expanded | 90,237 | **1,218 s** |
+| the policy below | **2,944** | **2.3 s** |
+
+The expansion is 86,073 files inside nested git clones under
+`external/repositories/` and `.gnosis/lab/**/candidates|tools|datasets`.
+Twenty minutes of locking per capture is not a boundary anybody will keep
+running.
+
+The same measurement found something the design had to accommodate:
+`.zerker/memory.sqlite`, `-shm` and `-wal` refuse the lock with
+`ERROR_SHARING_VIOLATION`, because the ZMem server holds them open. An
+OUTPUT class is therefore a necessity and not a convenience — without
+one, a live runtime store wedges every capture.
+
+### The repair: three declared classes, and the default is conservative
+
+```
+INPUT          covered, locked, identified. Everything git can enumerate
+               — tracked, untracked AND ignored — that is not declared
+               below. An undeclared path is an INPUT.
+OUTPUT         a declared root the checks legitimately write. Events
+               there are allowed.
+OUT_OF_SCOPE   a declared root the evidence makes no claim about. NOT
+               locked, NOT identified, and any event under it is a
+               VIOLATION — "outside the claim" is not "allowed".
+```
+
+`git check-ignore` is no longer called anywhere in the capture. The
+classes are declared in `scripts/capture_evidence.py`, each entry
+carrying the reason it is there, and both lists are recorded in the
+bundle under `boundary.allowed_writes` and `boundary.out_of_scope` with
+the policy stated in `boundary.input_policy`. A reviewer can challenge
+any single line of the declaration; nothing is exempt by inference.
+
+**`.venv/` is an INPUT.** It is the toolchain, and 2,130 of the 2,944
+locked inputs are in it. That is the single most important consequence of
+this round: the bytes of pytest, mypy and ruff are now inside the
+boundary rather than outside it by accident.
+
+The `OUT_OF_SCOPE` roots are the six that contain nested clones, each
+justified from something already written down — the constitution says
+`external/repositories/**` is READ-ONLY SOURCE, and `.gitignore` already
+describes the lab directories as reproducible installs and rebuildable
+datasets containing nested git repos.
+
+### After the repair
+
+```
+covered paths                     : ['.gitignore', 'a.txt', 'ignored-input.txt']
+the meddler's write               : REFUSED PermissionError
+what the CHECK read               : ORIGINAL
+locked_inputs                     : 3      identified_objects : 3
+violations                        : ['modified: ignored-input.txt']
+boundary                          : INPUTS_MUTATED
+evidence_valid                    : False   all_passed : False
+exit_code                         : 4
+```
+
+Both halves fire: the lock refuses the write, and the attempt is still an
+observed event on a covered path, so the capture also refuses to certify.
+
+### Two existing tests were inverted, and their assertions were the defect
+
+`test_a_git_ignored_cache_written_during_a_check_is_not_a_violation` and
+`test_an_ignored_directory_created_during_a_run_is_still_allowed` both
+asserted that being git-ignored was sufficient. They now assert the
+opposite for an undeclared path and the same outcome for a declared one,
+which is the distinction the review asked for. Nothing else changed.
+
+### Tests
+
+Sixteen in a new class, covering the review's A–F plus the policy itself:
+the input domain includes ignored files; a declared OUTPUT root does not;
+a declared OUT_OF_SCOPE root does not; the three classes come from
+declaration and not from git; an ignored input a check reads is locked
+against it; an ignored-input ABA cannot produce valid evidence; an
+ignored file created mid-run is not silently an input; an ignored input
+deleted and recreated is caught; the same input cannot be deleted while
+locked; a declared cache may change freely; an undeclared ignored path is
+not authorised by `.gitignore`; an out-of-scope root that moves
+invalidates rather than passes; the bundle records the declared classes;
+and the capture script declares all three, with `.venv/` in neither
+exemption list.
+
+### Mutation check
+
+MF13's anchor moved with the code it names and its meaning is unchanged.
+**MF25** is new and restores the finding in both halves at once — ignored
+files leave the input domain AND `git check-ignore` is consulted again —
+because either alone leaves the other half of the repair standing.
+
+### What is still not closed
+
+- **F-14 remains OPEN.** Seven reviews, seven findings this unit's own
+  tests did not have.
+- **An OUT_OF_SCOPE root is described by nothing.** A change made to one
+  BEFORE a capture starts is not part of any identity. The bundle names
+  the roots so the reader knows the shape of what is not claimed; that is
+  a disclosure, not a defence.
+- **An ignored INPUT is covered, locked and identified by object, but its
+  BYTES are not in `content_fingerprint`**, which is git-based and shared
+  with the policy gate and the replay runner. It cannot change during a
+  capture; what it was before the capture is recorded as a file id rather
+  than a content digest. Hashing `.venv` on every run was not paid for.
+- Everything named in the previous six addenda stands.
+- **F-15..F-18 remain open and untouched.**
+
+### Review-package procedure, corrected
+
+`F14_REVIEW_ROUND7.zip` carried 39 files and `FILE_SHA256.txt` listed 37:
+the manifest cannot hash itself, and `REVIEW_SCOPE.txt` was written after
+it. The generator now writes `REVIEW_SCOPE.txt` first and the manifest
+last, so exactly one file — the manifest — is unlisted, and it says so in
+its own footer.

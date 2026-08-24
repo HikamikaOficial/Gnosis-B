@@ -41,6 +41,9 @@ be retargeted mid-run; and the classifier forgave any directory event
 because the path was a directory again by the time it looked, which is
 what a junction removed and recreated leaves behind.
 
+MF25 is the seventh review's: `git ignores it` was authority for `it
+cannot affect the result`, and an ignored file can be a real input.
+
     PYTHONUTF8=1 .venv/Scripts/python.exe scripts/mutation_check_f14.py
 
 Writes the transcript to stdout and, with `--out <path>`, to a file an
@@ -208,12 +211,12 @@ MUTANTS: list[Mutant] = [
         "MF13", "a path that appears and disappears inside the run is not "
                 "judged, so create-read-delete is invisible again",
         [(CAPTURE,
-          """    ignored = _git_ignored(repo, sorted(unknown))
-    for path, action in sorted(unknown.items()):
-        if path in ignored:
-            allowed_count += 1
-        else:
-            violations.append(f"{action}: {path}")""",
+          """    for path, action in sorted(unknown.items()):
+        # No `git check-ignore` here, and that is the seventh review's
+        # repair. A path nobody declared is an unknown, and an unknown is
+        # a violation: being ignored by git was never evidence that a
+        # check cannot read it.
+        violations.append(f"{action}: {path}")""",
           "    allowed_count += len(unknown)")],
     ),
     # MF14..MF16 are the SECOND independent review's finding: a write made
@@ -346,6 +349,35 @@ MUTANTS: list[Mutant] = [
         [(CAPTURE,
           '        elif event.action == "modified" and (repo / path).is_dir():',
           "        elif (repo / path).is_dir():")],
+    ),
+    # MF25 is the SEVENTH review's: `git ignores it` used as authority for
+    # `it cannot affect the result`. It takes the ignored files back out of
+    # the input domain AND restores the check-ignore allowance, because
+    # either one alone leaves the other half of the repair standing.
+    Mutant(
+        "MF25", "git-ignored paths leave the input domain and are "
+                "forgiven again when they change",
+        [(CAPTURE,
+          """    ignored = _git_lines(
+        repo, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard"])""",
+          "    ignored = []"),
+         (CAPTURE,
+          """    for path, action in sorted(unknown.items()):
+        # No `git check-ignore` here, and that is the seventh review's
+        # repair. A path nobody declared is an unknown, and an unknown is
+        # a violation: being ignored by git was never evidence that a
+        # check cannot read it.
+        violations.append(f"{action}: {path}")""",
+          """    import subprocess as _sp
+    _proc = _sp.run(["git", "check-ignore", "-z", "--stdin"], cwd=repo,
+                    input="\\0".join(sorted(unknown)) + "\\0",
+                    capture_output=True, text=True, check=False)
+    _ignored = {p for p in _proc.stdout.split("\\0") if p}
+    for path, action in sorted(unknown.items()):
+        if path in _ignored:
+            allowed_count += 1
+        else:
+            violations.append(f"{action}: {path}")""")],
     ),
 ]
 

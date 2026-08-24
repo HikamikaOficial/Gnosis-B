@@ -162,9 +162,23 @@ when an ADR with captured evidence backs it.
   point anywhere means `UNPROTECTED`, exit 6, zero checks; the classifier
   forgives only `modified` on a directory. 103 tests, 7 subtests;
   twenty-four mutants, none survived (MF23 and MF24, one per half). The
-  probe is ten cases in four groups. **Next action: hand this unit to a
-  SEVENTH independent review.** It is not closed until one returns
-  without findings.
+  probe is ten cases in four groups.
+
+- **Seventh independent review (2026-08-24): FAIL PARCIAL — "git ignores
+  it" was being used as authority.** `content_fingerprint` does not
+  enumerate ignored files, `covered_paths` did not add them, and
+  `classify_observation` forgave whatever `git check-ignore` accepted;
+  together that reads as "ignored ⇒ cannot affect the result". Reproduced
+  first: a check read `MALICIOUS` from an ignored file inside a bundle
+  that said CLEAN / evidence_valid true / all_passed true. Repaired with
+  three declared classes — INPUT by default (everything git enumerates,
+  ignored included), OUTPUT declared, OUT_OF_SCOPE declared and any event
+  there a violation — and `git check-ignore` removed as an authority.
+  Measured: 2,944 inputs in 2.3 s, against 90,237 and 1,218 s if the
+  nested clones are expanded; `.venv` (2,130 files) is now an INPUT. 117
+  tests, 7 subtests; twenty-five mutants, none survived. **Next action:
+  hand this unit to an EIGHTH independent review.** It is not closed
+  until one returns without findings.
 
 - **Observed overlap with F-15..F-18, none of them marked repaired:**
   F-15's suggested correction is what this script now does, but the

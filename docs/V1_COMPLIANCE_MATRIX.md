@@ -1,10 +1,11 @@
 # GNOSIS — Matriz V1 viva
 
-**Última actualización:** 2026-08-24 · **Unidad:** ADR-0026 + seis
+**Última actualización:** 2026-08-24 · **Unidad:** ADR-0026 + siete
 revisiones independientes (**FAIL CRÍTICO**, **FAIL CRÍTICO
 PROVISIONAL**, **reparación aceptada con cierre en hold**, **FAIL DE
-ALCANCE**, **FAIL PARCIAL/ALTA**, **FAIL PARCIAL/ALTA**) — **F-14 sigue
-ABIERTO**, entregado para una séptima revisión independiente.
+ALCANCE**, **FAIL PARCIAL/ALTA**, **FAIL PARCIAL/ALTA**, **FAIL
+PARCIAL**) — **F-14 sigue ABIERTO**, entregado para una octava revisión
+independiente.
 Unidad anterior: ADR-0025 + cuatro addenda (FAIL PARCIAL, FAIL PARCIAL,
 **FAIL CRÍTICO**, **PASS**) — F-34 **CERRADO** por la cuarta revisión,
 sin hallazgos sobre el código `9c6064c` y la evidencia `f02e18e`
@@ -179,6 +180,8 @@ lo ve), y la frontera entera es un mecanismo de Windows.
 | **F-14 (quinta revisión)** — ruta fail-open: un input cubierto de tipo directorio (gitlink de submódulo) se reabría con `FILE_FLAG_BACKUP_SEMANTICS`, contaba como handle bloqueado y **nunca se identificaba**, así que un resultado podía declarar `enforced=true` sosteniendo un objeto que no sabía nombrar — contra la garantía publicada por el propio módulo | ADR-0026 addendum 5 | 2026-08-23 | **reparado, pendiente de sexta revisión** | los inputs cubiertos de tipo directorio se rechazan **antes** de abrirlos (submódulos declinados, no soportados); no queda ninguna ruta que añada un handle sin identificarlo; invariante `locked == identified` afirmado en el productor y re-comprobado en el consumidor, y registrado como `protection.fully_identified`; todo objeto identificado debe estar en el volumen sondeado por `VolumeSerialNumber` (cierra el reparse point en un ancestro). 94 pruebas y 7 subtests; veintidós mutantes, ninguno sobrevive |
 
 | **F-14 (sexta revisión)** — el chequeo de reparse point miraba el *target* y nunca la *ruta* usada para alcanzarlo: una junction sobre un input cubierto se retargeteaba a otro directorio del mismo volumen con el handle del objeto abierto, y el check leía el otro directorio. Segundo defecto: `classify_observation` perdonaba cualquier evento de directorio por serlo al final, que es justo la forma que deja una junction borrada y recreada | ADR-0026 addendum 6 | 2026-08-24 | **reparado, pendiente de séptima revisión** | `reparse_in_chain()` recorre desde la unidad: la raíz y todos sus ancestros una vez, y cada componente entre la raíz y el input; un solo reparse point rechaza la captura antes de ejecutar nada (junctions declinadas, no soportadas). El clasificador sólo perdona `modified` sobre un directorio; crear, borrar o renombrar uno se juzga. 103 pruebas y 7 subtests; veinticuatro mutantes, ninguno sobrevive; sonda de diez casos en cuatro grupos |
+
+| **F-14 (séptima revisión)** — tres sitios daban por hecho que los ficheros ignorados por Git quedaban fuera de la frontera (`content_fingerprint` no los enumera, `covered_paths` no los añadía, `classify_observation` perdonaba lo que `git check-ignore` aceptase). Juntos equivalían a «ignorado ⇒ no puede afectar al resultado», que es falso: un `.env`, una config local, una base de datos o el propio `.venv` son inputs reales. Reproducido: un check leyó `MALICIOUS` de un fichero ignorado y el paquete se declaró `CLEAN` / `evidence_valid: true` / `all_passed: true` | ADR-0026 addendum 7 | 2026-08-24 | **reparado, pendiente de octava revisión** | tres clases declaradas: **INPUT** por defecto (todo lo que git enumera, ignorados incluidos: cubierto, bloqueado, identificado), **OUTPUT** declarado (los checks escriben ahí), **OUT_OF_SCOPE** declarado (sin reclamación; cualquier evento allí es violación). `git check-ignore` deja de consultarse. Medido: 2.944 inputs en 2,3 s frente a 90.237 y 1.218 s si se expanden los clones anidados. 117 pruebas y 7 subtests; veinticinco mutantes, ninguno sobrevive |
 
 **F-14 está demostrado sobre:** Windows, volumen local, tipo `fixed`,
 filesystem `NTFS`. Y sobre nada más. **ReFS es una extensión candidata

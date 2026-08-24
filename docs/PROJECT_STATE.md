@@ -3,7 +3,7 @@
 **Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION; THE PROBE HAS A CALLER; MULTI-CREDENTIAL ROTATION
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
-**Last update:** 2026-08-24 (F-34 closed; F-14 repaired seven times and still open; the stale lines below are F-19..F-32, still open)
+**Last update:** 2026-08-24 (F-34 closed; F-14 repaired eight times and still open; the stale lines below are F-19..F-32, still open)
 
 ## Kernel hardening (post-Phase -1)
 
@@ -608,11 +608,37 @@ move; creating, removing or renaming one is judged like anything else.
 Cost of the chain walk: 775 inputs locked, identified and checked in
 0.52 s warm.
 
-**F-14 is still NOT closed.** Repaired seven times now, tested (103
-tests, 7 subtests) and mutation-checked (twenty-four mutants, none
-survived), it awaits a SEVENTH independent review. Six reviews have each
-found something this unit's own tests and mutants did not. It closes when
-a review returns without findings.
+**Seventh independent review (2026-08-24): FAIL PARCIAL.** Three places
+assumed git-ignored files were outside the boundary —
+`content_fingerprint` does not enumerate them, `covered_paths` did not
+add them, and `classify_observation` forgave whatever `git check-ignore`
+accepted. Together that is "ignored ⇒ cannot affect the result", and it
+is false: a `.env`, a local config, a database, a fixture, or the
+interpreter and tools in `.venv` are all ignored and all real inputs.
+Reproduced before anything changed: a check read `MALICIOUS` out of an
+ignored file and the bundle reported CLEAN, evidence_valid true,
+all_passed true, exit 0.
+
+Repaired with three declared classes and a conservative default. INPUT
+(covered, locked, identified) is everything git can enumerate — tracked,
+untracked AND ignored — that is not declared otherwise. OUTPUT is a
+declared root the checks legitimately write. OUT_OF_SCOPE is a declared
+root the evidence claims nothing about, is not locked, and where any
+event is a VIOLATION rather than an allowance. `git check-ignore` is not
+consulted anywhere any more, and both lists are recorded in the bundle.
+
+The policy was measured, not guessed: covering everything ignored with
+the nested clones expanded is 90,237 paths and 1,218 s to lock, against
+2,944 paths and 2.3 s as declared. 2,130 of those inputs are `.venv` —
+the toolchain is now inside the boundary rather than outside it by
+accident. The measurement also found `.zerker/memory.sqlite` held open by
+the ZMem server, which is why an OUTPUT class is a necessity rather than
+a convenience.
+
+**F-14 is still NOT closed.** Repaired eight times now, tested (117
+tests, 7 subtests) and mutation-checked (twenty-five mutants, none
+survived), it awaits an EIGHTH independent review. Seven reviews have
+each found something this unit's own tests and mutants did not.
 
 **Overlap recorded, not claimed:** F-15 (the unused primitive) is what
 this script now uses; F-16 (capture order) no longer affects the binding
