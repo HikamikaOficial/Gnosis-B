@@ -15,3 +15,8 @@
 *.zip binary
 *.db binary
 *.sqlite binary
+
+# Evidence bundles are byte-exact artifacts: their MANIFEST.sha256.json
+# hashes each file, so git must store them verbatim or verify_bundle (F-17)
+# fails after a clone. Never EOL-convert anything under an evidence bundle.
+.gnosis/evidence/** -text
