@@ -532,6 +532,20 @@ class Boundary:
                 "input. Tamper-evidence for the machinery itself is F-17 and is "
                 "not repaired here"
             ),
+            "complete_note": (
+                "a CLEAN verdict means the observation was COMPLETE and saw no "
+                "violation. COMPLETE means exactly: no event from the supported "
+                "observation mechanism (ReadDirectoryChangesW, recursive over the "
+                "tree plus a non-recursive watch on the parent for the root's own "
+                "streams) was lost -- no overflow, no undelivered tail, no watch "
+                "that failed to arm. It does NOT mean every possible filesystem "
+                "modification was observed. A memory-mapped write is not caught by "
+                "observation at all (measured: silent even on flush); it is caught "
+                "because a writable mapping needs write access, which the lock's "
+                "share mode refuses, so any live mapping makes the capture fail "
+                "closed before a check runs. Overflow, an unarmed or failed watch, "
+                "or an unwatchable parent yield UNOBSERVED, never CLEAN"
+            ),
         }
 
 

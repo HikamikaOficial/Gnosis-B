@@ -3,7 +3,7 @@
 **Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION; THE PROBE HAS A CALLER; MULTI-CREDENTIAL ROTATION
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
-**Last update:** 2026-08-25 (F-34 closed; F-14 repaired eleven times and still open; the stale lines below are F-19..F-32, still open)
+**Last update:** 2026-08-25 (F-34 closed; F-14 repaired ten times and audited an eleventh, still open; the stale lines below are F-19..F-32, still open)
 
 ## Kernel hardening (post-Phase -1)
 
@@ -751,10 +751,34 @@ in the bundle (`scope_note`), as properties of the lock-time SNAPSHOT and
 never of the interval: the interval guarantee is a CLEAN verdict over a
 COMPLETE observation, which now sees stream transitions on directories.
 
-**F-14 is still NOT closed.** Repaired eleven times now, tested (156
-tests) and mutation-checked (forty mutants, none survived), it awaits an
-ELEVENTH independent review. Ten reviews have each found something this
-unit's own tests and mutants did not.
+**Eleventh independent review (2026-08-25): F-14.11, auditing CLEAN over
+COMPLETE.** Not a repair — an audit for an unobserved window between the
+real start of the boundary and the real end of the capture, memory-mapped
+writes named as the crux. No new bypass was found. Measured on real NTFS:
+a mapped write changes bytes immediately and ReadDirectoryChangesW reports
+nothing (not even on flush), so the observer is not the defence; the lock
+is, by failing closed for any live writable mapping (ERROR_SHARING_VIOLATION
+under every share mode, file and named stream), and refusing a new mapping
+while it holds the input. run_capture with a live mapping returns
+UNPROTECTED, exit 6, running no check. Copy-on-write coexists with the read
+lock but never touches the file.
+
+The lifecycle was read from the code, not assumed: the watch is armed
+before the boundary and the ordered barrier is drained before any verdict,
+so there is no start race and no end race. Overflow, an unarmed or failed
+watch, or an unwatchable parent all yield UNOBSERVED, never CLEAN. The
+`modified_stream` tolerance is now a demonstrated invariant: a locked
+stream admits no overwrite, truncate, delete, second writable handle or
+mapping. COMPLETE is formally defined -- no event from the supported
+mechanism was lost -- and separated in the evidence (`complete_note`) from
+the snapshot booleans, so nothing claims "every filesystem modification was
+observed". The only production change is that one advisory string.
+
+**F-14 is still NOT closed.** Ten repairs and one audit now, tested (166
+tests) and mutation-checked (forty-two mutants, none survived), it awaits
+a TWELFTH independent review. Ten reviews found a defect; the eleventh
+audited the interval guarantee and found no new bypass -- which is
+evidence, not proof.
 
 **Overlap recorded, not claimed:** F-15 (the unused primitive) is what
 this script now uses; F-16 (capture order) no longer affects the binding

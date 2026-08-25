@@ -247,9 +247,26 @@ when an ADR with captured evidence backs it.
   parent is unwatchable. The USN journal corroborates but needs admin, so
   it is not a dependency. `fully_identified`/`fully_bound` are documented
   as snapshot properties, not interval claims (`scope_note`). 156 tests;
-  forty mutants, none survived. **Next action: hand this unit to an
-  ELEVENTH independent review.** It is not closed until one returns
-  without findings.
+  forty mutants, none survived.
+
+- **Eleventh independent review (2026-08-25): F-14.11, auditing CLEAN over
+  COMPLETE.** An audit, not a repair: is there an unobserved window
+  between the real boundary start and capture end, especially via a
+  memory mapping made before the boundary? No new bypass found. Measured
+  on real NTFS: a mapped write is silent to ReadDirectoryChangesW (even on
+  flush), so the lock, not the observer, is the defence -- it fails closed
+  (ERROR_SHARING_VIOLATION) for any live writable mapping on a file or a
+  stream and refuses a new one while holding the input, so run_capture
+  with a mapping alive returns UNPROTECTED, exit 6. Lifecycle confirmed:
+  watch armed before the boundary, ordered barrier drained before any
+  verdict (no start/end race); overflow / failed watch / unwatchable
+  parent -> UNOBSERVED, never CLEAN; the `modified_stream` tolerance is
+  now a demonstrated invariant (a locked stream admits no modification
+  route); COMPLETE formally defined and separated from the snapshot
+  booleans (`complete_note`). Only production change: that advisory
+  string. 166 tests; forty-two mutants, none survived. **Next action:
+  hand this unit to a TWELFTH independent review.** It is not closed until
+  one returns without findings.
 
 - **Observed overlap with F-15..F-18, none of them marked repaired:**
   F-15's suggested correction is what this script now does, but the

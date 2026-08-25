@@ -525,6 +525,22 @@ MUTANTS: list[Mutant] = [
           "            if not root.complete:",
           "            if False:")],
     ),
+    # MF41..MF42 are the ELEVENTH review's: the CLEAN-over-COMPLETE audit.
+    Mutant(
+        "MF41", "the lock shares WRITE, so a pre-existing writable mapping no "
+                "longer blocks it and a mapped write can end CLEAN",
+        [(LOCK,
+          "                    str(target), _GENERIC_READ, _FILE_SHARE_READ, None,",
+          "                    str(target), _GENERIC_READ, _FILE_SHARE_READ | 0x2, "
+          "None,")],
+    ),
+    Mutant(
+        "MF42", "the parent watch stops filtering to the root entry, so a "
+                "stream on a sibling of the repository reads as a violation",
+        [(OBSERVER,
+          "                    if owner != self.entry or not stream:",
+          "                    if not stream:")],
+    ),
 ]
 
 

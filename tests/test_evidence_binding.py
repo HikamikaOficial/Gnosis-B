@@ -15,6 +15,7 @@ import contextlib
 import hashlib
 import importlib.util
 import json
+import mmap
 import os
 import shutil
 import subprocess
@@ -3142,6 +3143,223 @@ class TestDirectoryStreamAbaIsObserved(unittest.TestCase):
                                   observer=lambda _: observer)
             self.assertIs(capture.boundary.verdict, ObservationVerdict.UNOBSERVED)
             self.assertFalse(capture.evidence_valid)
+
+
+class TestNoUnobservedWindow(unittest.TestCase):
+    """Eleventh review: CLEAN is licensed only by a COMPLETE observation over
+    the whole interval, and the interval has no gap the guarantee ignores.
+
+    The hard case is a memory-mapped write: a writable mapping can change a
+    file's bytes without the observer ever seeing it (measured: silent even
+    on flush). It is stopped not by observation but by the lock, which fails
+    closed for any live writable mapping — a writable mapping needs write
+    access and the lock's FILE_SHARE_READ open refuses to coexist with it.
+    """
+
+    @staticmethod
+    def _repo(root: Path) -> Path:
+        repo = _make_repo(root)
+        (repo / "data.bin").write_bytes(b"A" * 64)
+        _git(repo, "add", "data.bin")
+        _git(repo, "commit", "-m", "data")
+        return repo
+
+    # -- memory mapping: the crux -------------------------------------------
+    @WINDOWS_ONLY
+    def test_a_live_writable_mapping_forces_fail_closed(self):
+        # A writable mapping alive on a covered file when the lock tries to
+        # acquire: the capture must fail closed (UNPROTECTED), never run a
+        # check, never reach CLEAN.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            fh = open(repo / "data.bin", "r+b")  # noqa: SIM115 - handle held or open asserted to fail
+            mm = mmap.mmap(fh.fileno(), 0)
+            try:
+                capture = run_capture(repo, [_script("pass")], root / "staging")
+            finally:
+                mm.close()
+                fh.close()
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.UNPROTECTED)
+            self.assertFalse(capture.evidence_valid)
+            self.assertEqual(capture.exit_code, EXIT_INPUTS_UNPROTECTED)
+            self.assertEqual(capture.checks, ())  # nothing ran
+
+    @WINDOWS_ONLY
+    def test_the_same_tree_is_clean_once_the_mapping_is_gone(self):
+        # Control: the fail-closed above is the mapping, not the tree.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            fh = open(repo / "data.bin", "r+b")  # noqa: SIM115 - handle held or open asserted to fail
+            mm = mmap.mmap(fh.fileno(), 0)
+            mm.close()
+            fh.close()
+
+            capture = run_capture(repo, [_script("pass")], root / "staging")
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
+            self.assertTrue(capture.evidence_valid)
+
+    @WINDOWS_ONLY
+    def test_a_locked_input_admits_no_writable_mapping(self):
+        # A NEW writable mapping cannot be created while the lock holds the
+        # file, so a check cannot map its way around the boundary either.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            lock = create_input_lock(repo)
+            try:
+                outcome = lock.acquire(sorted(covered_paths(repo)))
+                self.assertTrue(outcome.enforced)
+                with self.assertRaises(PermissionError):
+                    open(repo / "data.bin", "r+b")  # write access refused  # noqa: SIM115 - handle held or open asserted to fail
+            finally:
+                lock.release()
+
+    # -- locked stream immutability: the modified_stream invariant ----------
+    @WINDOWS_ONLY
+    def test_a_locked_stream_admits_no_modification_route(self):
+        # modified_stream is tolerated because a stream present at lock time
+        # cannot actually be changed. Prove every route is refused.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            with open(f"{repo / 'data.bin'}:s", "w", encoding="utf-8") as fh:
+                fh.write("ORIGINAL")
+
+            lock = create_input_lock(repo)
+            try:
+                outcome = lock.acquire(sorted(covered_paths(repo)))
+                self.assertTrue(outcome.enforced)
+                stream = f"{repo / 'data.bin'}:s"
+                with self.assertRaises(OSError):        # overwrite
+                    open(stream, "w", encoding="utf-8")  # noqa: SIM115 - handle held or open asserted to fail
+                with self.assertRaises(OSError):        # truncate/extend
+                    open(stream, "r+b")  # noqa: SIM115 - handle held or open asserted to fail
+                with self.assertRaises(OSError):        # delete
+                    os.remove(stream)
+                with self.assertRaises(OSError):        # writable mapping
+                    fh2 = open(stream, "r+b")  # noqa: SIM115 - handle held or open asserted to fail
+                    try:
+                        mmap.mmap(fh2.fileno(), 0)
+                    finally:
+                        fh2.close()
+            finally:
+                lock.release()
+            self.assertEqual(
+                open(stream, encoding="utf-8").read(), "ORIGINAL")  # noqa: SIM115 - handle held or open asserted to fail
+
+    # -- start race: the observer is armed before the boundary --------------
+    def test_the_observer_is_armed_before_the_lock(self):
+        order: list[str] = []
+
+        class _RecordingObserver:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def start(self):
+                order.append("observer.start")
+                return self._inner.start()
+
+            def stop(self):
+                return self._inner.stop()
+
+        class _RecordingLock:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def acquire(self, paths, directories=()):
+                order.append("lock.acquire")
+                return self._inner.acquire(paths, directories)
+
+            def release(self):
+                return self._inner.release()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            run_capture(
+                repo, [_script("pass")], root / "staging",
+                observer=lambda r: _RecordingObserver(create_write_observer(r)),
+                input_lock=lambda r: _RecordingLock(create_input_lock(r)))
+
+        self.assertEqual(order[:2], ["observer.start", "lock.acquire"],
+                         f"the boundary was raised before the watch: {order}")
+
+    # -- end race / transient file: create -> modify -> delete --------------
+    @WINDOWS_ONLY
+    def test_a_file_created_and_deleted_in_the_interval_is_caught(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            capture = run_capture(repo, [_script(
+                "import os",
+                "open('sneaked.txt', 'w', encoding='utf-8').write('X')",
+                "os.remove('sneaked.txt')",
+            )], root / "staging")
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.INPUTS_MUTATED)
+            self.assertFalse(capture.evidence_valid)
+
+    # -- overflow / failure: never CLEAN ------------------------------------
+    def _capture_with_observation(self, observation):
+        class _Injected:
+            def start(self_inner):
+                return None
+
+            def stop(self_inner):
+                return observation
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            return run_capture(repo, [_script("pass")], root / "staging",
+                               observer=lambda _: _Injected())
+
+    def test_an_overflowed_observation_is_never_clean(self):
+        capture = self._capture_with_observation(
+            Observation(True, False, (), MECHANISM, "the change buffer overflowed"))
+        self.assertIs(capture.boundary.verdict, ObservationVerdict.UNOBSERVED)
+        self.assertFalse(capture.evidence_valid)
+        self.assertEqual(capture.exit_code, EXIT_BOUNDARY_UNAVAILABLE)
+
+    def test_an_unavailable_observer_is_never_clean(self):
+        capture = self._capture_with_observation(
+            Observation(False, False, (), MECHANISM, "the observer was never armed"))
+        self.assertIs(capture.boundary.verdict, ObservationVerdict.UNOBSERVED)
+        self.assertFalse(capture.evidence_valid)
+
+    # -- parent watcher: sibling noise is not a violation -------------------
+    @WINDOWS_ONLY
+    def test_a_stream_on_a_sibling_of_the_repo_is_not_a_violation(self):
+        # The parent watch is non-recursive and filtered to the root's own
+        # entry, so a stream created on a SIBLING directory in the same
+        # parent must not be mistaken for a change to the repository.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            sibling = root / "sibling"
+            sibling.mkdir()
+
+            capture = run_capture(repo, [_script(
+                "import os",
+                "sib = os.path.join(os.path.dirname(os.getcwd()), 'sibling')",
+                "open(sib + ':noise', 'w', encoding='utf-8').write('N')",
+                "os.remove(sib + ':noise')",
+            )], root / "staging")
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
+            self.assertTrue(capture.evidence_valid)
+
+    def test_the_summary_defines_complete_without_overclaiming(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            capture = run_capture(repo, [_script("pass")], root / "staging")
+            note = capture.summary["boundary"]["complete_note"]
+            self.assertIn("does NOT mean every possible filesystem", note)
+            self.assertIn("UNOBSERVED, never CLEAN", note)
 
 
 if __name__ == "__main__":

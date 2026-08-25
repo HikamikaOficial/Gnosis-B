@@ -2344,3 +2344,195 @@ Four artifacts beyond the gate transcripts:
 - The residuals above (incomplete-observation ABA, volume-root repo,
   memory-mapped writes, elevation-gated USN facts).
 - **F-15..F-18 remain open and untouched.**
+
+## Eleventh independent review addendum — 2026-08-25: **F-14.11, auditing CLEAN over COMPLETE**
+
+This review did not repair a bypass; it audited the guarantee `CLEAN over a
+COMPLETE observation` for an unobserved window between the real start of
+the boundary and the real end of the capture, with memory-mapped writes as
+the named crux. The conclusion is that the guarantee holds, and the honest
+work was to demonstrate it experimentally, formalise what `COMPLETE` means,
+and lock the properties down with tests and mutants. **The only production
+change is one advisory string (`complete_note`); no logic was found
+wanting.** That is stated plainly rather than dressed up as a fix.
+
+### The exact lifecycle (read from the code, not assumed)
+
+    watcher.start()            # main recursive watch armed, then the
+                               #   parent watch for the root's own streams;
+                               #   both reads issued synchronously
+    pre = identity(repo)       # pre fingerprint, already inside the watch
+    lock.acquire(...)          # THE BOUNDARY: covered inputs made unwritable
+    prepared = identity(repo)  # post-lock identity; must equal pre or refuse
+    for command in commands    # the protected work
+    after_streams inventory    # still under the lock
+    lock.release()
+    post = identity(repo)      # post fingerprint, still inside the watch
+    observation = watcher.stop()   # barrier written and awaited, then drain
+
+The watch is armed strictly BEFORE the boundary, and the barrier is awaited
+in `stop()` before any verdict is computed.
+
+### Start race — none
+
+The observer's read is issued synchronously inside `start()`, which runs
+before `lock.acquire()`. There is no instant where the boundary is up and
+the watch is not: the only window is watch-armed-but-not-yet-locked, and in
+it the watch is already recording, so any write is observed. No check runs
+until after the lock, so nothing an adversary controls executes before the
+watch is complete. Pinned by `test_the_observer_is_armed_before_the_lock`.
+
+### Shutdown race — none
+
+`stop()` writes a barrier and blocks until the stream delivers it;
+notifications are ordered, so seeing the barrier proves every earlier event
+is already drained. The parent watch has its own barrier (a stream on the
+root, awaited). A write during the interval therefore produces an event
+delivered before the barrier and classified. Pinned by
+`test_a_file_created_and_deleted_in_the_interval_is_caught`.
+
+### Buffer overflow / observer failure — never CLEAN
+
+A zero-length read is overflow: `_fail` sets `complete=False`. An unarmed
+or crashed watch is `available=False`. Either way the boundary is
+`UNOBSERVED` (exit 5), never CLEAN. Pinned by
+`test_an_overflowed_observation_is_never_clean` and
+`test_an_unavailable_observer_is_never_clean`, and by MF11.
+
+### Memory-mapped writes — OS-real, the crux
+
+Measured, not presumed (`ads-mechanisms` sibling transcripts
+`mmap-mechanism.txt` and `mmap-defense.txt`):
+
+**Mechanism (why the observer cannot be the defence).** With a writable
+mapping held, a write through the view changes the file's bytes on disk
+immediately, and `ReadDirectoryChangesW` reports NOTHING for it — not when
+the bytes change, and, measured, not even on `FlushViewOfFile`. A write
+reverted before any flush is therefore invisible to observation. The
+observer is not a backstop for mapped writes.
+
+**Defence (why it cannot reach CLEAN anyway).** A writable file mapping
+needs a handle with write access. The lock opens every covered input
+`GENERIC_READ` with share mode `FILE_SHARE_READ`, which Windows refuses to
+grant beside any live write access. Measured, end to end:
+
+- a writable mapping alive on a covered file when the lock acquires →
+  `ERROR_SHARING_VIOLATION` (error 32), under every attacker share mode
+  (`R|W|D`, `R|W`, `R`) → the lock does not enforce → `run_capture` returns
+  UNPROTECTED, exit 6, and runs no check;
+- the teardown matrix: the lock enforces ONLY when the mapping is fully
+  torn down (no write access left). View-alive-handles-closed and
+  flushed-unmapped-handles-open both still block it, because a live section
+  keeps the file object referenced with write access;
+- the same for a mapping on a NAMED STREAM;
+- a NEW writable mapping attempted while the lock is held is refused.
+
+So the lock enforces only when no writable mapping is alive, and while it
+is held none can appear. There is no sequence with both an enforcing lock
+and a live writable mapping, hence none that ends CLEAN with mapped bytes
+changed. Copy-on-write is the one mapping that coexists with the read lock
+— it needs no write access — and it is harmless: measured, its writes go
+to private pages and never reach the file.
+
+Pinned by `test_a_live_writable_mapping_forces_fail_closed`,
+`test_the_same_tree_is_clean_once_the_mapping_is_gone`,
+`test_a_locked_input_admits_no_writable_mapping`, and mutant MF41 (which
+lets the lock share write and is caught).
+
+### The `modified_stream` invariant, now demonstrated
+
+The tenth review tolerated `modified_stream` on the argument that a stream
+present at lock time cannot actually be changed. Turned into a
+demonstration: with the lock held,
+`test_a_locked_stream_admits_no_modification_route` shows every route —
+overwrite, truncate, delete, a second writable handle, a writable mapping —
+is refused, and the stream still reads its original bytes afterward. So the
+only `modified_stream` a capture can see is a read, which is not a
+violation.
+
+### Parent watcher audit
+
+- Detects a stream on the root (`test_the_repository_roots_own_stream_aba_is_caught`).
+- Does not confuse a sibling: a stream on a sibling directory in the same
+  parent is filtered by entry name and is not a violation
+  (`test_a_stream_on_a_sibling_of_the_repo_is_not_a_violation`); MF42
+  removes the filter and is caught.
+- No false negative: the root's own stream is still caught (the tenth
+  review's test).
+- Fail closed if the parent is unwatchable, and its incompleteness makes
+  the whole observation incomplete (the tenth review's two tests).
+- It only OBSERVES the parent; it writes nothing outside the repository
+  except its own barrier stream on the root, which is the repository.
+
+### `COMPLETE`, defined
+
+`COMPLETE` means exactly: no event from the supported observation mechanism
+— `ReadDirectoryChangesW`, recursive over the tree plus a non-recursive
+watch on the parent for the root's own streams — was lost: no overflow, no
+undelivered tail, no watch that failed to arm. It does NOT mean every
+possible filesystem modification was observed. A memory-mapped write is not
+observed at all; it is defeated by the lock failing closed, not by the
+watch. This definition is now in the bundle as `boundary.complete_note`, so
+neither the code, the evidence, nor a reader can promote it to "all
+filesystem modifications were seen".
+
+`COMPLETE` is separate from, and never conflated with:
+
+- **`fully_identified`** — every object in the SNAPSHOT taken when the
+  boundary went up is named and final-path-verified. Not "every object that
+  ever existed during the interval".
+- **`fully_bound`** — every object in that snapshot, covered by the
+  contract, is byte-bound through the handle that held it. Not a statement
+  about the interval.
+
+The guarantee is never stronger than the evidence: snapshot booleans speak
+to the snapshot; `COMPLETE` speaks to the supported mechanism's event
+stream; and CLEAN is licensed only by both a bound snapshot and a complete
+observation with no violation.
+
+### Guarantees that can now be asserted
+
+- No unobserved window between watch-arm and the drained barrier: writes in
+  the interval are observed, and a mapped write cannot occur because the
+  lock fails closed for any writable mapping.
+- A stream present at lock time is immutable for the interval by every
+  measured route.
+- Overflow, an unarmed or failed watch, or an unwatchable parent → not
+  CLEAN.
+
+### Guarantees that still CANNOT be asserted
+
+- Beyond the observation mechanism, `COMPLETE` says nothing; a modification
+  channel the mechanism cannot see and the lock cannot refuse (none found
+  for covered file/stream bytes) would be outside it.
+- The interval is `[watch arm, barrier]`; a write after the barrier is
+  after the capture, not part of it.
+- The lock's guarantees remain scoped to Windows + local + fixed + NTFS,
+  and to non-directory covered inputs (submodules/junctions refused).
+- `.git/` is counted, not judged (F-17).
+- **F-15..F-18 remain open and untouched.**
+
+### Tests
+
+Ten added, 156 → 166 in the targeted suite, each defending a property:
+the mmap fail-closed and its control; no writable mapping under the lock;
+the locked-stream immutability routes; the arm-before-lock order; a
+transient file create+delete; overflow and unavailable observer → not
+CLEAN; sibling-stream noise not a violation; and the `complete_note`
+present and non-overclaiming.
+
+### Mutation check
+
+Two added, 40 → 42, none survived:
+
+| Mutant | Removes |
+|---|---|
+| MF41 | the lock's read-only share mode, so a live writable mapping no longer blocks it |
+| MF42 | the parent watch's entry filter, so a sibling's stream reads as a violation |
+
+### What is still not closed
+
+- **F-14 remains OPEN.** Eleven reviews, and this one found no new bypass —
+  which is evidence, not proof; a twelfth may still find one.
+- The residuals above.
+- **F-15..F-18 remain open and untouched.**
