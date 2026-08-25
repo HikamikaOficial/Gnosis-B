@@ -1,9 +1,6 @@
 # GNOSIS — Matriz V1 viva
 
-**Última actualización:** 2026-08-25 · **Unidad actual:** ADR-0027 —
-**F-17 (tamper-evidence)** reparado y **PENDIENTE de primera revisión
-independiente**. F-17 **sigue ABIERTO** hasta que una revisión vuelva sin
-hallazgos.
+**Última actualización:** 2026-08-25 · **Unidad actual:** ADR-0027 — **F-17 (tamper-evidence)** reparado; primera revisión **APPROVE_WITH_FINDINGS** (2 blockers) y segunda entrega con ambos blockers resueltos: **PENDIENTE de re-revisión**. F-17 **sigue ABIERTO** hasta que una revisión vuelva sin hallazgos.
 **Unidad previa:** ADR-0026 + once revisiones independientes — **F-14
 CERRADO** por la **duodécima revisión independiente (2026-08-25):
 APPROVED**, dentro del contrato formal declarado.
@@ -214,6 +211,7 @@ bundle no tenía hash-chain ni firma.
 | Hallazgo | ADR | Fecha | Estado | Evidencia |
 |---|---|---|---|---|
 | **F-17** — `SUMMARY.json` sin HEAD/status y bundle sin hash-chain ni firma; la evidencia menos protegida que el ledger | ADR-0027 | 2026-08-25 | **reparado, pendiente de primera revisión** | (1) HEAD/status ya viven en `SUMMARY.json` desde las rondas de F-14; (2) `MANIFEST.sha256.json`: SHA-256 de cada fichero del bundle + un `bundle_digest`, escrito el último (cubre `SUMMARY.json`), re-derivable por `verify_bundle()` que **falla cerrado** ante cualquier fichero añadido/borrado/cambiado; (3) firma criptográfica declarada **fuera de alcance** (necesita gestión de claves) — limitación, no reclamación. Además, residuo `.git/` de F-14: se **juzga** toda escritura a `.git/hooks/**` (salvo `.sample`) o `.git/config` como `MACHINERY_MUTATED` (salida 9), observada en el intervalo (una ABA hook create+delete se detecta; un fingerprint before/after es ciego, medido); el resto de `.git/` sigue contado (bookkeeping de git). Medido: captura normal ~37 eventos machinery, 0 juzgados, CLEAN. 179 pruebas dirigidas; cuarenta y siete mutantes |
+| **F-17 (segunda revisión)** — APPROVE_WITH_FINDINGS, 2 blockers | ADR-0027 addendum | 2026-08-26 | **resueltos, pendiente de re-revisión** | **BLOCKER 1 (worktrees):** reproducido OS-real que una captura dentro de un linked worktree con un hook instalado en el common-dir daba CLEAN — toda la maquinaria (hooks, config, HEAD, index) vive fuera del árbol vigilado. `git_topology_eligible` resuelve la topología (redirect tratado como input adversarial, no seguido a ciegas) y `run_capture` **falla cerrado** ante worktree/submodule/separate-git-dir → `MACHINERY_UNOBSERVABLE`, salida 10, sin ejecutar checks; el repo estándar sigue elegible. **BLOCKER 2 (semántica):** el `bundle_digest` dentro del bundle es auto-consistencia, no tamper-evidence; formalizado integrity < tamper-evidence < authenticity; raíz de confianza **externa ya existente** (identidad del commit git + `bundle_digest` registrado en ADR-0027), comprobable con `verify_bundle(expected_digest=…)`; firma criptográfica fuera de alcance, declarada. `.git bookkeeping` contado sigue seguro: HEAD→binding TREE_MUTATED (medido), hooks/config juzgados, bytes byte-bound. 189 pruebas; cincuenta mutantes |
 
 ## Hallazgos abiertos
 

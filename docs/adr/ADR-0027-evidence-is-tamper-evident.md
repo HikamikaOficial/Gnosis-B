@@ -197,3 +197,143 @@ Three artifacts beyond the gate transcripts:
   verdict).
 - `probe-f14-boundary.txt` — the earlier reviews' attempts re-run; only B0
   breaks, and B0 exists to show why prevention is needed.
+
+## Second independent review addendum — 2026-08-26: **APPROVE_WITH_FINDINGS**
+
+The first review of F-17 approved the implementation provisionally and
+raised two blockers. Both are addressed here; F-17 stays OPEN pending
+re-review.
+
+### BLOCKER 1 — git worktrees / external gitdir
+
+The first delivery declared "the `.git` machinery contract assumes `.git`
+is a directory in the watched tree" as a residual. GNOSIS uses worktrees
+in its execution model, so this had to be settled, not deferred.
+
+**OS-real reproduction (Windows/NTFS).** A real repo plus `git worktree
+add`:
+
+    worktree toplevel     : …/wt
+    worktree git-dir      : …/main/.git/worktrees/wt   (OUTSIDE the tree)
+    worktree common-dir   : …/main/.git                (OUTSIDE the tree)
+    wt/.git               : a FILE -> "gitdir: …/main/.git/worktrees/wt"
+
+Every trust-relevant path is outside the watched tree: HEAD, index and
+`logs/HEAD` in the per-worktree git-dir; **config, hooks and refs in the
+common-dir**. A capture run inside the worktree, with a check that
+installed a hook into the common dir, returned **CLEAN / evidence_valid
+true / exit 0** — the machinery that runs on the next git operation was
+tampered and the capture did not see it. Confirmed bypass.
+
+**Fix — fail closed, never degrade.** `git_topology_eligible(repo)`
+resolves the topology with `git rev-parse` (treating the `.git` redirect
+as adversarial input: it is resolved by git and the resolved paths are
+checked to lie inside the canonical tree, never followed blindly) and
+returns eligible only when `.git` is a directory and both the git-dir and
+the common-dir resolve to `repo/.git`. `run_capture` calls it before
+anything runs; an ineligible topology yields **`MACHINERY_UNOBSERVABLE`,
+exit 10**, runs no checks, and is never CLEAN. Re-measured: the worktree
+capture now returns MACHINERY_UNOBSERVABLE/exit 10 with no checks run; a
+capture that rewrites the `.git` redirect itself is refused the same way;
+the main repo (a standard `.git` directory) stays eligible and unchanged.
+
+**Topology classification.**
+
+| topology | treatment |
+|---|---|
+| standard repo (`.git` a directory, git-dir == common-dir == `repo/.git`) | **supported** |
+| linked worktree (`.git` a redirect file, external git-dir/common-dir) | **fail closed → MACHINERY_UNOBSERVABLE** |
+| submodule working dir (`.git` a redirect file) | **fail closed** (OS-real test with a real `git submodule add`) |
+| separate-git-dir clone (`.git` a redirect file) | **fail closed** |
+| a `.git` file pointing outside the tree (path confusion) | **fail closed** — resolved and refused, not followed |
+| a non-repo directory | eligible — no git machinery to tamper |
+
+No unsupported topology degrades to a protected-looking capture.
+
+### BLOCKER 2 — the real semantics of "tamper-evidence"
+
+The first delivery's manifest, with its `bundle_digest` stored inside the
+bundle, is **self-consistency**, not tamper-evidence: an editor who
+rewrites a file can recompute the manifest and present a self-consistent
+bundle. Formalising the ladder the review asked for:
+
+- **Integrity / self-consistency** — the bundle agrees with its own
+  manifest. `verify_bundle(bundle)` provides this: it catches drift,
+  corruption, and any edit that does NOT recompute the manifest.
+- **Tamper-evidence** — an edit is detectable against a root of trust held
+  OUTSIDE the bundle. Provided by `verify_bundle(bundle, expected_digest=…)`
+  where `expected_digest` is a `bundle_digest` recorded elsewhere.
+- **Authenticity / trusted provenance** — proof of WHO produced it,
+  unforgeable. Needs a cryptographic signature over `bundle_digest` with a
+  managed key. **Out of scope** (a later Gnosis phase); declared, not
+  faked. Nothing here is called "cryptographically tamper-proof".
+
+**What F-17 authoritatively requires.** The frozen audit asks for a
+hash-chain (delivered: the manifest) and notes the absence of a signature;
+its contrast is the hash-chained ledger, which is tamper-evident because
+it is re-verified against a trusted anchor (genesis), not because the
+chain lives with the data.
+
+**The root of trust, and it already exists — not invented.** Two anchors
+outside the bundle, both already in the repository:
+
+1. **The git commit that carries the bundle.** Git objects are
+   content-addressed and the commit DAG is hash-chained; once committed,
+   editing a bundle file changes the working tree (git status shows it)
+   and presenting a tampered bundle as the committed one requires
+   rewriting history to a new commit hash.
+2. **`bundle_digest` recorded in this ADR's Evidence section**, a
+   *separate committed file*. `verify_bundle(bundle, expected_digest=<that
+   value>)` fails closed if the bundle's recomputed digest — manifest
+   recomputed or not — does not equal the recorded one.
+
+So tamper-evidence for a Gnosis evidence bundle = the manifest
+(`verify_bundle`) checked against the `bundle_digest` recorded in ADR-0027
+and anchored by the git commit. The residual: this is only as strong as
+the immutability of that committed record; a full anti-forgery guarantee
+against an actor who rewrites history needs a signature, which is the
+declared out-of-scope limitation. No new root of trust was invented; the
+existing commit identity and the committed digest are reused.
+
+### `.git bookkeeping = counted` — audited, and why it is safe
+
+The review asked whether any `.git` path classified as mere bookkeeping
+could change executed code, redirect resolution, change which commit/tree
+we verify, or alter evidence. Audited:
+
+- **Execute / redirect** — hooks and config — are **judged**
+  (`MACHINERY_MUTATED`), not counted.
+- **Which commit/tree we verify** — HEAD — is counted, and safe because a
+  change to it moves the content fingerprint: measured, a check that runs
+  `git checkout` during the interval makes the binding **TREE_MUTATED,
+  exit 2**, fail closed. The index and refs are the same: anything that
+  changes what git reports about the verified commit changes the pre/post
+  fingerprint.
+- **The file bytes themselves** are byte-bound by F-14.
+- **The rest** — objects, logs, ORIG_HEAD, packed-refs — is inert
+  bookkeeping that does not execute, redirect, or change the verified
+  commit/tree.
+
+So the counted class contains nothing that can change executed code,
+redirect resolution, or the identity of what is verified without being
+caught by either the machinery judgement or the binding. The line is not
+widened to byte-bind all of `.git` for a green metric; each counted part
+is argued safe.
+
+### Relationship to F-14
+
+F-14 stays CLOSED and untouched. `MACHINERY_UNOBSERVABLE` and
+`MACHINERY_MUTATED` are fail-closed additions that only strengthen the
+contract; no accepted F-14 guarantee is weakened, and no F-14 guarantee
+was found false during this unit.
+
+### Tests and mutants added
+
+Ten tests: the topology predicate over a standard repo, a non-repo, a real
+worktree, a real submodule, and a `.git` file pointing outside; a worktree
+capture failing closed; a standard capture not refused; a HEAD change
+caught by the binding; the external anchor turning self-consistency into
+tamper-evidence; and the recomputed-manifest attack caught by the anchor.
+Three mutants: MF48 (classifier ignores an ineligible topology), MF49
+(run_capture runs checks on an ineligible topology), MF50 (verify_bundle
+ignores the external anchor).

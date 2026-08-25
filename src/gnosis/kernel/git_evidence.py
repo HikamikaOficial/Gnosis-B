@@ -53,6 +53,79 @@ def _run_git(repo_path: Path, args: list[str]) -> tuple[int, str]:
         return 126, f"git could not run: {exc}"
 
 
+def git_topology_eligible(repo_path: Path) -> tuple[bool, str | None]:
+    """Is `repo_path` a topology whose git machinery lives INSIDE it?
+
+    F-17's machinery judgement (hooks, config) works only when the write
+    observer can see those files — that is, when `.git` is a plain
+    directory inside the watched tree and both the git-dir and the
+    common-dir resolve to it. In a linked worktree, a submodule, or a
+    `--separate-git-dir` clone, `.git` is a redirect FILE and the
+    trust-relevant machinery — HEAD, index, config, hooks, refs — lives in
+    an external git-dir/common-dir OUTSIDE the tree, where the observer
+    never looks. Measured: a capture run inside a worktree with a hook
+    installed into the common dir returned CLEAN. So such a topology is
+    NOT eligible for the guarantee, and the capture must fail closed rather
+    than degrade to a protected-looking verdict.
+
+    Returns ``(True, None)`` for a standard single-repo topology (or for a
+    non-repo directory, which has no git machinery to tamper), and
+    ``(False, reason)`` otherwise. The redirect is treated as adversarial:
+    `git rev-parse` resolves it and the resolved paths are checked to lie
+    inside the canonical tree, so a `.git` file pointing outside the tree
+    (path confusion / traversal) is refused, not followed into.
+    """
+    code, _ = _run_git(repo_path, ["rev-parse", "--is-inside-work-tree"])
+    if code != 0:
+        # Not a git repository: there is no `.git` machinery to tamper, so
+        # the machinery guarantee is vacuous and does not gate the capture.
+        return True, None
+
+    dot_git = repo_path / ".git"
+    if dot_git.is_file():
+        return False, (
+            ".git is a redirect file (linked worktree, submodule, or "
+            "separate-git-dir): the git machinery that runs the checks lives "
+            "outside the watched tree and cannot be observed")
+    if not dot_git.is_dir():
+        return False, ".git is neither a directory nor a redirect file"
+
+    try:
+        tree = repo_path.resolve(strict=False)
+        expected = (tree / ".git").resolve(strict=False)
+    except OSError as exc:
+        return False, f"the repository path could not be canonicalised: {exc}"
+
+    code, toplevel = _run_git(repo_path, ["rev-parse", "--show-toplevel"])
+    if code != 0:
+        return False, f"git could not report the work-tree top level: {toplevel}"
+    if Path(toplevel).resolve(strict=False) != tree:
+        return False, (
+            f"the work-tree top level is {toplevel}, not the captured path; "
+            "the capture is not at the root of its own work tree")
+
+    code, git_dir = _run_git(repo_path, ["rev-parse", "--absolute-git-dir"])
+    if code != 0:
+        return False, f"git could not report its git-dir: {git_dir}"
+    if Path(git_dir).resolve(strict=False) != expected:
+        return False, (
+            f"the git-dir is {git_dir}, not {expected}: the machinery is not "
+            "the .git directory inside the watched tree")
+
+    code, common = _run_git(repo_path, ["rev-parse", "--git-common-dir"])
+    if code != 0:
+        return False, f"git could not report its common-dir: {common}"
+    common_path = Path(common)
+    if not common_path.is_absolute():
+        common_path = (repo_path / common_path)
+    if common_path.resolve(strict=False) != expected:
+        return False, (
+            f"the common-dir is {common}, not the in-tree .git: a shared "
+            "git-dir puts hooks and config outside the watched tree")
+
+    return True, None
+
+
 def capture_git_evidence(repo_path: Path) -> GitEvidence:
     code, _ = _run_git(repo_path, ["rev-parse", "--is-inside-work-tree"])
     if code != 0:

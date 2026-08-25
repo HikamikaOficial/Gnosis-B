@@ -14,6 +14,8 @@
 
 179 directed tests; forty-seven mutants. No F-14 guarantee weakened; `MACHINERY_MUTATED` only adds a fail-closed verdict.
 
+**Second review (2026-08-26): APPROVE_WITH_FINDINGS — both blockers addressed, pending re-review.** BLOCKER 1: a capture inside a linked worktree was bypassable (hooks/config/HEAD/index live outside the watched tree — reproduced OS-real returning CLEAN). `git_topology_eligible` refuses a worktree/submodule/separate-git-dir topology and `run_capture` fails closed with `MACHINERY_UNOBSERVABLE` (exit 10), running no checks; the standard repo stays eligible. BLOCKER 2: the in-bundle `bundle_digest` is self-consistency, not tamper-evidence; the external root of trust is the git commit plus the `bundle_digest` recorded in ADR-0027, checkable via `verify_bundle(expected_digest=…)`; a signature (authenticity) is out of scope. `.git` bookkeeping-counted is audited safe (a HEAD change -> binding TREE_MUTATED). 189 tests; fifty mutants. F-14 untouched.
+
 
 ## Kernel hardening (post-Phase -1)
 

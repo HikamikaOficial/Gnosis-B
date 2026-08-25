@@ -36,6 +36,7 @@ from gnosis.kernel.evidence_capture import (
     EXIT_INPUTS_MUTATED,
     EXIT_INPUTS_UNPROTECTED,
     EXIT_MACHINERY_MUTATED,
+    EXIT_MACHINERY_UNOBSERVABLE,
     EXIT_OK,
     EXIT_PREPARATION_DRIFT,
     EXIT_STREAMS_MUTATED,
@@ -63,7 +64,10 @@ from gnosis.kernel.evidence_capture import (
     stream_directories,
     verify_bundle,
 )
-from gnosis.kernel.git_evidence import content_fingerprint
+from gnosis.kernel.git_evidence import (
+    content_fingerprint,
+    git_topology_eligible,
+)
 from gnosis.kernel.input_lock import (
     _SUPPORTED_DRIVE_TYPES,
     _SUPPORTED_FILESYSTEMS,
@@ -3538,6 +3542,187 @@ class TestGitMachineryIsJudged(unittest.TestCase):
             self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
             self.assertTrue(capture.evidence_valid)
             self.assertGreater(capture.boundary.machinery_events, 0)
+
+
+class TestGitTopologyMustBeInTree(unittest.TestCase):
+    """F-17 BLOCKER 1: the machinery judgement can only see what the observer
+    watches. In a linked worktree, a submodule, or a separate-git-dir clone,
+    `.git` is a redirect FILE and the hooks/config/HEAD/index live in an
+    external git-dir OUTSIDE the tree. Measured as a real bypass — a capture
+    inside a worktree with a hook installed into the common dir returned
+    CLEAN. So an ineligible topology fails closed, never a clean verdict.
+    """
+
+    @staticmethod
+    def _git(cwd, *a):
+        r = subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True,
+                           check=False)  # returncode handled explicitly below
+        if r.returncode != 0:
+            raise RuntimeError(f"git {a}: {r.stderr}")
+        return r.stdout.strip()
+
+    def _repo(self, root: Path, name: str = "main") -> Path:
+        repo = root / name
+        repo.mkdir()
+        for a in (["init"], ["config", "user.email", "t@e.com"],
+                  ["config", "user.name", "T"], ["config", "commit.gpgsign", "false"]):
+            self._git(repo, *a)
+        (repo / "a.txt").write_text("A\n", encoding="utf-8")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-m", "init")
+        return repo
+
+    # -- the predicate ------------------------------------------------------
+    def test_a_standard_repo_is_eligible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp))
+            ok, reason = git_topology_eligible(repo)
+            self.assertTrue(ok, reason)
+            self.assertIsNone(reason)
+
+    def test_a_non_repo_directory_is_eligible_no_machinery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plain = Path(tmp) / "plain"
+            plain.mkdir()
+            ok, reason = git_topology_eligible(plain)
+            self.assertTrue(ok, reason)  # nothing git to tamper
+
+    def test_a_linked_worktree_is_ineligible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp))
+            self._git(repo, "branch", "feature")
+            wt = Path(tmp) / "wt"
+            self._git(repo, "worktree", "add", str(wt), "feature")
+            self.assertTrue((wt / ".git").is_file())  # redirect file
+            ok, reason = git_topology_eligible(wt)
+            self.assertFalse(ok)
+            self.assertIn("redirect file", reason or "")
+
+    def test_a_git_file_pointing_outside_the_tree_is_refused_not_followed(self):
+        # A .git redirect to an external, real git-dir: eligible must be
+        # False, and the redirect is refused rather than followed into.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp))
+            elsewhere = Path(tmp) / "elsewhere"
+            elsewhere.mkdir()
+            decoy = Path(tmp) / "decoy"
+            decoy.mkdir()
+            (decoy / "a.txt").write_text("A\n", encoding="utf-8")
+            # point decoy/.git at the real repo's git-dir (path confusion)
+            (decoy / ".git").write_text(
+                f"gitdir: {(repo / '.git').as_posix()}\n", encoding="utf-8")
+            ok, reason = git_topology_eligible(decoy)
+            self.assertFalse(ok, reason)
+
+    @WINDOWS_ONLY
+    def test_a_real_submodule_working_dir_is_ineligible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inner = self._repo(Path(tmp), "inner")
+            outer = self._repo(Path(tmp), "outer")
+            self._git(outer, "-c", "protocol.file.allow=always",
+                      "submodule", "add", inner.as_uri(), "sub")
+            sub = outer / "sub"
+            self.assertTrue((sub / ".git").is_file())
+            ok, reason = git_topology_eligible(sub)
+            self.assertFalse(ok)
+            self.assertIn("redirect file", reason or "")
+
+    # -- end to end ---------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_a_capture_inside_a_worktree_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp))
+            self._git(repo, "branch", "feature")
+            wt = Path(tmp) / "wt"
+            self._git(repo, "worktree", "add", str(wt), "feature")
+
+            # A check that installs a hook in the COMMON dir would be the
+            # bypass; it must never run, because the topology is refused.
+            capture = run_capture(wt, [_script(
+                "import subprocess, os",
+                "cd = subprocess.run(['git','rev-parse','--git-common-dir'],"
+                "capture_output=True,text=True).stdout.strip()",
+                "open(os.path.join(cd,'hooks','pre-commit'),'w',"
+                "encoding='utf-8').write('evil')",
+            )], Path(tmp) / "staging")
+
+            self.assertIs(capture.boundary.verdict,
+                          ObservationVerdict.MACHINERY_UNOBSERVABLE)
+            self.assertFalse(capture.evidence_valid)
+            self.assertEqual(capture.exit_code, EXIT_MACHINERY_UNOBSERVABLE)
+            self.assertEqual(capture.checks, ())  # nothing ran
+
+    @WINDOWS_ONLY
+    def test_a_standard_repo_capture_is_not_refused_for_topology(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp))
+            capture = run_capture(repo, [_script("pass")], Path(tmp) / "staging")
+            self.assertIsNot(capture.boundary.verdict,
+                             ObservationVerdict.MACHINERY_UNOBSERVABLE)
+            self.assertTrue(capture.evidence_valid)
+
+    @WINDOWS_ONLY
+    def test_changing_which_commit_we_verify_is_caught_by_the_binding(self):
+        # Backs the "`.git` bookkeeping counted is safe" claim: HEAD is
+        # counted, not judged, because a change to it moves the fingerprint
+        # and the binding fails closed (TREE_MUTATED).
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp))
+            self._git(repo, "branch", "other")
+            capture = run_capture(repo, [_script(
+                "import subprocess",
+                "subprocess.run(['git','checkout','other'],check=True)",
+            )], Path(tmp) / "staging")
+            self.assertIs(capture.binding.verdict, BindingVerdict.TREE_MUTATED)
+            self.assertFalse(capture.evidence_valid)
+
+
+class TestBundleRootOfTrust(unittest.TestCase):
+    """F-17 BLOCKER 2: the manifest inside the bundle proves self-consistency,
+    not tamper-evidence — an editor can recompute it. `verify_bundle` with an
+    `expected_digest` recorded OUTSIDE the bundle (ADR-0027, or the git
+    commit that carries it) is the tamper-evidence check; authenticity still
+    needs a signature and is out of scope.
+    """
+
+    @staticmethod
+    def _repo(root: Path) -> Path:
+        return _make_repo(root)
+
+    @WINDOWS_ONLY
+    def test_the_external_anchor_turns_self_consistency_into_tamper_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = run_capture(self._repo(root), [_script("pass")], root / "s")
+            digest = verify_bundle(capture.bundle).bundle_digest
+
+            self.assertTrue(verify_bundle(capture.bundle).verified)
+            self.assertTrue(
+                verify_bundle(capture.bundle, expected_digest=digest).verified)
+            self.assertFalse(
+                verify_bundle(capture.bundle, expected_digest="0" * 64).verified)
+
+    @WINDOWS_ONLY
+    def test_a_recomputed_manifest_is_caught_by_the_external_anchor(self):
+        # The exact attack BLOCKER 2 names: edit a file AND regenerate the
+        # manifest so the bundle is self-consistent again. verify_bundle
+        # alone then passes; the external anchor catches it.
+        from gnosis.kernel.evidence_capture import write_bundle_manifest
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = run_capture(self._repo(root), [_script("pass")], root / "s")
+            trusted = verify_bundle(capture.bundle).bundle_digest
+
+            summary = capture.bundle / "SUMMARY.json"
+            summary.write_text(summary.read_text(encoding="utf-8") + "\n",
+                               encoding="utf-8")
+            write_bundle_manifest(capture.bundle)  # attacker recomputes it
+
+            self.assertTrue(verify_bundle(capture.bundle).verified,
+                            "self-consistent after recompute")
+            self.assertFalse(
+                verify_bundle(capture.bundle, expected_digest=trusted).verified,
+                "the external anchor catches the recomputed bundle")
 
 
 if __name__ == "__main__":

@@ -581,6 +581,30 @@ MUTANTS: list[Mutant] = [
           "    if machinery_violations:",
           "    if False:")],
     ),
+    # MF48..MF50 are F-17's blockers: a worktree/submodule capture must fail
+    # closed (its git machinery is outside the watched tree), and the bundle's
+    # tamper-evidence rests on an external anchor, not the in-bundle digest.
+    Mutant(
+        "MF48", "the classifier ignores an ineligible git topology, so a "
+                "worktree capture no longer fails closed",
+        [(CAPTURE,
+          "    if topology_reason is not None:",
+          "    if False and topology_reason is not None:")],
+    ),
+    Mutant(
+        "MF49", "run_capture runs the checks even on an ineligible topology, "
+                "so a worktree capture executes with its machinery unobserved",
+        [(CAPTURE,
+          "        if pre.available and topology_ok:",
+          "        if pre.available:")],
+    ),
+    Mutant(
+        "MF50", "verify_bundle ignores the external anchor, so a recomputed "
+                "manifest passes as if it were the trusted bundle",
+        [(CAPTURE,
+          "    if expected_digest is not None and recomputed != expected_digest:",
+          "    if False:")],
+    ),
 ]
 
 

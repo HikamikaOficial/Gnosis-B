@@ -112,7 +112,7 @@ from pathlib import Path
 from typing import Any
 
 from .canonical import hash_canonical, sha256_hex
-from .git_evidence import content_fingerprint
+from .git_evidence import content_fingerprint, git_topology_eligible
 from .input_lock import (
     InputLock,
     LockOutcome,
@@ -141,6 +141,7 @@ EXIT_INPUTS_UNPROTECTED = 6
 EXIT_PREPARATION_DRIFT = 7
 EXIT_STREAMS_MUTATED = 8
 EXIT_MACHINERY_MUTATED = 9
+EXIT_MACHINERY_UNOBSERVABLE = 10
 
 _UNREADABLE_PREFIX = "unreadable: "
 
@@ -249,6 +250,7 @@ class ObservationVerdict(Enum):
     PREPARATION_DRIFT = "PREPARATION_DRIFT"
     STREAMS_MUTATED = "STREAMS_MUTATED"
     MACHINERY_MUTATED = "MACHINERY_MUTATED"
+    MACHINERY_UNOBSERVABLE = "MACHINERY_UNOBSERVABLE"
 
 
 @dataclass(frozen=True)
@@ -586,6 +588,7 @@ def classify_observation(
     drift: Sequence[str] = (),
     locked_identity: Mapping[str, Any] | None = None,
     streams: Sequence[str] = (),
+    topology_reason: str | None = None,
 ) -> Boundary:
     """Turn prevention plus a stream of writes into one verdict.
 
@@ -617,6 +620,21 @@ def classify_observation(
     allowed = (BARRIER_DIR, *allowed_writes)
     protection: Mapping[str, Any] = lock.to_dict() if lock is not None else {}
     prepared: Mapping[str, Any] = locked_identity or {}
+    if topology_reason is not None:
+        # F-17 / BLOCKER 1: the git machinery (hooks, config, HEAD, index)
+        # lives outside the watched tree — a linked worktree, a submodule,
+        # or a separate git-dir. The observer cannot see a hook installed
+        # there, so a machinery tamper would go unjudged. Measured as a
+        # real bypass, so this fails closed rather than degrade to a
+        # protected-looking verdict. Never CLEAN for an ineligible topology.
+        return Boundary(
+            ObservationVerdict.MACHINERY_UNOBSERVABLE, observation.mechanism,
+            len(observation.events), 0, (topology_reason,), len(covered),
+            tuple(allowed),
+            "the git machinery is outside the watched tree, so a tamper of it "
+            "could not be observed; this topology is not eligible for the "
+            "evidence guarantee",
+            protection=protection, locked_identity=prepared)
     if lock is not None and not lock.enforced:
         return Boundary(
             ObservationVerdict.UNPROTECTED, observation.mechanism,
@@ -941,6 +959,8 @@ def _exit_code(binding: TreeBinding, checks: ChecksVerdict, boundary: Boundary) 
         return EXIT_TREE_MUTATED
     if boundary.verdict is ObservationVerdict.UNOBSERVED:
         return EXIT_BOUNDARY_UNAVAILABLE
+    if boundary.verdict is ObservationVerdict.MACHINERY_UNOBSERVABLE:
+        return EXIT_MACHINERY_UNOBSERVABLE
     if boundary.verdict is ObservationVerdict.UNPROTECTED:
         return EXIT_INPUTS_UNPROTECTED
     if boundary.verdict is ObservationVerdict.PREPARATION_DRIFT:
@@ -969,6 +989,10 @@ def _verdict_line(binding: TreeBinding, checks: ChecksVerdict, boundary: Boundar
     if boundary.verdict is ObservationVerdict.UNPROTECTED:
         return ("INVALID EVIDENCE: the covered inputs were not made unwritable, so "
                 f"nothing ran - {boundary.reason}")
+    if boundary.verdict is ObservationVerdict.MACHINERY_UNOBSERVABLE:
+        return ("INVALID EVIDENCE: the git machinery is outside the watched tree "
+                "(worktree, submodule or separate git-dir), so a tamper of it "
+                f"could not be observed and nothing ran - {boundary.reason}")
     if boundary.verdict is ObservationVerdict.PREPARATION_DRIFT:
         return ("INVALID EVIDENCE: the tree changed while the boundary was being "
                 "built, so nothing ran; see boundary.violations")
@@ -1176,13 +1200,26 @@ class BundleVerification:
         }
 
 
-def verify_bundle(bundle: Path) -> BundleVerification:
+def verify_bundle(bundle: Path,
+                  expected_digest: str | None = None) -> BundleVerification:
     """Re-derive the manifest and report any file added, removed or changed.
 
     Fail-closed: a missing or unparseable manifest, a recomputed
     `bundle_digest` that disagrees with the recorded one, or any file that
     is present-but-unlisted, listed-but-absent, or hashed differently, all
     make `verified` false. Only an exact match verifies.
+
+    `expected_digest` is the external root of trust (BLOCKER 2). The
+    manifest's own `bundle_digest` lives inside the bundle it protects, so
+    on its own it proves self-consistency, not tamper-evidence: an editor
+    who rewrites a file can recompute the manifest to match. Passing a
+    `bundle_digest` recorded OUTSIDE the bundle — the value committed in
+    ADR-0027, or read off the git commit that carries the bundle — turns
+    this into a tamper-evidence check: a recomputed manifest whose digest
+    no longer equals the external anchor is caught here. Authenticity (who
+    produced it, unforgeably) still needs a signature, which is out of
+    scope; this raises self-consistency to tamper-evidence against an
+    external anchor, no further.
     """
     manifest_path = bundle / BUNDLE_MANIFEST
     try:
@@ -1211,6 +1248,12 @@ def verify_bundle(bundle: Path) -> BundleVerification:
     recomputed = hash_canonical(sorted(recorded.items()))
     if recomputed != manifest.get("bundle_digest"):
         problems.append("bundle_digest does not match the files map")
+    if expected_digest is not None and recomputed != expected_digest:
+        # The external anchor disagrees: the bundle is internally consistent
+        # but is not the bundle the trusted record names.
+        problems.append(
+            f"bundle_digest {recomputed} does not match the expected "
+            f"{expected_digest}")
 
     return BundleVerification(not problems, manifest.get("bundle_digest"),
                              tuple(problems))
@@ -1269,9 +1312,15 @@ def run_capture(
     drift: tuple[str, ...] = ()
     streams: tuple[str, ...] = ()
     before_streams: StreamInventory = {}
+    # F-17 / BLOCKER 1: refuse a topology whose git machinery is outside the
+    # watched tree BEFORE running anything. A worktree/submodule/separate
+    # git-dir capture would otherwise run to a CLEAN verdict with its hooks
+    # and config unobserved. Determined once, treated as adversarial input
+    # (the .git redirect is resolved by git and checked to lie in-tree).
+    topology_ok, topology_reason = git_topology_eligible(repo)
     try:
         pre = identity(repo)
-        if pre.available:
+        if pre.available and topology_ok:
             covered = covered_paths(repo, allowed_writes)
             env = check_environment(scratch)
             lock = input_lock(repo)
@@ -1309,6 +1358,12 @@ def run_capture(
             finally:
                 lock.release()
             post = identity(repo)
+        elif pre.available:
+            # The tree can be bound, but the topology is ineligible (its git
+            # machinery is outside the watched tree), so nothing ran. Take
+            # the post fingerprint anyway — the binding is honest, and the
+            # boundary carries the MACHINERY_UNOBSERVABLE refusal.
+            post = identity(repo)
         else:
             post = TreeIdentity(
                 False, None, {},
@@ -1320,7 +1375,7 @@ def run_capture(
     boundary = classify_observation(repo, observation, covered, allowed_writes,
                                     lock_outcome, drift,
                                     prepared.to_dict() if prepared is not None else None,
-                                    streams)
+                                    streams, topology_reason)
     checks_verdict = _checks_verdict(results)
     summary = build_summary(
         binding, results, checks_verdict, boundary,
