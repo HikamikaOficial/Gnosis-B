@@ -1906,3 +1906,178 @@ reverted, and the run that produced the transcript was launched detached
 so nothing could stop it at ten minutes. The transcript's own `RESTORED:`
 line is the check that matters: it re-runs the suite against the restored
 tree, and it is green.
+
+## Ninth independent review addendum — 2026-08-25: **FAIL CRÍTICO PROVISIONAL**
+
+The review asked whether NTFS named data streams are inside the boundary.
+They were not. Reproduced before a line was changed.
+
+### The reproduction, before any repair
+
+`probe.txt::$DATA` = `BASE`, unchanged throughout. `probe.txt:gnosis-f14`
+flipped from `ALLOW` to `DENY`. A check reads the NAMED stream.
+
+| | run 1 | run 2 |
+|---|---|---|
+| the check read | `ALLOW` | `DENY` |
+| `identity_digest` | `6ae3e250…` | **`6ae3e250…`** |
+| `content_digest` | `b0dd8939…` | **`b0dd8939…`** |
+| stream in the manifest | none | none |
+| boundary / `evidence_valid` | CLEAN / true | CLEAN / true |
+
+Two bundles, byte-identical identities, both claiming to be evidence, and
+a check that consumed different bytes in each. That is F-14's original
+sentence broken in the plainest possible way.
+
+The same run answered two more questions the review raised.
+
+**The lock did not cover streams either.** With `probe.txt` held by
+`CreateFileW(GENERIC_READ, FILE_SHARE_READ)`, writing the main stream was
+refused and writing `probe.txt:gnosis-f14` **succeeded** — as did
+creating a new stream, and, separately measured, **deleting** an existing
+one. A handle on `::$DATA` protects `::$DATA` and nothing else.
+
+**Directories carry streams.** `subdir:dir-stream` was written and read
+back. `git` does not enumerate directories at all, so every directory
+stream in the tree was outside the covered set by construction.
+
+### Root cause
+
+The eighth round bound the bytes of every INPUT and called the domain
+closed. The domain was *paths*, and on NTFS a path is not one sequence of
+bytes: it is `::$DATA` plus any number of named streams, each openable as
+`path:name`, each readable by an ordinary `open()`, none of them visible
+to `git ls-files`, to `Path.read_bytes`, or to a handle on the main
+stream. Every layer agreed with every other layer because they were all
+asking about the same single stream.
+
+### What was measured before choosing an architecture
+
+| question | answer |
+|---|---|
+| can streams be enumerated? | yes — `FindFirstStreamW`/`FindNextStreamW`, on files **and** directories; a directory has no `::$DATA`; `ERROR_HANDLE_EOF` on the first call means "none", not "failed" |
+| can a named stream be locked? | yes — its own `CreateFileW(path:name, GENERIC_READ, FILE_SHARE_READ)` refuses overwrite, refuses deletion of the stream, and refuses deletion of the owner |
+| can a NEW stream be prevented? | **no** — creation succeeded on a file and on a directory under every share mode tried, including `FILE_SHARE_NONE` |
+| does the observer report a stream write? | yes, as `action=3 modified <owner>`; adding `FILE_NOTIFY_CHANGE_STREAM_NAME/SIZE/WRITE` (0x200/0x400/0x800) changed nothing |
+| what does it cost? | **14.6 s** over 91,791 files and **2.2 s** over 18,437 directories, plus **6.1 s** to walk the disk for directories; three inventory passes per capture, ~56 s total |
+| how many streams are in this repo? | **zero** |
+| do the covered paths imply every directory? | **no** — 83 directories on this tree hold no input at all, mostly the empty corners of nested clones, and every one of them can carry a stream |
+
+### Option (A), byte-bind, with fail-closed where binding is impossible
+
+Every named stream of every covered INPUT — and of every directory, up
+to and including the repository root — gets its own handle, its own
+identity and its own digest, read through the handle that holds it.
+
+The directory half needs two sources, because neither is complete on its
+own. Deriving the directories from the covered paths gets the ones that
+hold a file; `stream_directories()` walks the disk for the rest, which
+measured 83 on this tree. The walk leaves out `.git/`, for the same
+reason its writes are counted and not judged, and declared OUTPUT roots,
+because an output is allowed to change and a directory under one is not
+an input that must hold still.
+
+`stream_inventory()` is the enumeration, and a path whose streams
+cannot be enumerated is a **refusal**, never a shrug.
+
+The recorded identity is `owner-id:file-id:stream-name:length`, which is
+the review's stated minimum, and it is stated that way for a measured
+reason: `FILE_ID_INFO` returns the SAME file id for every stream of a
+file, so an object identity cannot tell two streams of one file apart.
+`test_changing_only_an_ads_changes_the_durable_identity` demonstrates the
+consequence rather than asserting around it — `ALLOW` and `DENY!` are
+both five bytes of the same stream of the same object, so the identity
+digest is unchanged and **only the content digest separates them**. That
+is the review's own point 6, turned into a passing test.
+
+### The second detector, because prevention cannot reach
+
+No share mode prevents a NEW stream appearing. So the inventory is taken
+twice — once when the boundary is up, beside the post-lock identity, and
+once after the checks while the handles are still held — and any stream
+that appeared, vanished or changed length is `STREAMS_MUTATED`, **exit
+8**, a different verdict from `INPUTS_MUTATED` because it is a different
+failure: that one is about the bytes of a path, this one about which
+streams a path has.
+
+This is what covers directories. A stream write on a directory arrives as
+`modified <dir>`, and the classifier forgives exactly that event because
+a directory's timestamp also moves when its entries move. Two independent
+detectors, and the second one does not depend on the observer at all.
+
+### OUTPUT
+
+`outputs_at_start` now hashes the named streams of pre-existing OUTPUT
+files as well as their main streams, so an ADS under an output root
+cannot be an unnamed prior input either.
+
+### After the repair, the same attack
+
+| | run 1 | run 2 |
+|---|---|---|
+| the check read | `ALLOW` | `DENY` |
+| `identity_digest` | `658ec860…` | `f35a0377…` |
+| `content_digest` | `41ba0738…` | `174df98c…` |
+| manifest key | `probe.txt:gnosis-f14` | `probe.txt:gnosis-f14` |
+| digest of `probe.txt` itself | unchanged | unchanged |
+
+Both runs are still valid evidence, and that is correct: they are valid
+evidence about two different trees, which the identities now say.
+Writing the named stream under the lock is refused; creating one during
+the interval is `STREAMS_MUTATED`.
+
+### Tests
+
+Nineteen added, 129 → 148 in the targeted suite.
+
+| Item | Test |
+|---|---|
+| 1 — same main stream, different ADS | `test_same_main_stream_different_ads_cannot_share_an_identity` |
+| 2 — changing only an ADS | `test_changing_only_an_ads_changes_the_durable_identity` |
+| 3 — a check reading an ADS | `test_a_check_reading_an_ads_reads_bytes_the_manifest_states` |
+| 4 — an ADS created before the capture | `test_an_ads_created_before_the_capture_is_bound` |
+| 5 — during the interval | `test_modifying_an_ads_during_the_interval_is_prevented` (prevented) and `test_an_ads_created_during_the_interval_is_detected` (detected) |
+| 6 — a directory's ADS | `test_an_ads_on_a_directory_is_covered`, `test_an_ads_on_the_repository_root_is_covered`, `test_a_directory_ads_created_during_the_interval_is_detected` |
+| 7 — a pre-existing OUTPUT's ADS | `test_an_ads_under_an_output_root_cannot_be_an_unnamed_input` |
+| 8 — no false positives | `test_a_tree_with_no_streams_behaves_exactly_as_before` |
+| the primitives | `test_enumeration_separates_absent_from_unreadable`, `test_the_domain_includes_every_directory_that_holds_an_input`, `test_drift_names_what_appeared_vanished_and_resized`, `test_a_path_with_no_streams_produces_no_entry_and_no_failure` |
+| the refusal path | `test_an_enumeration_failure_is_a_refusal_and_not_a_shrug`, `test_a_lock_refuses_when_streams_cannot_be_enumerated` |
+| the walk | `test_a_directory_holding_no_input_is_still_in_the_domain`, `test_the_walk_leaves_out_git_and_declared_output_roots` |
+
+The refusal path is reached by making `named_streams` fail, for the same
+reason the fourth review's volume probe is injected: a branch that cannot
+be run on the machine that has only the working case is untested where it
+matters.
+
+### Mutation check
+
+Six added, one per independent defence. Thirty-five mutants, none
+survived. MF14's anchor moved with the call site it names.
+
+| Mutant | Removes |
+|---|---|
+| MF30 | the enumeration, locking and hashing of named streams |
+| MF31 | the fail-closed on an enumeration that failed — the silent ignore the review forbade |
+| MF32 | the inventory comparison, so a stream created inside the interval is invisible again |
+| MF33 | directories from the stream domain |
+| MF34 | the hashing of a pre-existing OUTPUT's streams |
+| MF35 | the disk walk, so a directory holding no input keeps its streams outside |
+
+### What is still not closed
+
+- **F-14 remains OPEN.** Nine reviews, nine findings.
+- **A stream created AND removed entirely inside the interval, on a
+  DIRECTORY, is caught by neither detector.** The inventory is back where
+  it started, and the classifier forgives `modified` on a directory
+  because entry moves produce the identical event. On a FILE it is
+  caught, because any event on a covered path is a violation. This is the
+  ABA problem again, in the one place where no lock can be taken: NTFS
+  offers no share mode that refuses stream creation.
+- **`.git/` is still counted and not judged**, so a stream there is
+  outside this boundary and inside F-17's. The same is true of streams
+  under a declared OUTPUT root after the capture begins: their
+  pre-existing bytes are hashed, and an output is allowed to change.
+- **Captures cost about a minute more.** Three inventory passes and one
+  disk walk over 91,791 files and 18,520 directories.
+- **`outputs_at_start` is still bytes at the start**, streams included.
+- **F-15..F-18 remain open and untouched.**

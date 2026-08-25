@@ -3,7 +3,7 @@
 **Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION; THE PROBE HAS A CALLER; MULTI-CREDENTIAL ROTATION
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
-**Last update:** 2026-08-25 (F-34 closed; F-14 repaired nine times and still open; the stale lines below are F-19..F-32, still open)
+**Last update:** 2026-08-25 (F-34 closed; F-14 repaired ten times and still open; the stale lines below are F-19..F-32, still open)
 
 ## Kernel hardening (post-Phase -1)
 
@@ -681,9 +681,43 @@ and `content_digest 55d64f5b…` as two different numbers over the same
 files. A 301-entry sample of `input-manifest.json` re-hashed 301 of 301.
 The bundle is ~28 MB, and later captures hash earlier bundles as inputs.
 
-**F-14 is still NOT closed.** Repaired nine times now, tested (127
-tests) and mutation-checked (twenty-nine mutants, none survived), it
-awaits a NINTH independent review. Eight reviews have each found
+**Ninth independent review (2026-08-25): FAIL CRÍTICO PROVISIONAL.**
+NTFS named data streams. A path is not a sequence of bytes: it is
+`::$DATA` plus any number of named streams, each openable as `path:name`,
+each readable by an ordinary `open()`, none of them visible to
+`git ls-files`, to `Path.read_bytes`, or to a handle on the main stream.
+Reproduced before anything changed: with `probe.txt::$DATA` untouched and
+`probe.txt:gnosis-f14` flipped from ALLOW to DENY, a check read different
+bytes and both bundles carried identical `identity_digest` and
+`content_digest`, both `evidence_valid` true. The same run showed the
+main-stream handle left the named stream writable AND deletable, and that
+directories carry streams too.
+
+Repaired by option (A). Every named stream of every covered INPUT, and of
+every directory up to the repository root, gets its own handle, its own
+identity and its own digest read through that handle. The identity is
+`owner-id:file-id:name:length`, because `FILE_ID_INFO` returns the same
+file id for every stream of a file - so only the content digest separates
+two same-length contents, and there is a test that demonstrates exactly
+that rather than asserting around it. Enumeration is `FindFirstStreamW`,
+and a path whose streams cannot be enumerated is a refusal.
+
+No share mode prevents a NEW stream being created, on a file or a
+directory, including `FILE_SHARE_NONE` - measured. So there is a second
+detector that does not depend on the observer: the inventory is taken
+with the boundary up and again after the checks, and anything that
+appeared, vanished or changed length is `STREAMS_MUTATED`, exit 8. That
+is what covers directories, because a stream write on one arrives as
+`modified <dir>` and the classifier forgives exactly that event.
+
+The disk is walked for the 83 directories that hold no input at all,
+excluding `.git/` and declared OUTPUT roots. `outputs_at_start` hashes
+pre-existing OUTPUT streams. Cost: ~56 s per capture. Named streams found
+in this repo today: zero.
+
+**F-14 is still NOT closed.** Repaired ten times now, tested (148
+tests) and mutation-checked (thirty-five mutants, none survived), it
+awaits a TENTH independent review. Nine reviews have each found
 something this unit's own tests and mutants did not.
 
 **Overlap recorded, not claimed:** F-15 (the unused primitive) is what

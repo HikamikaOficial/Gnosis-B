@@ -48,6 +48,11 @@ MF26..MF29 are the eighth review's: covered, locked and identified by
 object is not the same as byte-bound, and evidence that cannot be
 re-derived from the files is not durable.
 
+MF30..MF34 are the ninth review's: a path is not one stream. On NTFS a
+file is `::$DATA` plus any number of named streams, each openable as
+`path:name`, each readable by a check, and none of them visible to git
+or to a handle on the main stream.
+
     PYTHONUTF8=1 .venv/Scripts/python.exe scripts/mutation_check_f14.py
 
 Writes the transcript to stdout and, with `--out <path>`, to a file an
@@ -232,7 +237,8 @@ MUTANTS: list[Mutant] = [
                 "write stream is left, which a mapped write can evade",
         [(CAPTURE,
           """            lock = input_lock(repo)
-            lock_outcome = lock.acquire(sorted(covered))""",
+            directories = stream_directories(repo, allowed_writes)
+            lock_outcome = lock.acquire(sorted(covered), directories)""",
           """            lock = input_lock(repo)
             lock_outcome = LockOutcome(True, 0, (), "none")""")],
     ),
@@ -420,6 +426,58 @@ MUTANTS: list[Mutant] = [
         [(CAPTURE,
           "    if lock is not None and not lock.fully_bound:",
           "    if False:")],
+    ),
+    # MF30..MF34 are the NINTH review's: a path is not one stream, and
+    # everything below was measured before it was written.
+    Mutant(
+        "MF30", "named data streams are not enumerated, locked or hashed, so "
+                "an ADS reaches a check with no digest naming its bytes",
+        [(LOCK,
+          "            inventory, stream_failures = stream_inventory(\n"
+          "                self.root, sorted(paths), directories)",
+          "            inventory, stream_failures = {}, ()")],
+    ),
+    Mutant(
+        "MF31", "a stream enumeration that FAILED is treated as a path with "
+                "no streams, which is the silent-ignore the review forbade",
+        [(LOCK,
+          """        if found is None:
+            failures.append(f"{relative or '.'} (named data streams could not be "
+                            "enumerated, so its bytes cannot be stated)")
+            continue""",
+          """        if found is None:
+            continue""")],
+    ),
+    Mutant(
+        "MF32", "the inventory comparison is dropped, so a stream created "
+                "inside the protected interval is invisible again",
+        [(CAPTURE, "    if streams:", "    if False:")],
+    ),
+    Mutant(
+        "MF33", "only files are in the stream domain, so a directory's "
+                "streams -- which git never enumerates -- go unbound",
+        [(LOCK,
+          """        parts = clean.split("/")[:-1]
+        for index in range(len(parts)):
+            domain.add("/".join(parts[:index + 1]))""",
+          "        continue")],
+    ),
+    Mutant(
+        "MF34", "streams of a pre-existing OUTPUT file are not hashed, so an "
+                "ADS under an output root is an unnamed prior input",
+        [(CAPTURE,
+          """    found = named_streams(target)
+    if found is None:
+        return ("<streams could not be enumerated>",)
+    return tuple(name for name, _ in found)""",
+          "    return ()")],
+    ),
+    Mutant(
+        "MF35", "the disk is not walked, so a directory holding no input at "
+                "all keeps its streams outside the boundary",
+        [(CAPTURE,
+          """            directories = stream_directories(repo, allowed_writes)""",
+          "            directories = ()")],
     ),
 ]
 

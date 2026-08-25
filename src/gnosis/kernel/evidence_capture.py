@@ -113,7 +113,15 @@ from typing import Any
 
 from .canonical import hash_canonical
 from .git_evidence import content_fingerprint
-from .input_lock import InputLock, LockOutcome, create_input_lock
+from .input_lock import (
+    InputLock,
+    LockOutcome,
+    StreamInventory,
+    create_input_lock,
+    named_streams,
+    stream_drift,
+    stream_inventory,
+)
 from .write_observer import (
     BARRIER_DIR,
     Observation,
@@ -131,6 +139,7 @@ EXIT_INPUTS_MUTATED = 4
 EXIT_BOUNDARY_UNAVAILABLE = 5
 EXIT_INPUTS_UNPROTECTED = 6
 EXIT_PREPARATION_DRIFT = 7
+EXIT_STREAMS_MUTATED = 8
 
 _UNREADABLE_PREFIX = "unreadable: "
 
@@ -211,6 +220,7 @@ class ObservationVerdict(Enum):
     UNOBSERVED = "UNOBSERVED"
     UNPROTECTED = "UNPROTECTED"
     PREPARATION_DRIFT = "PREPARATION_DRIFT"
+    STREAMS_MUTATED = "STREAMS_MUTATED"
 
 
 @dataclass(frozen=True)
@@ -426,6 +436,34 @@ def output_paths(repo: Path, outputs: Sequence[str] = ()) -> frozenset[str]:
     return frozenset(found)
 
 
+def stream_directories(repo: Path, outputs: Sequence[str] = ()) -> tuple[str, ...]:
+    """Directories on disk whose named streams belong to the boundary.
+
+    Deriving directories from the covered files misses the ones holding
+    no file at all — 83 of them on this tree, mostly the empty corners of
+    nested clones — and an empty directory can still carry a stream a
+    check reads. So the disk is walked.
+
+    `.git/` is left out for the same reason its writes are counted and
+    not judged: it is not a covered input and tamper-evidence for the
+    machinery itself is F-17. Declared OUTPUT roots are left out because
+    an output is allowed to change, and a directory under one is not an
+    input whose streams must hold still.
+    """
+    found: list[str] = [""]
+    for base, names, _ in os.walk(repo):
+        relative = Path(base).relative_to(repo).as_posix()
+        relative = "" if relative == "." else relative
+        if relative and (relative == _GIT_DIR.rstrip("/")
+                         or relative.startswith(_GIT_DIR)
+                         or _is_allowed_path(relative, outputs)):
+            names[:] = []
+            continue
+        if relative:
+            found.append(relative)
+    return tuple(sorted(found))
+
+
 def _is_allowed_path(path: str, allowed: Sequence[str]) -> bool:
     """An entry with a slash is a prefix; one without is a directory name."""
     parts = path.split("/")
@@ -505,6 +543,7 @@ def classify_observation(
     lock: LockOutcome | None = None,
     drift: Sequence[str] = (),
     locked_identity: Mapping[str, Any] | None = None,
+    streams: Sequence[str] = (),
 ) -> Boundary:
     """Turn prevention plus a stream of writes into one verdict.
 
@@ -528,6 +567,10 @@ def classify_observation(
     `git check-ignore` is not consulted, and there is no unbound class
     left for a path to fall into: every path is an INPUT whose bytes are
     hashed or a declared OUTPUT whose pre-existing bytes are hashed.
+
+    A path is not one stream. `streams` carries the difference between
+    the named data streams present when the boundary went up and those
+    present when it came down, and any difference is its own verdict.
     """
     allowed = (BARRIER_DIR, *allowed_writes)
     protection: Mapping[str, Any] = lock.to_dict() if lock is not None else {}
@@ -570,6 +613,21 @@ def classify_observation(
             ObservationVerdict.PREPARATION_DRIFT, observation.mechanism,
             len(observation.events), 0, tuple(drift), len(covered), tuple(allowed),
             "the tree changed while the boundary was being built",
+            protection=protection, locked_identity=prepared)
+    if streams:
+        # The ninth review's second detector. No share mode on Windows
+        # stops a NEW named stream being created, on a file or on a
+        # directory — measured, including `FILE_SHARE_NONE` — so a stream
+        # that appeared, vanished or changed length inside the interval is
+        # caught by comparing the inventory rather than by preventing it.
+        # A DIFFERENT failure from INPUTS_MUTATED and it says so: that one
+        # is about the bytes of a path, this one about which streams a
+        # path has.
+        return Boundary(
+            ObservationVerdict.STREAMS_MUTATED, observation.mechanism,
+            len(observation.events), 0, tuple(streams), len(covered),
+            tuple(allowed),
+            "the named data streams of a covered path changed during the capture",
             protection=protection, locked_identity=prepared)
     if not observation.available or not observation.complete:
         return Boundary(
@@ -781,6 +839,8 @@ def _exit_code(binding: TreeBinding, checks: ChecksVerdict, boundary: Boundary) 
         return EXIT_INPUTS_UNPROTECTED
     if boundary.verdict is ObservationVerdict.PREPARATION_DRIFT:
         return EXIT_PREPARATION_DRIFT
+    if boundary.verdict is ObservationVerdict.STREAMS_MUTATED:
+        return EXIT_STREAMS_MUTATED
     if boundary.verdict is ObservationVerdict.INPUTS_MUTATED:
         return EXIT_INPUTS_MUTATED
     if checks not in (ChecksVerdict.ALL_CLEAN, ChecksVerdict.WITHIN_BASELINE):
@@ -804,6 +864,9 @@ def _verdict_line(binding: TreeBinding, checks: ChecksVerdict, boundary: Boundar
     if boundary.verdict is ObservationVerdict.PREPARATION_DRIFT:
         return ("INVALID EVIDENCE: the tree changed while the boundary was being "
                 "built, so nothing ran; see boundary.violations")
+    if boundary.verdict is ObservationVerdict.STREAMS_MUTATED:
+        return ("INVALID EVIDENCE: a named data stream appeared, vanished or "
+                "changed length during the capture; see boundary.violations")
     if boundary.verdict is ObservationVerdict.INPUTS_MUTATED:
         return ("INVALID EVIDENCE: a covered input was written during the capture "
                 "and the endpoints do not show it; see boundary.violations")
@@ -880,16 +943,34 @@ def file_digests(repo: Path, paths: Iterable[str]) -> dict[str, str]:
     digests: dict[str, str] = {}
     for relative in sorted(paths):
         target = repo / relative
-        try:
-            digest = hashlib.sha256()
-            with target.open("rb") as handle:
-                for chunk in iter(lambda: handle.read(1 << 20), b""):
-                    digest.update(chunk)
-        except OSError as exc:
-            digests[relative] = f"unreadable: {exc}"
-            continue
-        digests[relative] = digest.hexdigest()
+        for name in (None, *_output_stream_names(target)):
+            key = relative if name is None else f"{relative}:{name}"
+            source = target if name is None else Path(f"{target}:{name}")
+            try:
+                digest = hashlib.sha256()
+                with source.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1 << 20), b""):
+                        digest.update(chunk)
+            except OSError as exc:
+                digests[key] = f"unreadable: {exc}"
+                continue
+            digests[key] = digest.hexdigest()
     return digests
+
+
+def _output_stream_names(target: Path) -> tuple[str, ...]:
+    """Named streams of a pre-existing OUTPUT file.
+
+    The ninth review closed the same door on both sides. An OUTPUT is
+    allowed to change, but what is ALREADY there when the capture begins
+    must be named, and a named stream is bytes a check can read exactly
+    like the main one. An enumeration that fails is recorded as a
+    stream nobody can state rather than passed over.
+    """
+    found = named_streams(target)
+    if found is None:
+        return ("<streams could not be enumerated>",)
+    return tuple(name for name, _ in found)
 
 
 def write_manifest(staging: Path, inputs: Mapping[str, str],
@@ -974,13 +1055,16 @@ def run_capture(
     lock_outcome: LockOutcome | None = None
     prepared: TreeIdentity | None = None
     drift: tuple[str, ...] = ()
+    streams: tuple[str, ...] = ()
+    before_streams: StreamInventory = {}
     try:
         pre = identity(repo)
         if pre.available:
             covered = covered_paths(repo, allowed_writes)
             env = check_environment(scratch)
             lock = input_lock(repo)
-            lock_outcome = lock.acquire(sorted(covered))
+            directories = stream_directories(repo, allowed_writes)
+            lock_outcome = lock.acquire(sorted(covered), directories)
             try:
                 if lock_outcome.enforced:
                     # The identity that matters is taken HERE, once nothing
@@ -990,6 +1074,11 @@ def run_capture(
                     # still have moved inside it.
                     prepared = identity(repo)
                     drift = _preparation_drift(pre, prepared)
+                    # Taken here for the same reason as `prepared`: once
+                    # nothing can write the inputs any more, this is the
+                    # set of streams the checks will actually see.
+                    before_streams, _ = stream_inventory(
+                        repo, sorted(covered), directories)
                     write_identities(staging, lock_outcome.identities)
                     write_manifest(staging, lock_outcome.content_digests,
                                    file_digests(repo, output_paths(repo, allowed_writes)))
@@ -1000,6 +1089,11 @@ def run_capture(
                         for command in commands:
                             results.append(
                                 _run_check(repo, command, staging, lint_baseline, env))
+                        # Still inside the lock: a comparison taken after
+                        # the handles are gone would have a window in it.
+                        after_streams, failures = stream_inventory(
+                            repo, sorted(covered), directories)
+                        streams = stream_drift(before_streams, after_streams) + failures
             finally:
                 lock.release()
             post = identity(repo)
@@ -1013,7 +1107,8 @@ def run_capture(
     binding = bind_tree(pre, post)
     boundary = classify_observation(repo, observation, covered, allowed_writes,
                                     lock_outcome, drift,
-                                    prepared.to_dict() if prepared is not None else None)
+                                    prepared.to_dict() if prepared is not None else None,
+                                    streams)
     checks_verdict = _checks_verdict(results)
     summary = build_summary(
         binding, results, checks_verdict, boundary,

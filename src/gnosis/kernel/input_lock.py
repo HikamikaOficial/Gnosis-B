@@ -254,7 +254,8 @@ class LockOutcome:
 
 
 class InputLock(Protocol):
-    def acquire(self, paths: Sequence[str]) -> LockOutcome: ...
+    def acquire(self, paths: Sequence[str],
+                directories: Sequence[str] = ()) -> LockOutcome: ...
 
     def release(self) -> None: ...
 
@@ -266,7 +267,8 @@ class UnavailableLock:
     reason: str
     mechanism: str = "none"
 
-    def acquire(self, paths: Sequence[str]) -> LockOutcome:
+    def acquire(self, paths: Sequence[str],
+                directories: Sequence[str] = ()) -> LockOutcome:
         return LockOutcome(False, 0, tuple(paths), self.mechanism, self.reason,
                            volume=VolumeCapabilities(False, "unknown", "unknown",
                                                      self.reason))
@@ -295,6 +297,14 @@ if _IS_WINDOWS:
     _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
     _FILE_ID_INFO_CLASS = 18
     _VOLUME_NAME_DOS = 0
+    # FindFirstStreamW's info level, and the two "nothing more" answers.
+    # ERROR_HANDLE_EOF from the FIRST call is how a directory with no
+    # named streams replies, so it is an empty answer and not a failure.
+    _FIND_STREAM_INFO_STANDARD = 0
+    _ERROR_HANDLE_EOF = 38
+    _ERROR_FILE_NOT_FOUND = 2
+    _ERROR_PATH_NOT_FOUND = 3
+    _MAX_PATH = 260
 
     _DRIVE_TYPES = {0: "unknown", 1: "no-root-dir", 2: "removable", 3: "fixed",
                     4: "remote", 5: "cdrom", 6: "ramdisk"}
@@ -319,6 +329,12 @@ if _IS_WINDOWS:
     class _FileIdInfo(ctypes.Structure):
         _fields_ = (("VolumeSerialNumber", ctypes.c_ulonglong),
                     ("FileId", ctypes.c_ubyte * 16))
+
+    class _FindStreamData(ctypes.Structure):
+        """WIN32_FIND_STREAM_DATA. Names arrive as `:name:$DATA`."""
+
+        _fields_ = (("StreamSize", ctypes.c_longlong),
+                    ("cStreamName", wintypes.WCHAR * (_MAX_PATH + 36)))
 
     _kernel32.CreateFileW.argtypes = (
         wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
@@ -346,6 +362,52 @@ if _IS_WINDOWS:
         wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD, wintypes.LPVOID,
         wintypes.LPVOID, wintypes.LPVOID, wintypes.LPWSTR, wintypes.DWORD)
     _kernel32.GetVolumeInformationW.restype = wintypes.BOOL
+    _kernel32.FindFirstStreamW.argtypes = (
+        wintypes.LPCWSTR, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD)
+    _kernel32.FindFirstStreamW.restype = wintypes.HANDLE
+    _kernel32.FindNextStreamW.argtypes = (wintypes.HANDLE, wintypes.LPVOID)
+    _kernel32.FindNextStreamW.restype = wintypes.BOOL
+    _kernel32.FindClose.argtypes = (wintypes.HANDLE,)
+    _kernel32.FindClose.restype = wintypes.BOOL
+
+    def named_streams(target: Path) -> tuple[tuple[str, int], ...] | None:
+        """The NTFS named data streams of a file or a directory.
+
+        The ninth review's finding. A file is not one blob of bytes: it is
+        `::$DATA` plus any number of named streams, each openable as
+        `path:name`, each readable by a check, and none of them visible to
+        `git`, to `Path.read_bytes`, or to a handle on the main stream.
+
+        Returns the named streams only — `::$DATA` is the main stream and
+        is bound by the path itself. ``None`` means the enumeration FAILED
+        and the caller must fail closed; an empty tuple means it succeeded
+        and there are none. A path that has gone away answers empty,
+        matching how `acquire` already treats a deleted tracked file.
+        """
+        data = _FindStreamData()
+        handle = _kernel32.FindFirstStreamW(
+            str(target), _FIND_STREAM_INFO_STANDARD, ctypes.byref(data), 0)
+        if not handle or handle == _INVALID_HANDLE_VALUE:
+            error = ctypes.get_last_error()
+            if error in (_ERROR_HANDLE_EOF, _ERROR_FILE_NOT_FOUND,
+                         _ERROR_PATH_NOT_FOUND):
+                return ()
+            return None
+        found: list[tuple[str, int]] = []
+        try:
+            while True:
+                name = data.cStreamName
+                if name != "::$DATA":
+                    # `:name:$DATA` -> `name`. The suffix is the stream
+                    # TYPE and every data stream carries the same one.
+                    found.append((name.strip(":").removesuffix(":$DATA"),
+                                  int(data.StreamSize)))
+                if not _kernel32.FindNextStreamW(handle, ctypes.byref(data)):
+                    if ctypes.get_last_error() != _ERROR_HANDLE_EOF:
+                        return None
+                    return tuple(found)
+        finally:
+            _kernel32.FindClose(handle)
 
     def _file_identity(handle: int) -> tuple[int, str] | None:
         """VolumeSerialNumber + 128-bit FileId, as the reviewer asked for.
@@ -497,7 +559,8 @@ if _IS_WINDOWS:
         _handles: list[int] = field(default_factory=list)
         _digests: dict[str, str] = field(default_factory=dict)
 
-        def acquire(self, paths: Sequence[str]) -> LockOutcome:
+        def acquire(self, paths: Sequence[str],
+                    directories: Sequence[str] = ()) -> LockOutcome:
             probe = self.volume_probe or probe_volume
             volume = probe(self.root)
             if not volume.supported:
@@ -580,6 +643,35 @@ if _IS_WINDOWS:
                 problem = self._identify(relative, target, handle, identities)
                 if problem is not None:
                     refused.append(problem)
+
+            # The ninth review's finding. A handle on `probe.txt` denies
+            # writes to `probe.txt::$DATA` and to nothing else: measured,
+            # `probe.txt:name` stayed writable, stayed deletable, and its
+            # bytes reached a check while both digests above were
+            # unchanged. Every named stream therefore gets its own handle,
+            # its own identity and its own digest, on files and on
+            # directories alike.
+            inventory, stream_failures = stream_inventory(
+                self.root, sorted(paths), directories)
+            refused.extend(stream_failures)
+            for owner in sorted(inventory):
+                target = self.root / owner if owner else self.root
+                for name, size in inventory[owner]:
+                    relative = f"{owner or '.'}:{name}"
+                    handle = _kernel32.CreateFileW(
+                        f"{target}:{name}", _GENERIC_READ, _FILE_SHARE_READ, None,
+                        _OPEN_EXISTING, _FILE_ATTRIBUTE_NORMAL, None)
+                    if not handle or handle == _INVALID_HANDLE_VALUE:
+                        error = ctypes.get_last_error()
+                        if error in (_ERROR_FILE_NOT_FOUND, _ERROR_PATH_NOT_FOUND):
+                            continue
+                        refused.append(f"{relative} (error {error})")
+                        continue
+                    self._handles.append(handle)
+                    problem = self._identify_stream(
+                        relative, target, name, size, handle, identities)
+                    if problem is not None:
+                        refused.append(problem)
 
             unbound = (len(self._handles) - held_before) - len(self._digests)
             if unbound > 0:
@@ -678,6 +770,43 @@ if _IS_WINDOWS:
             self._digests[relative] = digest
             return None
 
+        def _identify_stream(self, relative: str, owner: Path, name: str, size: int,
+                             handle: int,
+                             identities: dict[str, str]) -> str | None:
+            """Record WHICH stream was locked: owner, name, length, bytes.
+
+            `FILE_ID_INFO` answers for the OWNER — every stream of a file
+            carries the same file id, measured — so an object identity on
+            its own cannot tell two streams of one file apart. The
+            identity recorded here is therefore the owner's id, the stream
+            NAME and its LENGTH together, which is the minimum the ninth
+            review asked for, and the bytes go in the content digest
+            beside it.
+            """
+            identity = _file_identity(handle)
+            if identity is None:
+                return f"{relative} (no FILE_ID_INFO)"
+            serial, file_id = identity
+            expected_serial = self.expected_serial
+            if expected_serial is None or serial != expected_serial:
+                return (f"{relative} (stream is on volume {serial:016x}, not the "
+                        f"probed volume {expected_serial:016x})"
+                        if expected_serial is not None else
+                        f"{relative} (the probed volume serial is unavailable)")
+            final = _final_path(handle)
+            if final is None:
+                return f"{relative} (no final path)"
+            final = final.removeprefix("\\\\?\\")
+            expected = f"{owner.resolve()}:{name}"
+            if final.lower() != expected.lower():
+                return f"{relative} (stream resolves to {final})"
+            digest = handle_digest(handle)
+            if digest is None:
+                return f"{relative} (bytes could not be read for hashing)"
+            identities[relative] = f"{serial:016x}:{file_id}:{name}:{size}"
+            self._digests[relative] = digest
+            return None
+
         def content_digests(self) -> dict[str, str]:
             """Path to SHA-256 for everything this lock is holding."""
             return dict(self._digests)
@@ -686,6 +815,92 @@ if _IS_WINDOWS:
             for handle in self._handles:
                 _kernel32.CloseHandle(handle)
             self._handles.clear()
+
+
+StreamInventory = dict[str, tuple[tuple[str, int], ...]]
+
+
+def stream_domain(paths: Sequence[str],
+                  directories: Sequence[str] = ()) -> tuple[str, ...]:
+    """Every path whose named streams could reach a check.
+
+    The covered files, every directory that holds one, the repository
+    root — which is the empty string here — and whatever extra
+    directories the caller found on disk.
+
+    Directories are in the domain because a directory carries named
+    streams too — measured, not assumed — and `git` never enumerates a
+    directory at all, so the covered set on its own would leave every
+    directory stream in the tree unbound and unwatched.
+
+    ``directories`` exists because deriving them from the covered paths
+    alone misses the ones that hold no input: measured on this tree, 83
+    of them, mostly the empty corners of nested clones. A directory with
+    no files in it can still carry a stream, so the caller walks the disk
+    and passes what it found.
+    """
+    domain: set[str] = {""}
+    for relative in (*paths, *directories):
+        clean = relative.replace("\\", "/").strip("/")
+        domain.add(clean)
+        parts = clean.split("/")[:-1]
+        for index in range(len(parts)):
+            domain.add("/".join(parts[:index + 1]))
+    return tuple(sorted(domain))
+
+
+def stream_inventory(root: Path, paths: Sequence[str],
+                     directories: Sequence[str] = ()
+                     ) -> tuple[StreamInventory, tuple[str, ...]]:
+    """Which named streams exist right now, per owner, and what failed.
+
+    Returns ``(inventory, failures)``. A non-empty ``failures`` is a
+    refusal: a path whose streams cannot be enumerated is a path whose
+    byte content cannot be stated, and the ninth review's rule is that
+    such a thing is never silently ignored.
+
+    Off Windows this is empty and says so through `create_input_lock`,
+    which already refuses to claim a boundary on this platform.
+    """
+    if not _IS_WINDOWS:
+        return {}, ()
+    inventory: StreamInventory = {}
+    failures: list[str] = []
+    for relative in stream_domain(paths, directories):
+        found = named_streams(root / relative if relative else root)
+        if found is None:
+            failures.append(f"{relative or '.'} (named data streams could not be "
+                            "enumerated, so its bytes cannot be stated)")
+            continue
+        if found:
+            inventory[relative] = tuple(sorted(found))
+    return inventory, tuple(failures)
+
+
+def stream_drift(before: StreamInventory, after: StreamInventory) -> tuple[str, ...]:
+    """Named streams that appeared, vanished or changed length.
+
+    The second detector, and it exists because the first one cannot
+    reach: no share mode on Windows prevents a NEW stream being created
+    on a file or a directory, on any handle, including `FILE_SHARE_NONE`.
+    Overwriting or deleting an EXISTING stream is prevented, by holding
+    that stream's own handle, so what is left for this to catch is
+    exactly appearance, disappearance and a change of length.
+    """
+    differences: list[str] = []
+    for owner in sorted(set(before) | set(after)):
+        was = dict(before.get(owner, ()))
+        now = dict(after.get(owner, ()))
+        label = owner or "."
+        for name in sorted(set(was) | set(now)):
+            if name not in was:
+                differences.append(f"appeared: {label}:{name} ({now[name]} bytes)")
+            elif name not in now:
+                differences.append(f"vanished: {label}:{name}")
+            elif was[name] != now[name]:
+                differences.append(
+                    f"resized: {label}:{name} ({was[name]} -> {now[name]} bytes)")
+    return tuple(differences)
 
 
 def create_input_lock(root: Path) -> InputLock:

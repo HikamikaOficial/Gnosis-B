@@ -11,6 +11,7 @@ capture that only ever ran against a stub would prove the stub.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -24,6 +25,7 @@ import time
 import unittest
 from pathlib import Path
 
+from gnosis.kernel import input_lock as input_lock_module
 from gnosis.kernel.canonical import hash_canonical
 from gnosis.kernel.evidence_capture import (
     EXIT_BOUNDARY_UNAVAILABLE,
@@ -33,6 +35,7 @@ from gnosis.kernel.evidence_capture import (
     EXIT_INPUTS_UNPROTECTED,
     EXIT_OK,
     EXIT_PREPARATION_DRIFT,
+    EXIT_STREAMS_MUTATED,
     EXIT_TREE_MUTATED,
     BindingVerdict,
     Boundary,
@@ -53,6 +56,7 @@ from gnosis.kernel.evidence_capture import (
     probe_tree_identity,
     publish_bundle,
     run_capture,
+    stream_directories,
 )
 from gnosis.kernel.git_evidence import content_fingerprint
 from gnosis.kernel.input_lock import (
@@ -64,8 +68,12 @@ from gnosis.kernel.input_lock import (
     WindowsInputLock,
     classify_volume,
     create_input_lock,
+    named_streams,
     probe_volume,
     reparse_in_chain,
+    stream_domain,
+    stream_drift,
+    stream_inventory,
 )
 from gnosis.kernel.write_observer import (
     Observation,
@@ -627,7 +635,7 @@ class _NoPrevention:
     platform without the share-mode mechanism could ever have.
     """
 
-    def acquire(self, paths):
+    def acquire(self, paths, directories=()):
         # locked=0, so the byte-bound invariant is satisfied vacuously:
         # this lock holds nothing and therefore hashes nothing.
         return LockOutcome(True, 0, (), "none (prevention disabled for this test)")
@@ -1202,11 +1210,11 @@ class _PausingLock:
         self._inner = create_input_lock(root)
         self._during = during
 
-    def acquire(self, paths):
+    def acquire(self, paths, directories=()):
         ordered = sorted(paths)
-        first = self._inner.acquire(ordered[:1])
+        first = self._inner.acquire(ordered[:1], directories)
         self._during()
-        second = self._inner.acquire(ordered[1:])
+        second = self._inner.acquire(ordered[1:], directories)
         identities = dict(first.identities)
         identities.update(second.identities)
         digests = dict(first.content_digests)
@@ -1794,6 +1802,47 @@ class TestNoProtectedHandleEscapesIdentification(unittest.TestCase):
             self.assertTrue(outcome.fully_identified)
 
 
+def _write_stream(target: Path, name: str, text: str) -> None:
+    """A named data stream is a path with a colon in it, nothing more."""
+    with open(f"{target}:{name}", "w", encoding="utf-8") as handle:
+        handle.write(text)
+
+
+def _read_stream(target: Path, name: str) -> str:
+    with open(f"{target}:{name}", encoding="utf-8") as handle:
+        return handle.read()
+
+
+def _reads_stream(relative: str, name: str) -> CheckCommand:
+    """A check whose RESULT depends on bytes outside the main stream."""
+    return _script(
+        "import sys",
+        f"print(open({relative!r} + ':' + {name!r}, encoding='utf-8').read().strip())",
+    )
+
+
+@contextlib.contextmanager
+def _no_stream_enumeration():
+    """Make `named_streams` fail, so the refusal path is reachable here.
+
+    Every path on this volume answers, and a guarantee whose refusal
+    branch cannot be run on the machine that has only the working case is
+    untested where it matters. Same reasoning as the injected volume
+    probe in the fourth review.
+    """
+    original = input_lock_module.named_streams
+    input_lock_module.named_streams = lambda _target: None
+    try:
+        yield
+    finally:
+        input_lock_module.named_streams = original
+
+
+def _manifest(capture) -> dict:
+    return json.loads(
+        (capture.bundle / "input-manifest.json").read_text(encoding="utf-8"))
+
+
 class _ForgetfulLock:
     """The real lock with the hashes thrown away after the fact.
 
@@ -1806,8 +1855,8 @@ class _ForgetfulLock:
     def __init__(self, root: Path) -> None:
         self._inner = create_input_lock(root)
 
-    def acquire(self, paths):
-        outcome = self._inner.acquire(paths)
+    def acquire(self, paths, directories=()):
+        outcome = self._inner.acquire(paths, directories)
         return LockOutcome(
             outcome.enforced, outcome.locked, outcome.refused, outcome.mechanism,
             outcome.reason, identities=dict(outcome.identities),
@@ -1824,8 +1873,8 @@ class _LockOver:
         self._inner = create_input_lock(root)
         self._paths = paths
 
-    def acquire(self, paths):
-        return self._inner.acquire(self._paths)
+    def acquire(self, paths, directories=()):
+        return self._inner.acquire(self._paths, directories)
 
     def release(self) -> None:
         self._inner.release()
@@ -2533,6 +2582,384 @@ class TestEveryInputIsByteBound(unittest.TestCase):
             self.assertTrue(protection["fully_bound"])
             self.assertNotEqual(protection["content_digest"],
                                 protection["identity_digest"])
+
+
+class TestNamedDataStreamsAreNotASecondChannel(unittest.TestCase):
+    """Ninth review: a path is not one stream, and `git` cannot see the rest.
+
+    On NTFS a file is `::$DATA` plus any number of named streams, each
+    openable as `path:name`, each readable by a check. Reproduced before
+    anything changed: the same main stream with `probe.txt:gnosis-f14`
+    flipped from ALLOW to DENY produced a check that read different bytes
+    and two bundles whose `identity_digest` and `content_digest` were
+    byte-identical, both `evidence_valid` true.
+
+    Directories carry them too, and a handle on the main stream protects
+    only the main stream. Both measured, both repaired here.
+    """
+
+    def _repo(self, root: Path, name: str = "repo") -> Path:
+        return _repo_with_ignored_input(root, name)
+
+    # -- 1 -------------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_same_main_stream_different_ads_cannot_share_an_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = self._repo(root, "one")
+            _write_stream(first / "a.txt", "side", "ALLOW")
+            second = self._repo(root, "two")
+            _write_stream(second / "a.txt", "side", "DENY!")
+
+            left = run_capture(first, [_script("pass")], root / "s1")
+            right = run_capture(second, [_script("pass")], root / "s2")
+
+            # The main streams really are identical, byte for byte.
+            self.assertEqual((first / "a.txt").read_bytes(),
+                             (second / "a.txt").read_bytes())
+            self.assertEqual(_manifest(left)["inputs"]["a.txt"],
+                             _manifest(right)["inputs"]["a.txt"])
+            # And the evidence still tells them apart.
+            self.assertNotEqual(left.boundary.protection["content_digest"],
+                                right.boundary.protection["content_digest"])
+            self.assertNotEqual(_manifest(left)["inputs"]["a.txt:side"],
+                                _manifest(right)["inputs"]["a.txt:side"])
+
+    # -- 2 -------------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_changing_only_an_ads_changes_the_durable_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            _write_stream(repo / "a.txt", "side", "ALLOW")
+
+            before = run_capture(repo, [_script("pass")], root / "before")
+            main_before = (repo / "a.txt").read_bytes()
+            _write_stream(repo / "a.txt", "side", "DENY!")
+            after = run_capture(repo, [_script("pass")], root / "after")
+
+            self.assertEqual(main_before, (repo / "a.txt").read_bytes())
+            self.assertTrue(before.evidence_valid)
+            self.assertTrue(after.evidence_valid)
+            self.assertNotEqual(before.boundary.protection["content_digest"],
+                                after.boundary.protection["content_digest"])
+            # And the review's own point 6, demonstrated rather than
+            # asserted: "ALLOW" and "DENY!" are both five bytes of the
+            # same stream of the same object, so owner id, stream name
+            # and LENGTH are all unchanged. The identity digest cannot
+            # tell them apart and is not asked to. Only the bytes can.
+            self.assertEqual(before.boundary.protection["identity_digest"],
+                             after.boundary.protection["identity_digest"])
+
+            # A length change does move it, which is what makes the
+            # inventory a usable second detector.
+            _write_stream(repo / "a.txt", "side", "LONGER THAN BEFORE")
+            longer = run_capture(repo, [_script("pass")], root / "longer")
+            self.assertNotEqual(before.boundary.protection["identity_digest"],
+                                longer.boundary.protection["identity_digest"])
+
+    # -- 3 -------------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_a_check_reading_an_ads_reads_bytes_the_manifest_states(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            _write_stream(repo / "ignored-input.txt", "gnosis-f14", "ALLOW")
+
+            capture = run_capture(
+                repo, [_reads_stream("ignored-input.txt", "gnosis-f14")],
+                root / "staging")
+
+            self.assertEqual(capture.checks[0].tail, "ALLOW")
+            recorded = _manifest(capture)["inputs"]["ignored-input.txt:gnosis-f14"]
+            self.assertEqual(
+                hashlib.sha256(b"ALLOW").hexdigest(), recorded,
+                "the bytes the check read are not the bytes the evidence names")
+
+    # -- 4 -------------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_an_ads_created_before_the_capture_is_bound(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            _write_stream(repo / "a.txt", "planted", "PLANTED BEFORE")
+
+            capture = run_capture(repo, [_script("pass")], root / "staging")
+            protection = capture.boundary.protection
+            inputs = _manifest(capture)["inputs"]
+
+            self.assertIn("a.txt:planted", inputs)
+            self.assertEqual(hashlib.sha256(b"PLANTED BEFORE").hexdigest(),
+                             inputs["a.txt:planted"])
+            self.assertTrue(protection["fully_bound"])
+            self.assertEqual(protection["locked_inputs"],
+                             protection["byte_bound_inputs"])
+            # The identity names owner, stream and length, because a file
+            # id alone is the same for every stream of one file.
+            identities = json.loads(
+                (capture.bundle / "input-identities.json").read_text(encoding="utf-8"))
+            self.assertRegex(identities["a.txt:planted"],
+                             r"\A[0-9a-f]{16}:[0-9a-f]+:planted:14\Z")
+
+    # -- 5 -------------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_modifying_an_ads_during_the_interval_is_prevented(self):
+        # Prevention, not detection: the stream has its own handle now.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            _write_stream(repo / "a.txt", "side", "ORIGINAL")
+
+            lock = create_input_lock(repo)
+            try:
+                outcome = lock.acquire(sorted(covered_paths(repo)))
+                self.assertTrue(outcome.enforced)
+                with self.assertRaises(PermissionError):
+                    _write_stream(repo / "a.txt", "side", "TAMPERED")
+                with self.assertRaises(PermissionError):
+                    os.remove(f"{repo / 'a.txt'}:side")
+            finally:
+                lock.release()
+
+            self.assertEqual(_read_stream(repo / "a.txt", "side"), "ORIGINAL")
+
+    @WINDOWS_ONLY
+    def test_an_ads_created_during_the_interval_is_detected(self):
+        # Creation cannot be prevented by ANY share mode on Windows, so
+        # this half is caught by comparing the inventory instead.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+
+            capture = run_capture(repo, [_script(
+                "open('a.txt:sneaked', 'w', encoding='utf-8').write('NEW')",
+            )], root / "staging")
+
+            self.assertIs(capture.boundary.verdict,
+                          ObservationVerdict.STREAMS_MUTATED)
+            self.assertFalse(capture.evidence_valid)
+            self.assertEqual(capture.exit_code, EXIT_STREAMS_MUTATED)
+            self.assertTrue(any("appeared: a.txt:sneaked" in item
+                                for item in capture.boundary.violations),
+                            capture.boundary.violations)
+
+    # -- 6 -------------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_an_ads_on_a_directory_is_covered(self):
+        # git never enumerates a directory, so the covered set alone would
+        # leave every directory stream unbound. They are in the domain.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            (repo / "subdir").mkdir()
+            (repo / "subdir" / "kept.txt").write_text("x\n", encoding="utf-8")
+            _git(repo, "add", "subdir/kept.txt")
+            _git(repo, "commit", "-m", "subdir")
+            _write_stream(repo / "subdir", "dir-stream", "DIRECTORY BYTES")
+
+            capture = run_capture(
+                repo, [_reads_stream("subdir", "dir-stream")], root / "staging")
+
+            self.assertEqual(capture.checks[0].tail, "DIRECTORY BYTES")
+            inputs = _manifest(capture)["inputs"]
+            self.assertIn("subdir:dir-stream", inputs)
+            self.assertEqual(hashlib.sha256(b"DIRECTORY BYTES").hexdigest(),
+                             inputs["subdir:dir-stream"])
+
+    @WINDOWS_ONLY
+    def test_an_ads_on_the_repository_root_is_covered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            _write_stream(repo, "root-stream", "AT THE TOP")
+
+            capture = run_capture(repo, [_script("pass")], root / "staging")
+
+            self.assertIn(".:root-stream", _manifest(capture)["inputs"])
+
+    @WINDOWS_ONLY
+    def test_a_directory_ads_created_during_the_interval_is_detected(self):
+        # The classifier forgives `modified` on a directory, because a
+        # directory's timestamp moves when its entries move. That is
+        # exactly why the inventory is a SECOND detector and not a
+        # refinement of the first.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            (repo / "subdir").mkdir()
+            (repo / "subdir" / "kept.txt").write_text("x\n", encoding="utf-8")
+            _git(repo, "add", "subdir/kept.txt")
+            _git(repo, "commit", "-m", "subdir")
+
+            capture = run_capture(repo, [_script(
+                "open('subdir:late', 'w', encoding='utf-8').write('LATE')",
+            )], root / "staging")
+
+            self.assertIs(capture.boundary.verdict,
+                          ObservationVerdict.STREAMS_MUTATED)
+            self.assertEqual(capture.exit_code, EXIT_STREAMS_MUTATED)
+            self.assertTrue(any("appeared: subdir:late" in item
+                                for item in capture.boundary.violations),
+                            capture.boundary.violations)
+
+    # -- 7 -------------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_an_ads_under_an_output_root_cannot_be_an_unnamed_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            (repo / "build-cache").mkdir()
+            (repo / "build-cache" / "planted.txt").write_text(
+                "MAIN\n", encoding="utf-8")
+            _write_stream(repo / "build-cache" / "planted.txt", "hidden", "SIDE")
+
+            capture = run_capture(repo, [_reads_stream(
+                "build-cache/planted.txt", "hidden")], root / "staging",
+                allowed_writes=("build-cache/",))
+
+            self.assertEqual(capture.checks[0].tail, "SIDE")
+            outputs = _manifest(capture)["outputs_at_start"]
+            self.assertIn("build-cache/planted.txt:hidden", outputs)
+            self.assertEqual(hashlib.sha256(b"SIDE").hexdigest(),
+                             outputs["build-cache/planted.txt:hidden"])
+
+    # -- 8 -------------------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_a_tree_with_no_streams_behaves_exactly_as_before(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+
+            capture = run_capture(repo, [_script("pass")], root / "staging")
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
+            self.assertTrue(capture.evidence_valid)
+            self.assertEqual(capture.exit_code, EXIT_OK)
+            self.assertEqual(capture.boundary.violations, ())
+            self.assertEqual([k for k in _manifest(capture)["inputs"] if ":" in k],
+                             [], "a tree with no streams grew stream entries")
+            self.assertEqual(capture.boundary.protection["locked_inputs"],
+                             capture.boundary.protection["byte_bound_inputs"])
+
+    # -- the primitives ------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_enumeration_separates_absent_from_unreadable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plain = root / "plain.txt"
+            plain.write_text("no streams\n", encoding="utf-8")
+            self.assertEqual(named_streams(plain), ())
+
+            carrying = root / "carrying.txt"
+            carrying.write_text("main\n", encoding="utf-8")
+            _write_stream(carrying, "side", "12345")
+            self.assertEqual(named_streams(carrying), (("side", 5),))
+
+            # An empty directory answers ERROR_HANDLE_EOF, which is "none"
+            # and not "the enumeration failed".
+            empty = root / "empty"
+            empty.mkdir()
+            self.assertEqual(named_streams(empty), ())
+            self.assertEqual(named_streams(root / "missing.txt"), ())
+
+    def test_the_domain_includes_every_directory_that_holds_an_input(self):
+        self.assertEqual(
+            stream_domain(["a.txt", "src/deep/b.py"]),
+            ("", "a.txt", "src", "src/deep", "src/deep/b.py"))
+
+    @WINDOWS_ONLY
+    def test_a_directory_holding_no_input_is_still_in_the_domain(self):
+        # Deriving directories from the covered files misses the ones
+        # with no file in them — 83 of them on the real tree — and an
+        # empty directory carries streams like any other.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            hollow = repo / "hollow"
+            hollow.mkdir()
+            _write_stream(hollow, "quiet", "NOBODY DECLARED ME")
+
+            self.assertEqual(sorted(covered_paths(repo)),
+                             [".gitignore", "a.txt", "ignored-input.txt"])
+            self.assertNotIn("hollow", stream_domain(sorted(covered_paths(repo))))
+            self.assertIn("hollow", stream_directories(repo))
+
+            capture = run_capture(
+                repo, [_reads_stream("hollow", "quiet")], root / "staging")
+
+            self.assertEqual(capture.checks[0].tail, "NOBODY DECLARED ME")
+            self.assertEqual(
+                hashlib.sha256(b"NOBODY DECLARED ME").hexdigest(),
+                _manifest(capture)["inputs"]["hollow:quiet"])
+
+    @WINDOWS_ONLY
+    def test_the_walk_leaves_out_git_and_declared_output_roots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            (repo / "build-cache" / "inner").mkdir(parents=True)
+            (repo / "kept").mkdir()
+
+            walked = stream_directories(repo, ("build-cache/",))
+
+            self.assertIn("kept", walked)
+            self.assertIn("", walked)
+            self.assertNotIn("build-cache", walked)
+            self.assertNotIn("build-cache/inner", walked)
+            self.assertFalse([item for item in walked if item.startswith(".git")],
+                             walked)
+
+    def test_drift_names_what_appeared_vanished_and_resized(self):
+        before = {"a.txt": (("keep", 3), ("gone", 9), ("grow", 1))}
+        after = {"a.txt": (("keep", 3), ("grow", 7)), "b.txt": (("new", 2),)}
+
+        self.assertEqual(
+            stream_drift(before, after),
+            ("vanished: a.txt:gone", "resized: a.txt:grow (1 -> 7 bytes)",
+             "appeared: b.txt:new (2 bytes)"))
+
+    @WINDOWS_ONLY
+    def test_a_path_with_no_streams_produces_no_entry_and_no_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a.txt").write_text("x\n", encoding="utf-8")
+            inventory, failures = stream_inventory(root, ["a.txt"])
+            self.assertEqual(inventory, {})
+            self.assertEqual(failures, ())
+
+    @WINDOWS_ONLY
+    def test_an_enumeration_failure_is_a_refusal_and_not_a_shrug(self):
+        # An enumeration that cannot say WHICH streams exist cannot say
+        # what the bytes are, and a path in that state is refused rather
+        # than passed over.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a.txt").write_text("x\n", encoding="utf-8")
+
+            with _no_stream_enumeration():
+                inventory, failures = stream_inventory(root, ["a.txt"])
+
+            self.assertEqual(inventory, {})
+            self.assertEqual(len(failures), 2)  # the file and the root
+            self.assertTrue(all("could not be enumerated" in item
+                                for item in failures), failures)
+
+    @WINDOWS_ONLY
+    def test_a_lock_refuses_when_streams_cannot_be_enumerated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+
+            with _no_stream_enumeration():
+                lock = create_input_lock(repo)
+                try:
+                    outcome = lock.acquire(sorted(covered_paths(repo)))
+                finally:
+                    lock.release()
+
+            self.assertFalse(outcome.enforced)
+            self.assertTrue(any("could not be enumerated" in item
+                                for item in outcome.refused), outcome.refused)
 
 
 if __name__ == "__main__":

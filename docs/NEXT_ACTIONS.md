@@ -204,8 +204,28 @@ when an ADR with captured evidence backs it.
   cannot be an anonymous prior input. 127 tests; twenty-nine mutants,
   none survived; captured on `de74053` as
   `.gnosis/evidence/20260825T011601Z/` over 90,245 byte-bound inputs,
-  boundary CLEAN, exit 0. **Next action: hand this unit to a NINTH
-  independent review.** It is not closed until one returns without findings.
+  boundary CLEAN, exit 0.
+
+- **Ninth independent review (2026-08-25): FAIL CRÍTICO PROVISIONAL -
+  NTFS named data streams.** A path is `::$DATA` plus any number of named
+  streams, each openable as `path:name`, each readable by a check, none
+  of them visible to git or to a handle on the main stream. Reproduced
+  first: main stream untouched, `probe.txt:gnosis-f14` flipped ALLOW ->
+  DENY, the check read different bytes, and both bundles carried
+  identical `identity_digest` AND `content_digest`, both `evidence_valid`
+  true. The main-stream handle also left the named stream writable and
+  deletable, and directories carry streams git never enumerates.
+  Repaired with option (A): every stream gets its own handle, its own
+  identity (`owner-id:file-id:name:length`, because one file id covers
+  every stream of a file) and its own digest read through that handle;
+  `FindFirstStreamW` enumerates and a failure to enumerate is a refusal;
+  a second detector compares the inventory before and after, because no
+  share mode prevents a NEW stream - measured, including
+  `FILE_SHARE_NONE` - giving `STREAMS_MUTATED` and exit 8; the disk is
+  walked for the 83 directories holding no input; `outputs_at_start`
+  hashes pre-existing OUTPUT streams. 148 tests; thirty-five mutants,
+  none survived. **Next action: hand this unit to a TENTH independent
+  review.** It is not closed until one returns without findings.
 
 - **Observed overlap with F-15..F-18, none of them marked repaired:**
   F-15's suggested correction is what this script now does, but the
