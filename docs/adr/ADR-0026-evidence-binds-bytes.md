@@ -2063,6 +2063,52 @@ survived. MF14's anchor moved with the call site it names.
 | MF34 | the hashing of a pre-existing OUTPUT's streams |
 | MF35 | the disk walk, so a directory holding no input keeps its streams outside |
 
+### Evidence
+
+`.gnosis/evidence/20260825T043839Z/`, bound to `42f461b`.
+
+| | |
+|---|---|
+| binding | BOUND — pre, post and post-lock identity all `be82ae7f…` |
+| boundary | CLEAN, 0 violations |
+| covered inputs | **90,261** — `locked_inputs` = `identified_objects` = `byte_bound_inputs` |
+| named streams found | **0** on inputs, **0** on the 250 pre-existing OUTPUT files |
+| `fully_identified` / `fully_bound` | true / true |
+| `identity_digest` | `eb7af0e4b60f4cd5b1681abb3c47fc5ba6396e4ea1be809d4426d663ff0a1b90` |
+| `content_digest` | `3568d3ef845a298b61dacfd12dada85b553960221bd5159c901721567c97d2fe` |
+| volume | `fixed`, `NTFS`, supported |
+| pytest | 1020 passed, 70 subtests, 877 s |
+| mypy | clean, 58 source files |
+| ruff | 19, the recorded baseline |
+| `evidence_valid` / exit | true / 0 |
+
+Zero streams found is the result review item 8 asks for: this tree has
+none, the machinery reports none, and nothing was falsely flagged. The
+capability is demonstrated by the attack transcripts and the tests, not
+by the repository happening to contain a specimen.
+
+Five artifacts beyond the gate transcripts:
+
+- `ads-attack-before.txt` — the finding, reproduced against
+  `git archive de74053`, which is the tree the ninth review examined. The
+  script prints the `src` it loaded so a reader can see it ran the OLD
+  code: identity and content digests identical across two runs whose
+  check read `ALLOW` then `DENY`, both `evidence_valid` true.
+- `ads-attack-after.txt` — the same script, same fixture, against this
+  tree: both digests differ, the stream is in the manifest, the locked
+  stream refuses writes.
+- `ads-mechanisms.txt` — the four measurements that chose the
+  architecture, each with the script that produced it: what
+  `FindFirstStreamW` enumerates, what a per-stream handle refuses, that
+  stream CREATION is unpreventable under every share mode including
+  `FILE_SHARE_NONE`, what `ReadDirectoryChangesW` reports, the cost, and
+  the 83 directories a covered-path derivation misses.
+- `mutation-check.f14-round12.txt` — 35 mutants, none survived, baseline
+  and restored tree both green in the same transcript.
+- `probe-f14-boundary.txt` — the earlier reviews' ten break attempts
+  re-run here; only B0 breaks, and B0 exists to show why prevention is
+  needed.
+
 ### What is still not closed
 
 - **F-14 remains OPEN.** Nine reviews, nine findings.

@@ -1,0 +1,669 @@
+F-14 round 10 - the measurements that chose the architecture.
+
+Every design decision in addendum 9 rests on one of these, and each
+was run before the corresponding line of code was written.
+
+tree:   42f461bd27982c70b4c2f15d0801c81829c4caa0
+
+==========================================================================
+ENUMERATION, LOCKING, CREATION, AND WHAT THE OBSERVER SEES
+==========================================================================
+script: scratchpad/ads_mechanics.py   exit: 0
+
+F-14 ROUND 10 — PHASE 1b: what NTFS actually offers for streams
+==========================================================================
+python: 3.12.14
+
+1. ENUMERATION
+   file      probe.txt: [('::$DATA', 6), (':gnosis-f14:$DATA', 5)]
+   directory subdir  : [(':dir-stream:$DATA', 15)]
+   plain     plain.txt: [('::$DATA', 17)]
+   plain dir tmpmpk8ds2q: [('<FindFirstStreamW failed 38>', -1)]
+
+2. CAN A NAMED STREAM BE LOCKED LIKE A MAIN STREAM?
+   held probe.txt (main)              : True
+   write main stream                  : REFUSED PermissionError [13/None]
+   write named stream                 : SUCCEEDED
+   ALSO held probe.txt:gnosis-f14     : True
+   write named stream now             : REFUSED PermissionError [13/None]
+   read it through neither handle     : 'TAMPERED'
+
+3. CAN A NEW STREAM APPEAR WHILE EVERYTHING IS HELD?
+   create probe.txt:brand-new         : SUCCEEDED
+   enumeration now shows              : ['::$DATA', ':brand-new:$DATA', ':gnosis-f14:$DATA']
+
+   the same, with the main stream held FILE_SHARE_NONE:
+   held probe.txt FILE_SHARE_NONE     : True
+   create probe.txt:another-new       : SUCCEEDED
+   read the main stream               : REFUSED PermissionError
+
+4. DOES ReadDirectoryChangesW REPORT STREAM WRITES?
+   filter current _NOTIFY_ALL       (0x15f): action=3 name='probe.txt'
+   filter + STREAM_NAME/SIZE/WRITE  (0xf5f): action=3 name='probe.txt'
+
+--- source --------------------------------------------------------------
+
+"""PHASE 1b: which mechanisms are available for named streams?
+
+The repair's architecture depends on four measurements, not on reasoning
+about NTFS:
+
+  1. can streams be ENUMERATED, on files and on directories?
+  2. can a named stream be LOCKED the way a main stream is?
+  3. can a NEW stream be created on a file whose streams are all locked?
+  4. does ReadDirectoryChangesW REPORT stream writes, and under which
+     filter flags?
+
+No production code is modified.
+"""
+from __future__ import annotations
+
+import ctypes
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from ctypes import wintypes
+from pathlib import Path
+
+k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+GENERIC_READ = 0x80000000
+FILE_SHARE_READ = 0x00000001
+FILE_SHARE_NONE = 0x00000000
+OPEN_EXISTING = 3
+FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+FILE_LIST_DIRECTORY = 0x0001
+FILE_SHARE_ALL = 0x07
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+MAX_PATH = 260
+
+
+class WIN32_FIND_STREAM_DATA(ctypes.Structure):
+    _fields_ = (("StreamSize", ctypes.c_longlong),
+                ("cStreamName", wintypes.WCHAR * (MAX_PATH + 36)))
+
+
+k32.FindFirstStreamW.restype = wintypes.HANDLE
+k32.FindFirstStreamW.argtypes = [wintypes.LPCWSTR, ctypes.c_int,
+                                 ctypes.c_void_p, wintypes.DWORD]
+k32.FindNextStreamW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+k32.FindNextStreamW.restype = wintypes.BOOL
+k32.FindClose.argtypes = [wintypes.HANDLE]
+k32.CreateFileW.restype = wintypes.HANDLE
+k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                            ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                            wintypes.HANDLE]
+k32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+ERROR_HANDLE_EOF = 38
+
+
+def streams_of(path: Path) -> list[tuple[str, int]]:
+    """FindFirstStreamW/FindNextStreamW: names come back as :name:$DATA."""
+    data = WIN32_FIND_STREAM_DATA()
+    handle = k32.FindFirstStreamW(str(path), 0, ctypes.byref(data), 0)
+    if handle == INVALID_HANDLE_VALUE:
+        err = ctypes.get_last_error()
+        return [("<FindFirstStreamW failed %d>" % err, -1)]
+    found = []
+    try:
+        while True:
+            found.append((data.cStreamName, data.StreamSize))
+            if not k32.FindNextStreamW(handle, ctypes.byref(data)):
+                if ctypes.get_last_error() != ERROR_HANDLE_EOF:
+                    found.append(("<FindNextStreamW failed %d>"
+                                  % ctypes.get_last_error(), -1))
+                break
+    finally:
+        k32.FindClose(handle)
+    return found
+
+
+def hold(path: str, share: int, flags: int = 0) -> int | None:
+    handle = k32.CreateFileW(path, GENERIC_READ, share, None, OPEN_EXISTING,
+                             flags, None)
+    if handle == INVALID_HANDLE_VALUE:
+        return None
+    return handle
+
+
+def try_write(target: str, text: str) -> str:
+    try:
+        with open(target, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return "SUCCEEDED"
+    except OSError as exc:
+        return f"REFUSED {exc.__class__.__name__} [{exc.errno}/{exc.winerror}]"
+
+
+def main() -> int:
+    print("F-14 ROUND 10 — PHASE 1b: what NTFS actually offers for streams")
+    print("=" * 74)
+    print(f"python: {sys.version.split()[0]}")
+    print()
+
+    with tempfile.TemporaryDirectory(dir=r"C:\Users\nicol\AppData\Local\Temp") as tmp:
+        root = Path(tmp)
+        target = root / "probe.txt"
+        target.write_text("BASE\n", encoding="utf-8")
+        with open(f"{target}:gnosis-f14", "w", encoding="utf-8") as fh:
+            fh.write("ALLOW")
+        subdir = root / "subdir"
+        subdir.mkdir()
+        with open(f"{subdir}:dir-stream", "w", encoding="utf-8") as fh:
+            fh.write("DIRECTORY BYTES")
+
+        print("1. ENUMERATION")
+        print(f"   file      {target.name}: {streams_of(target)}")
+        print(f"   directory {subdir.name}  : {streams_of(subdir)}")
+        empty = root / "plain.txt"
+        empty.write_text("no streams here\n", encoding="utf-8")
+        print(f"   plain     {empty.name}: {streams_of(empty)}")
+        print(f"   plain dir {root.name}: {streams_of(root)}")
+        print()
+
+        print("2. CAN A NAMED STREAM BE LOCKED LIKE A MAIN STREAM?")
+        main_handle = hold(str(target), FILE_SHARE_READ)
+        print(f"   held probe.txt (main)              : {main_handle is not None}")
+        print(f"   write main stream                  : "
+              f"{try_write(str(target), 'TAMPERED')}")
+        print(f"   write named stream                 : "
+              f"{try_write(f'{target}:gnosis-f14', 'TAMPERED')}")
+        ads_handle = hold(f"{target}:gnosis-f14", FILE_SHARE_READ)
+        print(f"   ALSO held probe.txt:gnosis-f14     : {ads_handle is not None}")
+        print(f"   write named stream now             : "
+              f"{try_write(f'{target}:gnosis-f14', 'TAMPERED-2')}")
+        print(f"   read it through neither handle     : "
+              f"{open(f'{target}:gnosis-f14', encoding='utf-8').read()!r}")
+        print()
+
+        print("3. CAN A NEW STREAM APPEAR WHILE EVERYTHING IS HELD?")
+        print(f"   create probe.txt:brand-new         : "
+              f"{try_write(f'{target}:brand-new', 'APPEARED')}")
+        print(f"   enumeration now shows              : "
+              f"{[n for n, _ in streams_of(target)]}")
+        print()
+
+        print("   the same, with the main stream held FILE_SHARE_NONE:")
+        if ads_handle:
+            k32.CloseHandle(ads_handle)
+        if main_handle:
+            k32.CloseHandle(main_handle)
+        strict = hold(str(target), FILE_SHARE_NONE)
+        print(f"   held probe.txt FILE_SHARE_NONE     : {strict is not None}")
+        print(f"   create probe.txt:another-new       : "
+              f"{try_write(f'{target}:another-new', 'APPEARED TOO')}")
+        print(f"   read the main stream               : "
+              f"{try_write(str(target), 'x') if False else ''}", end="")
+        try:
+            print(repr(target.read_text(encoding='utf-8')))
+        except OSError as exc:
+            print(f"REFUSED {exc.__class__.__name__}")
+        if strict:
+            k32.CloseHandle(strict)
+        print()
+
+        print("4. DOES ReadDirectoryChangesW REPORT STREAM WRITES?")
+        for label, notify in (
+                ("current _NOTIFY_ALL      ", 0x001 | 0x002 | 0x004 | 0x008
+                 | 0x010 | 0x040 | 0x100),
+                ("+ STREAM_NAME/SIZE/WRITE ", 0x001 | 0x002 | 0x004 | 0x008
+                 | 0x010 | 0x040 | 0x100 | 0x200 | 0x400 | 0x800)):
+            print(f"   filter {label} (0x{notify:03x}): ", end="")
+            print(watch(root, notify, target))
+        print()
+
+    return 0
+
+
+class _Overlapped(ctypes.Structure):
+    _fields_ = (("Internal", ctypes.c_void_p), ("InternalHigh", ctypes.c_void_p),
+                ("Offset", wintypes.DWORD), ("OffsetHigh", wintypes.DWORD),
+                ("hEvent", wintypes.HANDLE))
+
+
+def watch(root: Path, notify: int, target: Path) -> str:
+    """Arm a watcher, write a named stream, report what came back."""
+    k32.ReadDirectoryChangesW.argtypes = [
+        wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD, wintypes.BOOL,
+        wintypes.DWORD, wintypes.LPDWORD, ctypes.c_void_p, ctypes.c_void_p]
+    k32.CreateEventW.restype = wintypes.HANDLE
+    k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    k32.GetOverlappedResult.argtypes = [wintypes.HANDLE, ctypes.c_void_p,
+                                        wintypes.LPDWORD, wintypes.BOOL]
+
+    handle = k32.CreateFileW(str(root), FILE_LIST_DIRECTORY, FILE_SHARE_ALL,
+                             None, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS
+                             | 0x40000000, None)  # FILE_FLAG_OVERLAPPED
+    if handle == INVALID_HANDLE_VALUE:
+        return f"could not watch: {ctypes.get_last_error()}"
+    buf = ctypes.create_string_buffer(64 * 1024)
+    ov = _Overlapped()
+    ov.hEvent = k32.CreateEventW(None, True, False, None)
+    returned = wintypes.DWORD(0)
+    ok = k32.ReadDirectoryChangesW(handle, buf, len(buf), True, notify,
+                                   ctypes.byref(returned), ctypes.byref(ov), None)
+    if not ok:
+        k32.CloseHandle(handle)
+        return f"arm failed: {ctypes.get_last_error()}"
+
+    def writer() -> None:
+        time.sleep(0.15)
+        with open(f"{target}:watched-stream", "w", encoding="utf-8") as fh:
+            fh.write("WRITTEN DURING THE INTERVAL")
+
+    thread = threading.Thread(target=writer)
+    thread.start()
+    thread.join()
+    time.sleep(0.3)
+
+    events: list[str] = []
+    if k32.WaitForSingleObject(ov.hEvent, 1500) == 0:
+        got = wintypes.DWORD(0)
+        if k32.GetOverlappedResult(handle, ctypes.byref(ov), ctypes.byref(got), False):
+            offset = 0
+            while True:
+                nxt = int.from_bytes(buf[offset:offset + 4], "little")
+                action = int.from_bytes(buf[offset + 4:offset + 8], "little")
+                length = int.from_bytes(buf[offset + 8:offset + 12], "little")
+                name = bytes(buf[offset + 12:offset + 12 + length]).decode("utf-16-le")
+                events.append(f"action={action} name={name!r}")
+                if not nxt:
+                    break
+                offset += nxt
+    k32.CloseHandle(handle)
+    return "; ".join(events) if events else "NOTHING DELIVERED"
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+==========================================================================
+CAN CREATION OR DELETION BE PREVENTED AT ALL?
+==========================================================================
+script: scratchpad/ads_prevent.py   exit: 0
+
+A. DIRECTORY held GENERIC_READ|FILE_SHARE_READ + BACKUP_SEMANTICS
+   held: True
+   create dir:new-stream                     : SUCCEEDED
+   overwrite dir:dirstream                   : SUCCEEDED
+   list the directory                        : SUCCEEDED
+
+B. DIRECTORY held FILE_SHARE_NONE + BACKUP_SEMANTICS
+   held: True
+   create dir:another-stream                 : SUCCEEDED
+   list the directory                        : REFUSED PermissionError [13]
+   read a file inside                        : SUCCEEDED
+
+C. NAMED STREAM held GENERIC_READ|FILE_SHARE_READ
+   held: True
+   overwrite that stream                     : REFUSED PermissionError [13]
+   delete that stream                        : REFUSED PermissionError [13]
+   delete the whole file                     : REFUSED PermissionError [13]
+   create a sibling stream                   : SUCCEEDED
+
+D. FILE main stream held, then DELETE a named stream
+   held main: True
+   delete probe.txt:existing                 : SUCCEEDED
+
+--- source --------------------------------------------------------------
+
+"""Can stream CREATION or DELETION be prevented at all?"""
+import ctypes, tempfile, os
+from ctypes import wintypes
+from pathlib import Path
+
+k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+k32.CreateFileW.restype = wintypes.HANDLE
+k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                            ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                            wintypes.HANDLE]
+k32.CloseHandle.argtypes = [wintypes.HANDLE]
+INVALID = ctypes.c_void_p(-1).value
+GR, GW = 0x80000000, 0x40000000
+SHARE_READ, SHARE_NONE = 0x1, 0x0
+OPEN_EXISTING, BACKUP = 3, 0x02000000
+
+def hold(path, share, flags=0, access=GR):
+    h = k32.CreateFileW(path, access, share, None, OPEN_EXISTING, flags, None)
+    return None if h == INVALID else h
+
+def attempt(label, fn):
+    try:
+        fn(); print(f"   {label:42s}: SUCCEEDED")
+        return True
+    except OSError as e:
+        print(f"   {label:42s}: REFUSED {e.__class__.__name__} [{e.errno}]")
+        return False
+
+with tempfile.TemporaryDirectory(dir=r"C:\Users\nicol\AppData\Local\Temp") as tmp:
+    root = Path(tmp); d = root / "subdir"; d.mkdir()
+    (d / "keep.txt").write_text("x\n", encoding="utf-8")
+    f = root / "probe.txt"; f.write_text("BASE\n", encoding="utf-8")
+    open(f"{f}:existing", "w", encoding="utf-8").write("OLD")
+    open(f"{d}:dirstream", "w", encoding="utf-8").write("OLD DIR")
+
+    print("A. DIRECTORY held GENERIC_READ|FILE_SHARE_READ + BACKUP_SEMANTICS")
+    h = hold(str(d), SHARE_READ, BACKUP)
+    print(f"   held: {h is not None}")
+    attempt("create dir:new-stream", lambda: open(f"{d}:new-stream","w").write("N"))
+    attempt("overwrite dir:dirstream", lambda: open(f"{d}:dirstream","w").write("N"))
+    attempt("list the directory", lambda: list(d.iterdir()))
+    if h: k32.CloseHandle(h)
+
+    print()
+    print("B. DIRECTORY held FILE_SHARE_NONE + BACKUP_SEMANTICS")
+    h = hold(str(d), SHARE_NONE, BACKUP)
+    print(f"   held: {h is not None}")
+    attempt("create dir:another-stream", lambda: open(f"{d}:another-stream","w").write("N"))
+    attempt("list the directory", lambda: list(d.iterdir()))
+    attempt("read a file inside", lambda: (d/"keep.txt").read_text())
+    if h: k32.CloseHandle(h)
+
+    print()
+    print("C. NAMED STREAM held GENERIC_READ|FILE_SHARE_READ")
+    hs = hold(f"{f}:existing", SHARE_READ)
+    print(f"   held: {hs is not None}")
+    attempt("overwrite that stream", lambda: open(f"{f}:existing","w").write("N"))
+    attempt("delete that stream", lambda: os.remove(f"{f}:existing"))
+    attempt("delete the whole file", lambda: os.remove(str(f)))
+    attempt("create a sibling stream", lambda: open(f"{f}:sibling","w").write("N"))
+    if hs: k32.CloseHandle(hs)
+
+    print()
+    print("D. FILE main stream held, then DELETE a named stream")
+    hm = hold(str(f), SHARE_READ)
+    print(f"   held main: {hm is not None}")
+    attempt("delete probe.txt:existing", lambda: os.remove(f"{f}:existing"))
+    if hm: k32.CloseHandle(hm)
+
+==========================================================================
+WHAT COVERING STREAMS COSTS ON THE REAL TREE
+==========================================================================
+script: scratchpad/ads_cost.py   exit: 0
+
+F-14 ROUND 10 — PHASE 1c: cost of covering streams on the real tree
+==========================================================================
+covered files                : 91808  (21.80s to enumerate)
+directories holding an input : 18438
+FindFirstStreamW over files  : 10.0s  (9,207/s)
+  named streams on files     : 0
+  enumeration errors         : none
+FindFirstStreamW over dirs   : 1.7s
+  named streams on dirs      : 0
+  enumeration errors         : none
+
+
+TOTAL added to a capture     : 11.7s of enumeration, plus a lock+hash per named stream found
+
+==========================================================================
+DOES THE OBSERVER SEE A DIRECTORY STREAM WRITTEN MID-INTERVAL?
+  action=3 name='subdir'
+  -> the classifier forgives `modified` on a directory, so this is currently INVISIBLE
+
+--- source --------------------------------------------------------------
+
+"""PHASE 1c: what does covering streams COST on the real tree, and what
+does the observer say about a DIRECTORY stream written mid-interval?
+
+Decides feasibility before any code is written. Read-only over the repo.
+"""
+from __future__ import annotations
+
+import ctypes
+import sys
+import tempfile
+import threading
+import time
+from collections import Counter
+from ctypes import wintypes
+from pathlib import Path
+
+REPO = Path(r"C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi")
+sys.path.insert(0, str(REPO / "src"))
+
+from gnosis.kernel.evidence_capture import covered_paths  # noqa: E402
+
+k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+MAX_PATH = 260
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+ERROR_HANDLE_EOF = 38
+
+
+class FIND_STREAM_DATA(ctypes.Structure):
+    _fields_ = (("StreamSize", ctypes.c_longlong),
+                ("cStreamName", wintypes.WCHAR * (MAX_PATH + 36)))
+
+
+k32.FindFirstStreamW.restype = wintypes.HANDLE
+k32.FindFirstStreamW.argtypes = [wintypes.LPCWSTR, ctypes.c_int,
+                                 ctypes.c_void_p, wintypes.DWORD]
+k32.FindNextStreamW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+k32.FindNextStreamW.restype = wintypes.BOOL
+k32.FindClose.argtypes = [wintypes.HANDLE]
+
+
+def named_streams(path: Path) -> tuple[list[tuple[str, int]], int]:
+    """(named streams, error). `::$DATA` is the main stream and is skipped."""
+    data = FIND_STREAM_DATA()
+    handle = k32.FindFirstStreamW(str(path), 0, ctypes.byref(data), 0)
+    if handle == INVALID_HANDLE_VALUE:
+        err = ctypes.get_last_error()
+        return [], 0 if err == ERROR_HANDLE_EOF else err
+    found: list[tuple[str, int]] = []
+    try:
+        while True:
+            name = data.cStreamName
+            if name != "::$DATA":
+                found.append((name, data.StreamSize))
+            if not k32.FindNextStreamW(handle, ctypes.byref(data)):
+                err = ctypes.get_last_error()
+                return found, 0 if err == ERROR_HANDLE_EOF else err
+    finally:
+        k32.FindClose(handle)
+
+
+def main() -> int:
+    print("F-14 ROUND 10 — PHASE 1c: cost of covering streams on the real tree")
+    print("=" * 74)
+
+    start = time.perf_counter()
+    files = sorted(covered_paths(REPO))
+    print(f"covered files                : {len(files)}  "
+          f"({time.perf_counter() - start:.2f}s to enumerate)")
+
+    directories = {""}
+    for rel in files:
+        parts = rel.split("/")[:-1]
+        for i in range(len(parts)):
+            directories.add("/".join(parts[:i + 1]))
+    print(f"directories holding an input : {len(directories)}")
+
+    start = time.perf_counter()
+    errors: Counter[int] = Counter()
+    found: list[tuple[str, str, int]] = []
+    for rel in files:
+        streams, err = named_streams(REPO / rel)
+        if err:
+            errors[err] += 1
+        for name, size in streams:
+            found.append((rel, name, size))
+    file_cost = time.perf_counter() - start
+    print(f"FindFirstStreamW over files  : {file_cost:.1f}s  "
+          f"({len(files) / max(file_cost, 1e-9):,.0f}/s)")
+    print(f"  named streams on files     : {len(found)}")
+    print(f"  enumeration errors         : {dict(errors) or 'none'}")
+
+    start = time.perf_counter()
+    dir_errors: Counter[int] = Counter()
+    dir_found: list[tuple[str, str, int]] = []
+    for rel in sorted(directories):
+        streams, err = named_streams(REPO / rel if rel else REPO)
+        if err:
+            dir_errors[err] += 1
+        for name, size in streams:
+            dir_found.append((rel or ".", name, size))
+    dir_cost = time.perf_counter() - start
+    print(f"FindFirstStreamW over dirs   : {dir_cost:.1f}s")
+    print(f"  named streams on dirs      : {len(dir_found)}")
+    print(f"  enumeration errors         : {dict(dir_errors) or 'none'}")
+    print()
+    for rel, name, size in (found + dir_found)[:20]:
+        print(f"    {rel}{name}  ({size} bytes)")
+    if len(found) + len(dir_found) > 20:
+        print(f"    ... and {len(found) + len(dir_found) - 20} more")
+    print()
+    print(f"TOTAL added to a capture     : {file_cost + dir_cost:.1f}s "
+          f"of enumeration, plus a lock+hash per named stream found")
+    print()
+
+    print("=" * 74)
+    print("DOES THE OBSERVER SEE A DIRECTORY STREAM WRITTEN MID-INTERVAL?")
+    print(watch_directory_stream())
+    return 0
+
+
+class _Overlapped(ctypes.Structure):
+    _fields_ = (("Internal", ctypes.c_void_p), ("InternalHigh", ctypes.c_void_p),
+                ("Offset", wintypes.DWORD), ("OffsetHigh", wintypes.DWORD),
+                ("hEvent", wintypes.HANDLE))
+
+
+def watch_directory_stream() -> str:
+    k32.ReadDirectoryChangesW.argtypes = [
+        wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD, wintypes.BOOL,
+        wintypes.DWORD, wintypes.LPDWORD, ctypes.c_void_p, ctypes.c_void_p]
+    k32.CreateEventW.restype = wintypes.HANDLE
+    k32.CreateFileW.restype = wintypes.HANDLE
+    k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                                wintypes.HANDLE]
+    k32.GetOverlappedResult.argtypes = [wintypes.HANDLE, ctypes.c_void_p,
+                                        wintypes.LPDWORD, wintypes.BOOL]
+    notify = 0x001 | 0x002 | 0x004 | 0x008 | 0x010 | 0x040 | 0x100
+
+    with tempfile.TemporaryDirectory(dir=r"C:\Users\nicol\AppData\Local\Temp") as tmp:
+        root = Path(tmp)
+        subdir = root / "subdir"
+        subdir.mkdir()
+        (subdir / "keep.txt").write_text("x\n", encoding="utf-8")
+
+        handle = k32.CreateFileW(str(root), 0x0001, 0x07, None, 3,
+                                 0x02000000 | 0x40000000, None)
+        if handle == INVALID_HANDLE_VALUE:
+            return "could not watch"
+        buf = ctypes.create_string_buffer(64 * 1024)
+        ov = _Overlapped()
+        ov.hEvent = k32.CreateEventW(None, True, False, None)
+        returned = wintypes.DWORD(0)
+        if not k32.ReadDirectoryChangesW(handle, buf, len(buf), True, notify,
+                                         ctypes.byref(returned),
+                                         ctypes.byref(ov), None):
+            k32.CloseHandle(handle)
+            return "arm failed"
+
+        def writer() -> None:
+            time.sleep(0.15)
+            with open(f"{subdir}:dir-stream", "w", encoding="utf-8") as fh:
+                fh.write("CREATED DURING THE INTERVAL")
+
+        thread = threading.Thread(target=writer)
+        thread.start()
+        thread.join()
+        time.sleep(0.4)
+
+        events = []
+        if k32.WaitForSingleObject(ov.hEvent, 1500) == 0:
+            got = wintypes.DWORD(0)
+            if k32.GetOverlappedResult(handle, ctypes.byref(ov),
+                                       ctypes.byref(got), False):
+                offset = 0
+                while True:
+                    nxt = int.from_bytes(buf[offset:offset + 4], "little")
+                    action = int.from_bytes(buf[offset + 4:offset + 8], "little")
+                    length = int.from_bytes(buf[offset + 8:offset + 12], "little")
+                    name = bytes(buf[offset + 12:offset + 12 + length]).decode("utf-16-le")
+                    events.append(f"action={action} name={name!r}")
+                    if not nxt:
+                        break
+                    offset += nxt
+        k32.CloseHandle(handle)
+        detail = "; ".join(events) if events else "NOTHING DELIVERED"
+        return (f"  {detail}\n"
+                f"  -> the classifier forgives `modified` on a directory, so "
+                f"this is currently INVISIBLE")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+==========================================================================
+HOW MANY DIRECTORIES THE COVERED PATHS MISS
+==========================================================================
+script: scratchpad/dirgap.py   exit: 0
+
+covered files 91808, derived domain 110246 (21.5s)
+walked directories 18521 (5.5s)
+directories the derivation MISSES: 83
+    .gnosis/lab/code-intelligence/candidates/code-context-engine/.git/objects/info
+    .gnosis/lab/code-intelligence/candidates/codegraph-mcp/.git/objects/info
+    .gnosis/lab/code-intelligence/candidates/codegraph-mcp/.git/refs/tags
+    .gnosis/lab/code-intelligence/candidates/sverklo/.git/objects/info
+    .gnosis/lab/code-intelligence/datasets/fixture-repo/.git/objects/info
+    .gnosis/lab/code-intelligence/datasets/fixture-repo/.git/objects/pack
+    .gnosis/lab/code-intelligence/datasets/fixture-repo/.git/refs/tags
+    .gnosis/lab/code-intelligence/tools/node-v24.9.0-win-x64/node_modules/npm/tap-snapshots
+    .gnosis/lab/memory/candidates/m3-memory-fresh/.git/objects/info
+    .gnosis/lab/memory/candidates/m3-memory-fresh/.git/refs/tags
+    .gnosis/lab/memory/candidates/m3-memory-fresh/build/bdist.win-amd64
+    .gnosis/lab/memory/candidates/m3-memory/.git/objects/info
+    .gnosis/lab/memory/candidates/m3-memory/.git/refs/tags
+    .gnosis/lab/memory/candidates/zmem-fresh/.git/objects/info
+    .gnosis/lab/memory/candidates/zmem-fresh/.git/refs/tags
+    .gnosis/lab/memory/candidates/zmem-fresh/build/bdist.win-amd64
+    .gnosis/lab/memory/candidates/zmem/.git/objects/info
+    .gnosis/lab/memory/candidates/zmem/.git/refs/tags
+    .gnosis/tmp
+    external/repositories/TwinRouterBench/.git/objects/info
+    external/repositories/TwinRouterBench/.git/refs/tags
+    external/repositories/agent-arena/.git/objects/info
+    external/repositories/agent-arena/.git/refs/tags
+    external/repositories/agent-capsule/.git/objects/info
+    external/repositories/agent-capsule/.git/refs/tags
+    ... and 58 more
+
+--- source --------------------------------------------------------------
+
+import os, sys, time
+from pathlib import Path
+REPO = Path(r"C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi")
+sys.path.insert(0, str(REPO / "src"))
+from gnosis.kernel.input_lock import stream_domain
+from gnosis.kernel.evidence_capture import covered_paths
+
+t0 = time.perf_counter()
+files = sorted(covered_paths(REPO))
+derived = set(stream_domain(files))
+print(f"covered files {len(files)}, derived domain {len(derived)} ({time.perf_counter()-t0:.1f}s)")
+
+t0 = time.perf_counter()
+walked = {""}
+for base, dirnames, _ in os.walk(REPO):
+    rel = Path(base).relative_to(REPO).as_posix()
+    if rel == ".":
+        rel = ""
+    if rel == ".git" or rel.startswith(".git/"):
+        dirnames[:] = []
+        continue
+    walked.add(rel)
+print(f"walked directories {len(walked)} ({time.perf_counter()-t0:.1f}s)")
+
+only_walked = sorted(walked - derived)
+print(f"directories the derivation MISSES: {len(only_walked)}")
+for d in only_walked[:25]:
+    print("   ", d or "<root>")
+if len(only_walked) > 25:
+    print(f"    ... and {len(only_walked)-25} more")
+

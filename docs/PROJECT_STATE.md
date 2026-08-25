@@ -712,8 +712,15 @@ is what covers directories, because a stream write on one arrives as
 
 The disk is walked for the 83 directories that hold no input at all,
 excluding `.git/` and declared OUTPUT roots. `outputs_at_start` hashes
-pre-existing OUTPUT streams. Cost: ~56 s per capture. Named streams found
-in this repo today: zero.
+pre-existing OUTPUT streams. Cost: ~56 s per capture.
+
+Captured on `42f461b` as `.gnosis/evidence/20260825T043839Z/`: 90,261
+inputs, boundary CLEAN, `evidence_valid` true, exit 0, `identity_digest
+eb7af0e4…`, `content_digest 3568d3ef…`. Named streams found in this tree:
+**zero**, on inputs and on the 250 pre-existing OUTPUT files alike, which
+is review item 8's answer — the machinery reports none and flags nothing.
+The capability is shown by the before/after attack transcripts and the
+tests, not by the repository happening to contain a specimen.
 
 **F-14 is still NOT closed.** Repaired ten times now, tested (148
 tests) and mutation-checked (thirty-five mutants, none survived), it

@@ -224,8 +224,10 @@ when an ADR with captured evidence backs it.
   `FILE_SHARE_NONE` - giving `STREAMS_MUTATED` and exit 8; the disk is
   walked for the 83 directories holding no input; `outputs_at_start`
   hashes pre-existing OUTPUT streams. 148 tests; thirty-five mutants,
-  none survived. **Next action: hand this unit to a TENTH independent
-  review.** It is not closed until one returns without findings.
+  none survived; captured on `42f461b` as
+  `.gnosis/evidence/20260825T043839Z/` over 90,261 inputs, zero named
+  streams present in this tree, boundary CLEAN, exit 0. **Next action:
+  hand this unit to a TENTH independent review.** It is not closed until one returns without findings.
 
 - **Observed overlap with F-15..F-18, none of them marked repaired:**
   F-15's suggested correction is what this script now does, but the
