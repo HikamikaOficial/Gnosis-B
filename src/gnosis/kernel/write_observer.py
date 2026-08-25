@@ -129,16 +129,37 @@ if _IS_WINDOWS:
     _FILE_FLAG_OVERLAPPED = 0x40000000
     _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
+    # The three stream filters. The tenth review's ABA lives here: a named
+    # data stream created and deleted on a directory during the interval
+    # leaves both inventories identical, and a recursive watch WITHOUT
+    # these flags reports only `modified <dir>` — the one directory event
+    # that is deliberately forgiven, because an entry move produces it too.
+    # Measured: with these flags a directory stream create arrives as
+    # `added_stream <dir>:<name>` (action 6), which an entry move never
+    # produces, so the two are distinguishable without a heuristic.
+    _NOTIFY_STREAM = 0x200 | 0x400 | 0x800
+
     # Everything that can constitute a write. ATTRIBUTES is in the list
     # because clearing a read-only bit in order to write is itself a
-    # change worth seeing.
-    _NOTIFY_ALL = 0x001 | 0x002 | 0x004 | 0x008 | 0x010 | 0x040 | 0x100
+    # change worth seeing; the stream filters are in it because a stream
+    # is a place bytes a check reads can live.
+    _NOTIFY_ALL = (0x001 | 0x002 | 0x004 | 0x008 | 0x010 | 0x040 | 0x100
+                   | _NOTIFY_STREAM)
 
     _WAIT_OBJECT_0 = 0x00000000
     _INFINITE = 0xFFFFFFFF
 
+    # 6/7/8 are the stream actions. They were never mapped before because
+    # the stream filters were never requested; now they are, and a stream
+    # action is judged, never forgiven as a directory `modified`.
     _ACTIONS = {1: "added", 2: "removed", 3: "modified",
-                4: "renamed_from", 5: "renamed_to"}
+                4: "renamed_from", 5: "renamed_to",
+                6: "added_stream", 7: "removed_stream", 8: "modified_stream"}
+
+    # The barrier this module writes to flush the parent watcher's tail:
+    # a named stream on the root, recognised by this prefix and used only
+    # for ordering, never recorded as an event.
+    _STREAM_BARRIER_PREFIX = ".gnosis-stream-barrier-"
 
     class _Overlapped(ctypes.Structure):
         _fields_ = (
@@ -191,6 +212,220 @@ if _IS_WINDOWS:
             offset += next_entry
         return out
 
+    class _ParentStreamWatch:
+        """Catch a named-stream A->B->A on the WATCHED ROOT directory itself.
+
+        A recursive `ReadDirectoryChangesW` does not report the watched
+        directory's OWN streams — measured. The root is the one directory
+        in the tree that is nobody's child within the watch, so a stream
+        created and deleted on the root during the interval is invisible to
+        the main observer, and, being absent at both snapshots, to the
+        inventory. It is caught here by watching the root's PARENT,
+        non-recursively, for stream events naming the root's own entry.
+
+        If the root has no parent (a repository at a drive root) or the
+        parent cannot be opened for notification, root-stream coverage
+        cannot be established. This reports itself INCOMPLETE rather than
+        narrowing the guarantee in silence — the same rule the main
+        observer follows for overflow and an undelivered tail.
+        """
+
+        def __init__(self, root: Path, *, buffer_bytes: int = 1 << 20,
+                     barrier_timeout_s: float = 30.0) -> None:
+            self.root = root
+            self.parent = root.parent
+            self.entry = root.name
+            self._buffer_bytes = buffer_bytes
+            self._barrier_timeout_s = barrier_timeout_s
+            self._handle: int | None = None
+            self._io_event: int | None = None
+            self._stop_event: int | None = None
+            self._buffer: ctypes.Array[ctypes.c_char] | None = None
+            self._overlapped = _Overlapped()
+            self._thread: threading.Thread | None = None
+            self._events: list[WriteEvent] = []
+            self._condition = threading.Condition()
+            self._complete = True
+            self._reason: str | None = None
+            self._available = False
+            self._barrier_token: str | None = None
+            self._barrier_reached = False
+
+        def start(self) -> None:
+            if self.parent == self.root:
+                self._reason = (
+                    "the repository is a volume root and has no parent to watch, "
+                    "so a named stream on the root itself cannot be observed")
+                return
+            handle = _kernel32.CreateFileW(
+                str(self.parent), _FILE_LIST_DIRECTORY, _FILE_SHARE_ALL, None,
+                _OPEN_EXISTING, _FILE_FLAG_BACKUP_SEMANTICS | _FILE_FLAG_OVERLAPPED,
+                None)
+            if not handle or handle == _INVALID_HANDLE_VALUE:
+                self._reason = (
+                    f"could not open the repository's parent {self.parent} to watch "
+                    f"the root's own streams: error {ctypes.get_last_error()}")
+                return
+            self._handle = handle
+            self._io_event = _kernel32.CreateEventW(None, True, False, None)
+            self._stop_event = _kernel32.CreateEventW(None, True, False, None)
+            if not self._io_event or not self._stop_event:
+                self._reason = f"could not create wait events: {ctypes.get_last_error()}"
+                self._close()
+                return
+            self._buffer = ctypes.create_string_buffer(self._buffer_bytes)
+            self._overlapped.hEvent = self._io_event
+            if not self._issue_read():
+                self._reason = (f"ReadDirectoryChangesW refused to arm on the parent: "
+                                f"error {ctypes.get_last_error()}")
+                self._close()
+                return
+            self._available = True
+            self._thread = threading.Thread(target=self._drain,
+                                            name="root-stream-observer", daemon=True)
+            self._thread.start()
+
+        def stop(self) -> Observation:
+            if not self._available:
+                # Coverage was never established. That is INCOMPLETE, not
+                # "nothing happened": we cannot promise the root grew no
+                # transient stream.
+                return Observation(False, False, (), MECHANISM,
+                                   self._reason or "the root-stream watch never armed")
+            saw_barrier = self._await_barrier()
+            if self._stop_event is not None:
+                _kernel32.SetEvent(self._stop_event)
+            if self._handle is not None:
+                _kernel32.CancelIoEx(self._handle, ctypes.byref(self._overlapped))
+            if self._thread is not None:
+                self._thread.join(timeout=10.0)
+            self._close()
+            with self._condition:
+                events = tuple(self._events)
+                complete = self._complete
+                reason = self._reason
+            if not saw_barrier:
+                complete = False
+                reason = reason or (
+                    "the root-stream delivery barrier was not observed, so a "
+                    "transient stream on the root cannot be ruled out")
+            return Observation(True, complete, events, MECHANISM, reason)
+
+        def _issue_read(self) -> bool:
+            if self._handle is None or self._buffer is None or self._io_event is None:
+                return False
+            _kernel32.ResetEvent(self._io_event)
+            # Non-recursive: only the parent's direct entries, of which the
+            # root is one. Stream filters only: the root's own timestamp
+            # bumps from child activity are the main observer's job.
+            return bool(_kernel32.ReadDirectoryChangesW(
+                self._handle, ctypes.byref(self._buffer), self._buffer_bytes, False,
+                _NOTIFY_STREAM, None, ctypes.byref(self._overlapped), None))
+
+        def _drain(self) -> None:
+            if self._io_event is None or self._stop_event is None:
+                return
+            handles = (wintypes.HANDLE * 2)(
+                wintypes.HANDLE(self._io_event), wintypes.HANDLE(self._stop_event))
+            transferred = wintypes.DWORD()
+            while True:
+                which = _kernel32.WaitForMultipleObjects(
+                    2, ctypes.byref(handles), False, _INFINITE)
+                if which == _WAIT_OBJECT_0 + 1:
+                    return
+                if which != _WAIT_OBJECT_0:
+                    self._fail(f"waiting on the parent stream failed: {which}")
+                    return
+                if self._handle is None or self._buffer is None:
+                    return
+                ok = _kernel32.GetOverlappedResult(
+                    self._handle, ctypes.byref(self._overlapped),
+                    ctypes.byref(transferred), False)
+                if not ok:
+                    error = ctypes.get_last_error()
+                    if error != 995:  # ERROR_OPERATION_ABORTED: this is stop()
+                        self._fail(f"reading the parent stream failed: error {error}")
+                    return
+                if transferred.value == 0:
+                    self._fail("the parent change buffer overflowed; events were lost")
+                else:
+                    self._record(bytes(self._buffer.raw[:transferred.value]))
+                if not self._issue_read():
+                    self._fail("ReadDirectoryChangesW could not be re-armed on the "
+                               f"parent: error {ctypes.get_last_error()}")
+                    return
+
+        def _record(self, raw: bytes) -> None:
+            keep: list[WriteEvent] = []
+            with self._condition:
+                for action, name in _decode(raw, len(raw)):
+                    label = _ACTIONS.get(action, f"action-{action}")
+                    if "stream" not in label:
+                        continue  # a bare `modified root` from child churn
+                    owner, _, stream = name.partition(":")
+                    if owner != self.entry or not stream:
+                        continue  # a sibling of the root, or the root itself
+                    if stream.startswith(_STREAM_BARRIER_PREFIX):
+                        # Our own ordering barrier. Mark it reached; never
+                        # record it as a change.
+                        if stream == self._barrier_token:
+                            self._barrier_reached = True
+                        continue
+                    # Normalise to a root-relative stream path: `:name`.
+                    keep.append(WriteEvent(label, f":{stream}"))
+                self._events.extend(keep)
+                self._condition.notify_all()
+
+        def _fail(self, reason: str) -> None:
+            with self._condition:
+                self._complete = False
+                self._reason = self._reason or reason
+                self._condition.notify_all()
+
+        def _await_barrier(self) -> bool:
+            """Create a stream on the root, block until the parent delivers it.
+
+            Same ordering argument as the main barrier: a notification for
+            this stream cannot arrive before the notifications for stream
+            changes that happened earlier, so seeing it proves the tail was
+            delivered.
+            """
+            token = _STREAM_BARRIER_PREFIX + uuid.uuid4().hex
+            with self._condition:
+                self._barrier_token = token
+                self._barrier_reached = False
+            barrier = f"{self.root}:{token}"
+            try:
+                with open(barrier, "w", encoding="utf-8") as handle:
+                    handle.write(token)
+            except OSError as exc:
+                self._fail(f"the root-stream delivery barrier could not be written: {exc}")
+                return False
+            try:
+                deadline = time.monotonic() + self._barrier_timeout_s
+                with self._condition:
+                    while not self._barrier_reached:
+                        if not self._complete:
+                            return False
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            return False
+                        self._condition.wait(remaining)
+                return True
+            finally:
+                try:
+                    Path(barrier).unlink()
+                except OSError:
+                    pass
+
+        def _close(self) -> None:
+            for handle in (self._handle, self._io_event, self._stop_event):
+                if handle:
+                    _kernel32.CloseHandle(handle)
+            self._handle = None
+            self._io_event = None
+            self._stop_event = None
+
     class WindowsWriteObserver:
         """Every write under `root`, delivered as a stream, drained in order."""
 
@@ -210,6 +445,11 @@ if _IS_WINDOWS:
             self._complete = True
             self._reason: str | None = None
             self._available = False
+            # The root's own streams are invisible to this recursive watch,
+            # so a second watch on the parent covers exactly that one
+            # directory. The tenth review's ABA needs both.
+            self._root_stream = _ParentStreamWatch(
+                root, buffer_bytes=buffer_bytes, barrier_timeout_s=barrier_timeout_s)
 
         # -- lifecycle ---------------------------------------------------
 
@@ -239,9 +479,15 @@ if _IS_WINDOWS:
             self._thread = threading.Thread(target=self._drain, name="write-observer",
                                             daemon=True)
             self._thread.start()
+            # Started only once the main watch is armed, so its lifetime is
+            # a subset of the interval the main watch covers.
+            self._root_stream.start()
 
         def stop(self) -> Observation:
             if not self._available:
+                # Stop the parent watch too, so its handles never leak when
+                # the main watch failed to arm.
+                self._root_stream.stop()
                 return Observation(False, False, (), MECHANISM,
                                    self._reason or "the observer was never armed")
             saw_barrier = self._await_barrier()
@@ -254,7 +500,7 @@ if _IS_WINDOWS:
             self._close()
 
             with self._condition:
-                events = tuple(self._events)
+                events = list(self._events)
                 complete = self._complete
                 reason = self._reason
             if not saw_barrier:
@@ -263,7 +509,16 @@ if _IS_WINDOWS:
                     f"the delivery barrier was not observed within "
                     f"{self._barrier_timeout_s:g}s, so the tail of the change "
                     f"stream cannot be assumed delivered")
-            return Observation(True, complete, events, MECHANISM, reason)
+
+            # Merge the root's-own-stream watch. Its completeness is part of
+            # this observation's completeness: a root-stream ABA that could
+            # not be watched is a hole, not an absence of one.
+            root = self._root_stream.stop()
+            events.extend(root.events)
+            if not root.complete:
+                complete = False
+                reason = reason or root.reason
+            return Observation(True, complete, tuple(events), MECHANISM, reason)
 
         # -- internals ---------------------------------------------------
 

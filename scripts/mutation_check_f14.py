@@ -53,6 +53,10 @@ file is `::$DATA` plus any number of named streams, each openable as
 `path:name`, each readable by a check, and none of them visible to git
 or to a handle on the main stream.
 
+MF36..MF40 are the tenth review's: a named stream on a DIRECTORY can
+appear and vanish inside the interval, leaving both inventories equal,
+and only the observer's stream filters see the transient create.
+
     PYTHONUTF8=1 .venv/Scripts/python.exe scripts/mutation_check_f14.py
 
 Writes the transcript to stdout and, with `--out <path>`, to a file an
@@ -79,6 +83,7 @@ REPO = Path(__file__).resolve().parent.parent
 CAPTURE = "src/gnosis/kernel/evidence_capture.py"
 LOCK = "src/gnosis/kernel/input_lock.py"
 SCRIPT = "scripts/capture_evidence.py"
+OBSERVER = "src/gnosis/kernel/write_observer.py"
 
 # Narrower than `tests/` on purpose: these are the tests that assert the
 # binding, and a mutant that leaves them green has not been caught by
@@ -478,6 +483,47 @@ MUTANTS: list[Mutant] = [
         [(CAPTURE,
           """            directories = stream_directories(repo, allowed_writes)""",
           "            directories = ()")],
+    ),
+    # MF36..MF40 are the TENTH review's: a named stream that appears and
+    # disappears on a DIRECTORY inside the interval, which the endpoints and
+    # the inventory both miss and the observer catches only with the stream
+    # filters.
+    Mutant(
+        "MF36", "the observer stops requesting the stream filters, so a "
+                "directory-stream create is invisible again",
+        [(OBSERVER,
+          """    _NOTIFY_ALL = (0x001 | 0x002 | 0x004 | 0x008 | 0x010 | 0x040 | 0x100
+                   | _NOTIFY_STREAM)""",
+          "    _NOTIFY_ALL = (0x001 | 0x002 | 0x004 | 0x008 | 0x010 | 0x040 "
+          "| 0x100)")],
+    ),
+    Mutant(
+        "MF37", "the parent watch stops recording the root's own stream "
+                "events, so a stream on the repository root escapes",
+        [(OBSERVER,
+          """                    keep.append(WriteEvent(label, f":{stream}"))""",
+          "                    pass")],
+    ),
+    Mutant(
+        "MF38", "the classifier forgives every stream action, so an "
+                "added_stream is no longer a violation",
+        [(CAPTURE,
+          'event.action not in ("added_stream", "removed_stream")',
+          "True")],
+    ),
+    Mutant(
+        "MF39", "the classifier judges modified_stream too, so reading a "
+                "locked stream to hash it is falsely a violation",
+        [(CAPTURE,
+          '("added_stream", "removed_stream")',
+          '("added_stream", "removed_stream", "modified_stream")')],
+    ),
+    Mutant(
+        "MF40", "the observer ignores the root watch's incompleteness, so a "
+                "root whose streams could not be watched reads as clean",
+        [(OBSERVER,
+          "            if not root.complete:",
+          "            if False:")],
     ),
 ]
 

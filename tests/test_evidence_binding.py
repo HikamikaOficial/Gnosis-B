@@ -76,6 +76,7 @@ from gnosis.kernel.input_lock import (
     stream_inventory,
 )
 from gnosis.kernel.write_observer import (
+    MECHANISM,
     Observation,
     UnavailableObserver,
     WriteEvent,
@@ -2960,6 +2961,187 @@ class TestNamedDataStreamsAreNotASecondChannel(unittest.TestCase):
             self.assertFalse(outcome.enforced)
             self.assertTrue(any("could not be enumerated" in item
                                 for item in outcome.refused), outcome.refused)
+
+
+class TestDirectoryStreamAbaIsObserved(unittest.TestCase):
+    """Tenth review: a named stream that appears and vanishes on a DIRECTORY.
+
+        inventory has no dir:stream            (A)
+        a check creates dir:stream, reads it   (B)
+        the check deletes dir:stream           (A)
+        inventory still has no dir:stream
+
+    The endpoints are identical, so the inventory is blind, and the lock
+    cannot pre-open a stream that does not exist. Measured: a recursive
+    `ReadDirectoryChangesW` with the stream filters delivers `added_stream`
+    for the create -- an event a benign entry move never produces -- so the
+    observer catches the transient exactly as it catches a file's ABA.
+    A directory's OWN streams are invisible to its own recursive watch, so
+    the repository root is watched through its parent.
+    """
+
+    @staticmethod
+    def _repo(root: Path) -> Path:
+        repo = _make_repo(root)
+        (repo / "pkg").mkdir()
+        (repo / "pkg" / "mod.txt").write_text("y\n", encoding="utf-8")
+        _git(repo, "add", "pkg/mod.txt")
+        _git(repo, "commit", "-m", "pkg")
+        return repo
+
+    # -- the reviewer's minimal case, on a child directory -------------------
+    @WINDOWS_ONLY
+    def test_a_child_directory_stream_aba_is_caught(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            capture = run_capture(repo, [_script(
+                "import os",
+                "open('pkg:secret', 'w', encoding='utf-8').write('ALLOW')",
+                "verdict = open('pkg:secret', encoding='utf-8').read().strip()",
+                "os.remove('pkg:secret')",
+                "print(verdict)",
+            )], root / "staging")
+
+            self.assertEqual(capture.checks[0].tail, "ALLOW")
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.STREAMS_MUTATED)
+            self.assertFalse(capture.evidence_valid)
+            self.assertEqual(capture.exit_code, EXIT_STREAMS_MUTATED)
+            self.assertTrue(any("added_stream: pkg:secret" in v
+                                for v in capture.boundary.violations),
+                            capture.boundary.violations)
+
+    # -- the same, on the repository ROOT itself ----------------------------
+    @WINDOWS_ONLY
+    def test_the_repository_roots_own_stream_aba_is_caught(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            capture = run_capture(repo, [_script(
+                "import os",
+                "root = os.getcwd()",
+                "open(root + ':secret', 'w', encoding='utf-8').write('ALLOW')",
+                "verdict = open(root + ':secret', encoding='utf-8').read().strip()",
+                "os.remove(root + ':secret')",
+                "print(verdict)",
+            )], root / "staging")
+
+            self.assertEqual(capture.checks[0].tail, "ALLOW")
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.STREAMS_MUTATED)
+            self.assertFalse(capture.evidence_valid)
+            self.assertEqual(capture.exit_code, EXIT_STREAMS_MUTATED)
+            # Normalised to a root-relative stream path.
+            self.assertTrue(any(v.endswith(":secret") for v in capture.boundary.violations),
+                            capture.boundary.violations)
+
+    # -- no false positive: a stream that is present the whole time ----------
+    @WINDOWS_ONLY
+    def test_a_pre_existing_directory_stream_and_a_noop_check_stays_clean(self):
+        # The stream exists at lock time, so it is locked and hashed. The
+        # capture reads it to hash it, which emits `modified_stream`; that
+        # is not a change and must not be a violation.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            with open(f"{repo / 'pkg'}:kept", "w", encoding="utf-8") as fh:
+                fh.write("PRESENT ALL ALONG")
+
+            capture = run_capture(repo, [_script("pass")], root / "staging")
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
+            self.assertTrue(capture.evidence_valid)
+            manifest = json.loads(
+                (capture.bundle / "input-manifest.json").read_text(encoding="utf-8"))
+            self.assertIn("pkg:kept", manifest["inputs"])
+
+    @WINDOWS_ONLY
+    def test_reading_a_locked_file_stream_is_not_a_violation(self):
+        # The round-9 regression: a file with a pre-existing stream and a
+        # no-op check must stay valid even though hashing the stream emits
+        # modified_stream.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root)
+            with open(f"{repo / 'a.txt'}:side", "w", encoding="utf-8") as fh:
+                fh.write("ALLOW")
+
+            capture = run_capture(repo, [_script("pass")], root / "staging")
+
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
+            self.assertTrue(capture.evidence_valid)
+
+    # -- the classifier, where the stream/entry-move distinction lives -------
+    def _observe(self, repo: Path, events, allowed=()):
+        return classify_observation(
+            repo, Observation(True, True, tuple(events), MECHANISM),
+            frozenset({"a.txt"}), allowed,
+            LockOutcome(True, 1, (), "test", identities={"a.txt": "id"},
+                        content_digests={"a.txt": "sha"}))
+
+    def test_added_stream_on_a_directory_is_a_violation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_repo(Path(tmp))
+            (repo / "pkg").mkdir()
+            boundary = self._observe(repo, [WriteEvent("added_stream", "pkg:x")])
+            self.assertIs(boundary.verdict, ObservationVerdict.STREAMS_MUTATED)
+
+    def test_modified_stream_alone_is_not_a_violation(self):
+        # The read signal. Our own hashing produces it; a write to a
+        # locked stream cannot.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_repo(Path(tmp))
+            (repo / "pkg").mkdir()
+            boundary = self._observe(repo, [WriteEvent("modified_stream", "pkg:x")])
+            self.assertIs(boundary.verdict, ObservationVerdict.CLEAN)
+
+    def test_a_bare_directory_modified_is_still_forgiven(self):
+        # The distinction the whole fix rests on: a directory's own
+        # timestamp bump is forgiven, a stream action on it is not.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_repo(Path(tmp))
+            (repo / "pkg").mkdir()
+            boundary = self._observe(repo, [WriteEvent("modified", "pkg")])
+            self.assertIs(boundary.verdict, ObservationVerdict.CLEAN)
+
+    def test_a_stream_under_an_output_root_may_churn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_repo(Path(tmp))
+            (repo / "build-cache").mkdir()
+            boundary = self._observe(
+                repo, [WriteEvent("added_stream", "build-cache/art:x")],
+                allowed=("build-cache/",))
+            self.assertIs(boundary.verdict, ObservationVerdict.CLEAN)
+
+    # -- fail closed when the root's own streams cannot be watched -----------
+    @WINDOWS_ONLY
+    def test_a_repo_at_a_volume_root_cannot_promise_root_stream_coverage(self):
+        from gnosis.kernel.write_observer import _ParentStreamWatch
+        watch = _ParentStreamWatch(Path("C:\\"))
+        watch.start()
+        observation = watch.stop()
+        self.assertFalse(observation.complete)
+        self.assertIn("no parent", (observation.reason or ""))
+
+    @WINDOWS_ONLY
+    def test_an_incomplete_root_watch_makes_the_observation_incomplete(self):
+        # The merge: if the parent watch cannot promise the root grew no
+        # transient stream, the whole observation is INCOMPLETE, not CLEAN.
+        class _Blind:
+            def start(self):
+                return None
+
+            def stop(self):
+                return Observation(False, False, (), MECHANISM,
+                                   "root-stream coverage was not established")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp))
+            observer = create_write_observer(repo)
+            observer._root_stream = _Blind()
+            capture = run_capture(repo, [_script("pass")], Path(tmp) / "staging",
+                                  observer=lambda _: observer)
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.UNOBSERVED)
+            self.assertFalse(capture.evidence_valid)
 
 
 if __name__ == "__main__":

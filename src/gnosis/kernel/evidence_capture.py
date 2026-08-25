@@ -637,12 +637,37 @@ def classify_observation(
             protection=protection, locked_identity=prepared)
 
     violations: list[str] = []
+    stream_violations: list[str] = []
     allowed_count = 0
     machinery = 0
     unknown: dict[str, str] = {}
     for event in observation.events:
         path = event.path
-        if path in covered:
+        if ":" in path:
+            # A named data stream, delivered by the observer's stream
+            # filters as `owner:name` (or `:name` on the root itself). A
+            # repository-relative path never otherwise contains a colon, so
+            # this is the stream, not a heuristic.
+            #
+            # Only CREATION and DELETION are violations. `modified_stream`
+            # is excluded on purpose and by measurement: reading a stream
+            # emits it, and the capture reads every locked stream to hash
+            # it, so treating it as a change would flag every capture that
+            # has any stream. A genuine WRITE to a stream present at lock
+            # time cannot happen anyway — the stream is held unwritable —
+            # so a `modified_stream` is always a read. The tenth review's
+            # ABA is a stream that APPEARS and disappears inside the
+            # interval, and `added_stream` fires on the create and never on
+            # a read. Streams under a declared OUTPUT root may churn.
+            owner = path.split(":", 1)[0]
+            if (event.action not in ("added_stream", "removed_stream")
+                    or (owner and _is_allowed_path(owner, allowed))):
+                # Benign: a read of a locked stream (modified_stream), or a
+                # stream under a declared OUTPUT root that may churn.
+                allowed_count += 1
+            else:
+                stream_violations.append(f"{event.action}: {path}")
+        elif path in covered:
             violations.append(f"{event.action}: {path}")
         elif path == _GIT_DIR.rstrip("/") or path.startswith(_GIT_DIR):
             # Git rewrites its index while merely reading the tree, so
@@ -669,6 +694,21 @@ def classify_observation(
         # a violation: being ignored by git was never evidence that a
         # check cannot read it.
         violations.append(f"{action}: {path}")
+
+    if stream_violations:
+        # The tenth review's ABA, caught by observation rather than by the
+        # endpoints: a named stream created and deleted inside the interval
+        # leaves the inventory unchanged, so this is the only detector that
+        # sees it. Same verdict as an inventory-drift stream change, because
+        # it is the same failure — which streams a covered path has moved.
+        return Boundary(
+            ObservationVerdict.STREAMS_MUTATED, observation.mechanism,
+            len(observation.events), allowed_count,
+            tuple(dict.fromkeys(stream_violations)), len(covered), tuple(allowed),
+            "a named data stream on a covered path changed during the capture, "
+            "observed in the interval and not merely at its endpoints",
+            machinery_events=machinery, protection=protection,
+            locked_identity=prepared)
 
     verdict = (ObservationVerdict.INPUTS_MUTATED if violations
                else ObservationVerdict.CLEAN)

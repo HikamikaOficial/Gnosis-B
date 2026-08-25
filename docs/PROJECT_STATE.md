@@ -3,7 +3,7 @@
 **Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION; THE PROBE HAS A CALLER; MULTI-CREDENTIAL ROTATION
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
-**Last update:** 2026-08-25 (F-34 closed; F-14 repaired ten times and still open; the stale lines below are F-19..F-32, still open)
+**Last update:** 2026-08-25 (F-34 closed; F-14 repaired eleven times and still open; the stale lines below are F-19..F-32, still open)
 
 ## Kernel hardening (post-Phase -1)
 
@@ -722,10 +722,39 @@ is review item 8's answer — the machinery reports none and flags nothing.
 The capability is shown by the before/after attack transcripts and the
 tests, not by the repository happening to contain a specimen.
 
-**F-14 is still NOT closed.** Repaired ten times now, tested (148
-tests) and mutation-checked (thirty-five mutants, none survived), it
-awaits a TENTH independent review. Nine reviews have each found
-something this unit's own tests and mutants did not.
+**Tenth independent review (2026-08-25): F-14.10, the directory
+named-stream A->B->A.** A named data stream created and deleted on a
+DIRECTORY during the interval leaves both inventories identical, the lock
+cannot pre-open a stream that does not exist, and the observer forgave the
+one event a directory produces (`modified <dir>`, because an entry move
+produces it too). Reproduced before any change, through `run_capture`
+against an export of `8dd621c`: `pkg:secret` -- and a stream on the
+repository root itself -- created, read (`ALLOW`) and deleted, boundary
+CLEAN, evidence_valid true, exit 0.
+
+Repaired by observing the transient, with no elevation. The recursive
+write observer now requests the stream notify filters and maps actions
+6/7/8, so an `added_stream`/`removed_stream` on any covered path is
+STREAMS_MUTATED (exit 8). Measured before it was built: the stream flags
+make a directory stream create arrive as `added_stream`, which an entry
+move never produces; reading a stream emits `modified_stream`, so that
+action is not a violation (the capture reads every locked stream to hash
+it, and a write to a locked stream is refused). The repository root's own
+streams are invisible to its own recursive watch, so a second
+non-recursive watch on the parent covers exactly that directory, with its
+own barrier; if the parent is unwatchable the observation is INCOMPLETE
+(fail closed), never CLEAN. The USN change journal records the ABA but
+needs an admin volume handle, so it corroborates and is not a dependency.
+
+`fully_identified` and `fully_bound` are now documented, in the code and
+in the bundle (`scope_note`), as properties of the lock-time SNAPSHOT and
+never of the interval: the interval guarantee is a CLEAN verdict over a
+COMPLETE observation, which now sees stream transitions on directories.
+
+**F-14 is still NOT closed.** Repaired eleven times now, tested (156
+tests) and mutation-checked (forty mutants, none survived), it awaits an
+ELEVENTH independent review. Ten reviews have each found something this
+unit's own tests and mutants did not.
 
 **Overlap recorded, not claimed:** F-15 (the unused primitive) is what
 this script now uses; F-16 (capture order) no longer affects the binding

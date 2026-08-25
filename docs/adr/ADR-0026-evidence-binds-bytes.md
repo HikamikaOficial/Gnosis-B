@@ -2127,3 +2127,181 @@ Five artifacts beyond the gate transcripts:
   disk walk over 91,791 files and 18,520 directories.
 - **`outputs_at_start` is still bytes at the start**, streams included.
 - **F-15..F-18 remain open and untouched.**
+
+## Tenth independent review addendum — 2026-08-25: **F-14.10, directory named-stream A→B→A**
+
+The ninth review's residual named the hole and the tenth review made it the
+unit: a named data stream created and deleted on a DIRECTORY inside the
+interval leaves both inventories identical, the lock cannot pre-open a
+stream that does not exist, and the write observer forgave the only event a
+directory produced — `modified <dir>` — because an entry move produces it
+too. Reproduced before a line changed, driven through `run_capture`
+against `git archive 8dd621c`:
+
+    pkg has no stream :secret            (A, inventory)
+    a check creates pkg:secret = ALLOW, reads it, deletes it   (B, then A)
+    pkg has no stream :secret            (A, inventory == start)
+
+    boundary: CLEAN      evidence_valid: true      exit: 0
+
+and identically for a stream on the repository ROOT itself. The check
+consumed bytes no digest names, inside a bundle that called itself
+evidence.
+
+### Root cause
+
+The eighth and ninth rounds closed the stream question at the ENDPOINTS —
+the inventory at lock time, hashed and locked. An A→B→A lives between the
+endpoints, and the only authority over the interval is the write observer.
+The observer was never asked about streams: its `ReadDirectoryChangesW`
+filter did not include the three stream flags, so a stream change on a
+directory arrived as a bare `modified <dir>`, which is the one directory
+event the sixth review taught the classifier to forgive.
+
+### What was measured before choosing an architecture
+
+Nothing here is reasoned from documentation; each line is a script in the
+evidence bundle.
+
+| question | answer | script |
+|---|---|---|
+| does a recursive watch with the stream filters distinguish a dir-stream create from an entry move? | **yes** — the create arrives as `added_stream <dir>:<name>` (action 6); an entry move produces no stream action at all | `ads-mechanisms.txt` |
+| is the create delivered reliably? | **yes** — `added_stream` on every one of five trials | `ads-mechanisms.txt` |
+| does reading a stream look like writing one? | **yes** — reading emits `modified_stream`, so that action cannot be a violation; the capture reads every locked stream to hash it | `ads-mechanisms.txt` |
+| does a recursive watch report the WATCHED directory's own streams? | **no** — the root is nobody's child within its own watch, so its own stream is invisible | `ads-mechanisms.txt` |
+| can the root's own stream be caught another way without elevation? | **yes** — a non-recursive watch on the root's PARENT reports `<rootname>:<stream>`, filterable by entry name | `ads-mechanisms.txt` |
+| does the USN change journal record the ABA? | **yes** — a `STREAM_CHANGE` record survives the revert, append-only | `ads-mechanisms.txt` |
+| can the USN journal be read here? | **only because this shell is elevated**; opening `\\.\C:` needs admin, so the journal cannot be a dependency of an unelevated capture | `ads-mechanisms.txt` |
+
+### The architecture: observe the transient, with two watches, no elevation
+
+Option A of the ninth review's contract — bind, do not merely document —
+carried forward to the interval. The transient create is OBSERVED, exactly
+as the first review's file ABA is observed:
+
+- The main recursive `ReadDirectoryChangesW` now requests the stream
+  filters (`0x200|0x400|0x800`) and maps actions 6/7/8. A stream create or
+  delete anywhere in the tree BELOW the root is delivered as
+  `added_stream`/`removed_stream` and judged.
+- The repository root's OWN streams are invisible to that watch, so a
+  second, non-recursive watch on the root's PARENT covers exactly that one
+  directory, filtered to the root's entry and normalised to a
+  root-relative stream path `:name`. It has its own delivery barrier — a
+  stream written on the root and awaited — on the same ordering argument as
+  the main barrier.
+- The classifier judges `added_stream` and `removed_stream` as
+  `STREAMS_MUTATED` (exit 8), the same verdict an inventory-drift stream
+  change already produced, because it is the same failure. It does NOT
+  judge `modified_stream`: reading a stream emits it and the capture reads
+  every locked stream to hash it, while a WRITE to a stream present at lock
+  time is refused by the lock — so a `modified_stream` is always a read.
+- Streams under a declared OUTPUT root may churn, like the rest of that
+  output's bytes.
+
+Determinism, not timing: the create event is queued by the kernel and
+drained behind a barrier, and a buffer overflow is `UNOBSERVED` (fail
+closed) exactly as before. If the root has no parent (a repository at a
+volume root) or the parent cannot be watched, root-stream coverage is not
+established and the observation is reported INCOMPLETE — never narrowed in
+silence.
+
+The USN journal is documented and measured as an independent
+corroboration, and deliberately NOT wired in: it needs an elevated volume
+handle, and a guarantee that evaporates without admin is not a guarantee
+the boundary can claim.
+
+### The semantics the review asked to be made exact
+
+**`fully_identified`** = every object in the SNAPSHOT the lock took when
+the boundary went up is named by `FILE_ID_INFO` and final-path-verified.
+It reads "every object the lock held is named", and it must not be read as
+"every object that ever existed during the interval was named."
+
+**`fully_bound`** = every object in that same snapshot — main streams and
+named streams present at lock time — was hashed through the handle that
+held it.
+
+Both are properties of an INSTANT. The interval is a different guarantee
+with a different owner: a `CLEAN` boundary verdict over a `COMPLETE`
+observation is the only thing that says *nothing transient escaped*, and
+after this unit that observation includes named-stream transitions on
+files and on directories. The distinction is now written into the
+protection block itself (`scope_note`) so a reader of the bundle cannot
+mistake the snapshot booleans for an interval claim.
+
+### The taxonomy the review asked for
+
+Every path or stream that could influence a check falls into exactly one
+of these, and the boundary states which:
+
+1. **Present in the snapshot** — enumerated at lock time. Locked,
+   identified, hashed. `fully_identified`/`fully_bound` speak to this set.
+2. **Observed in the interval** — a create/delete/write the write observer
+   delivered. Judged by the classifier; a covered-path change is a
+   violation. Named-stream creates on directories entered this class in
+   this unit.
+3. **Transient but observed** — appeared and vanished inside the interval,
+   leaving the endpoints equal. Caught only by class 2. The directory
+   stream ABA was here and unobserved before this unit; it is here and
+   observed now, for every directory that is a child in the watch and, via
+   the parent watch, for the root.
+4. **Byte-bound** — its exact bytes are in `input-manifest.json` and
+   re-derivable from the files. A subset of class 1.
+5. **Unknowable with the current primitives** — see below. The honest
+   floor, stated rather than hidden.
+
+### Guarantees that can now be asserted
+
+- A named data stream created on any covered directory or file during the
+  interval is observed and fails the capture, even if it is deleted before
+  the end and both inventories match — for every directory that is a child
+  in the watched tree, and for the repository root via the parent watch.
+- Reading a stream to hash it does not raise a false positive.
+- A stream present at lock time is byte-bound and cannot be written or
+  deleted during the interval (locked); a stream under an OUTPUT root may
+  change and is bytes-at-start only.
+
+### Guarantees that still CANNOT be asserted
+
+- **A stream created AND removed on a DIRECTORY when the observation is
+  incomplete.** If the change buffer overflows, the verdict is
+  `UNOBSERVED` — fail closed, not a false `CLEAN`, but also not a catch.
+- **The root's own transient streams when the parent is unwatchable** (a
+  repository at a volume root). Reported INCOMPLETE, not covered.
+- **Any A→B→A on a class the observer cannot see at all** — a
+  memory-mapped write is still reported only on flush (first review's
+  stated limit), and the USN-journal-only facts (e.g. object-id churn) are
+  not consumed because the journal needs elevation.
+- **`fully_identified`/`fully_bound` do not and will not mean
+  interval-complete.** They are snapshot booleans by construction.
+
+### Tests
+
+Ten added, 148 → 156 in the targeted suite: the child-directory ABA and
+the root ABA through `run_capture` (both `STREAMS_MUTATED`, exit 8); a
+pre-existing directory stream and a pre-existing file stream with a no-op
+check staying `CLEAN` (the read is not a write); the classifier
+distinctions (`added_stream` on a directory is a violation, `modified_stream`
+alone is not, a bare `modified <dir>` is still forgiven, a stream under an
+OUTPUT root may churn); a repo at a volume root reporting incomplete
+root-stream coverage; and an incomplete root watch making the whole
+observation `UNOBSERVED`.
+
+### Mutation check
+
+Five added, 35 → 40, none survived:
+
+| Mutant | Removes |
+|---|---|
+| MF36 | the observer's stream filters, so a directory-stream create is invisible |
+| MF37 | the parent watch's recording, so the root's own stream escapes |
+| MF38 | the classifier's judgement of stream actions |
+| MF39 | the tolerance of `modified_stream`, so hashing a locked stream falsely fails |
+| MF40 | the merge of the root watch's incompleteness, so an unwatchable root reads clean |
+
+### What is still not closed
+
+- **F-14 remains OPEN.** Ten reviews, ten findings.
+- The residuals above (incomplete-observation ABA, volume-root repo,
+  memory-mapped writes, elevation-gated USN facts).
+- **F-15..F-18 remain open and untouched.**

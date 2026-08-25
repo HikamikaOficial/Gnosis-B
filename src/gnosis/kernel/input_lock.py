@@ -208,6 +208,16 @@ class LockOutcome:
         The eighth review's invariant. `fully_identified` can be true
         while this is false, which is exactly the state it was in:
         covered, locked, identified by object, and byte-unknown.
+
+        Scope, stated because the tenth review asked for it precisely: this
+        is a property of the SNAPSHOT the lock took when the boundary went
+        up — every object, and every named stream, PRESENT at that instant.
+        It does not, and with these primitives cannot, assert that every
+        object which existed at any moment during the interval was hashed.
+        A thing that appeared and vanished inside the interval was never in
+        this snapshot; catching it is the boundary verdict's job, not this
+        boolean's, and only a CLEAN verdict over a COMPLETE observation
+        licenses "nothing transient escaped".
         """
         return self.locked == len(self.content_digests)
 
@@ -221,6 +231,9 @@ class LockOutcome:
         enforced. Consumers check this as well as the producer, because
         the two-readers lesson of ADR-0025 applies to a lock as much as to
         a verdict.
+
+        Scope: the same snapshot as `fully_bound`. "Every object the lock
+        held is named", never "every object that ever existed was named".
         """
         return self.locked == len(self.identities)
 
@@ -249,6 +262,17 @@ class LockOutcome:
                 "every protected handle is recorded by FILE_ID_INFO (volume serial "
                 "plus 128-bit file id) and verified to still resolve to the path it "
                 "was opened by; the full map is input-identities.json in this bundle"
+            ),
+            "scope_note": (
+                "fully_identified and fully_bound are properties of the SNAPSHOT "
+                "taken when the boundary went up: every object and named stream "
+                "PRESENT at that instant is named and hashed. They do not assert "
+                "that everything which existed at any moment during the interval "
+                "was — a thing that appeared and vanished was never in the "
+                "snapshot. That transient class is the boundary verdict's charge: "
+                "only CLEAN over a COMPLETE observation says nothing transient "
+                "escaped, and the write observer, not this lock, is what watches "
+                "the interval"
             ),
         }
 

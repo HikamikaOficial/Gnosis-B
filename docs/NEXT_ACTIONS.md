@@ -226,8 +226,30 @@ when an ADR with captured evidence backs it.
   hashes pre-existing OUTPUT streams. 148 tests; thirty-five mutants,
   none survived; captured on `42f461b` as
   `.gnosis/evidence/20260825T043839Z/` over 90,261 inputs, zero named
-  streams present in this tree, boundary CLEAN, exit 0. **Next action:
-  hand this unit to a TENTH independent review.** It is not closed until one returns without findings.
+  streams present in this tree, boundary CLEAN, exit 0.
+
+- **Tenth independent review (2026-08-25): F-14.10, the directory
+  named-stream A->B->A.** A named stream created and deleted on a
+  DIRECTORY inside the interval leaves both inventories identical; the
+  lock cannot pre-open a stream that does not exist; and the observer
+  forgave the only event a directory produced, `modified <dir>` (an entry
+  move produces it too). Reproduced first, through `run_capture` against
+  `git archive 8dd621c`: `pkg:secret` and a stream on the repo root
+  itself, created->read->deleted, boundary CLEAN, evidence_valid true,
+  exit 0. Repaired by observing the transient with no elevation: the
+  recursive observer now requests the stream notify filters and maps
+  actions 6/7/8, so `added_stream`/`removed_stream` on any covered path is
+  STREAMS_MUTATED (exit 8); reading a stream emits `modified_stream`,
+  which is NOT a violation (measured: the capture reads every locked
+  stream to hash it, and a write to a locked stream is refused); the
+  root's own streams are invisible to its recursive watch, so a second
+  non-recursive watch on the parent covers them, failing closed if the
+  parent is unwatchable. The USN journal corroborates but needs admin, so
+  it is not a dependency. `fully_identified`/`fully_bound` are documented
+  as snapshot properties, not interval claims (`scope_note`). 156 tests;
+  forty mutants, none survived. **Next action: hand this unit to an
+  ELEVENTH independent review.** It is not closed until one returns
+  without findings.
 
 - **Observed overlap with F-15..F-18, none of them marked repaired:**
   F-15's suggested correction is what this script now does, but the
