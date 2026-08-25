@@ -161,3 +161,39 @@ boundary; it does not relax it.
 - A previously-CLEAN capture that writes a hook or config now fails closed.
   No legitimate check does this; a normal capture is unaffected (measured).
 - `MACHINERY_MUTATED` (exit 9) joins the exit vocabulary.
+
+## Evidence
+
+`.gnosis/evidence/20260825T214726Z/`, bound to `fe029f9`.
+
+| | |
+|---|---|
+| binding | BOUND — pre = post; `head_sha fe029f9…` |
+| boundary | CLEAN, 0 violations; 40 `.git` machinery events, **0 judged** |
+| covered inputs | 90,314 — `locked` = `identified` = `byte_bound` |
+| bundle manifest | `MANIFEST.sha256.json`, 16 files; `verify_bundle` → **verified**; `bundle_digest c3ee6f3b86f8714879bf95a9e77d12c566f6bbdb9f5db59a498f71f243ffdc0f` |
+| `identity_digest` | `0314693156fcd58be23652a8c4b811b83e0d112d26bf5faf63d64943b5bd2198` |
+| `content_digest` | `7c6ae76972b75fee747027bfbdb0872c503af0b1b1682293a35a8d8f284862e1` |
+| pytest | 1051 passed, 70 subtests, 1118 s |
+| mypy | clean, 58 source files |
+| ruff | 19, the recorded baseline |
+| `evidence_valid` / exit | true / 0 |
+
+A normal capture produced 40 `.git` machinery events and judged none — the
+`.git` policy does not false-positive on real git bookkeeping. The bundle
+manifest was regenerated once after the adversarial transcripts below were
+placed in the bundle, so it covers the complete published bundle, not only
+what `run_capture` wrote; `verify_bundle` re-derives the whole set.
+
+Three artifacts beyond the gate transcripts:
+
+- `git-machinery-audit.txt` — OS-real: a normal capture leaves the
+  machinery fingerprint stable and is CLEAN; a hook install is caught; a
+  hook create+delete (ABA) is caught in the interval while a before/after
+  machinery fingerprint is blind to it; config rewrite is caught.
+- `mutation-check.f14-round15.txt` — 47 mutants, none survived, over
+  `fe029f9`, including MF43–MF47 (the manifest, `verify_bundle`, the
+  hook/config judgement, the `.sample` exclusion, the `MACHINERY_MUTATED`
+  verdict).
+- `probe-f14-boundary.txt` — the earlier reviews' attempts re-run; only B0
+  breaks, and B0 exists to show why prevention is needed.
