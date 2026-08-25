@@ -46,6 +46,7 @@ import hashlib
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -93,7 +94,8 @@ class HollowLock:
     The reviewed design, expressed as a lock: observation only.
     """
 
-    def acquire(self, paths: list[str]) -> LockOutcome:
+    def acquire(self, paths: list[str],
+                directories: Sequence[str] = ()) -> LockOutcome:
         return LockOutcome(True, 0, (), "none (observation only)",
                            volume=VolumeCapabilities(True, "fixed", "NTFS"))
 
@@ -305,8 +307,9 @@ class _LockOverPaths:
         self._inner = WindowsInputLock(root)
         self._paths = paths
 
-    def acquire(self, paths: list[str]) -> LockOutcome:
-        return self._inner.acquire(self._paths)
+    def acquire(self, paths: list[str],
+                directories: Sequence[str] = ()) -> LockOutcome:
+        return self._inner.acquire(self._paths, directories)
 
     def release(self) -> None:
         self._inner.release()
