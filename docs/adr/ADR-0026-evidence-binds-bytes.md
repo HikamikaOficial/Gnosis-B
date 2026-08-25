@@ -2530,6 +2530,40 @@ Two added, 40 → 42, none survived:
 | MF41 | the lock's read-only share mode, so a live writable mapping no longer blocks it |
 | MF42 | the parent watch's entry filter, so a sibling's stream reads as a violation |
 
+### Evidence
+
+`.gnosis/evidence/20260825T135642Z/`, bound to `1672a8a`.
+
+| | |
+|---|---|
+| binding | BOUND — pre = post `741ed138…` |
+| boundary | CLEAN, 0 violations |
+| covered inputs | 90,296 — `locked` = `identified` = `byte_bound` |
+| `complete_note` present | yes (COMPLETE defined and scoped in the bundle) |
+| `scope_note` present | yes (snapshot booleans distinguished from the interval) |
+| `identity_digest` | `7deb630b8d64c73982f55bb88b2be247ef47bfad3d7a72cb161101eea5feb7f9` |
+| `content_digest` | `e71a35de563b860141696f7f945d6bb447e57fe1c0882f534b61beb52949ee55` |
+| pytest | 1040 passed, 70 subtests, 1034 s |
+| mypy | clean, 58 source files |
+| ruff | 19, the recorded baseline |
+| `evidence_valid` / exit | true / 0 |
+
+Four artifacts beyond the gate transcripts:
+
+- `mmap-defense.txt` — OS-real: a live writable mapping on a covered file
+  or stream makes the lock fail with ERROR_SHARING_VIOLATION under every
+  share mode; the teardown matrix (enforces only when fully torn down);
+  `run_capture` with a mapping alive → UNPROTECTED, exit 6; a new writable
+  mapping refused while the lock is held.
+- `mmap-mechanism.txt` — OS-real: a mapped write changes the file
+  immediately and the observer reports nothing, even on flush; copy-on-
+  write never touches the file. Why the lock, not the watch, is the
+  defence.
+- `mutation-check.f14-round14.txt` — 42 mutants, none survived, over
+  `1672a8a`.
+- `probe-f14-boundary.txt` — the earlier reviews' attempts re-run; only B0
+  breaks, and B0 exists to show why prevention is needed.
+
 ### What is still not closed
 
 - **F-14 remains OPEN.** Eleven reviews, and this one found no new bypass —

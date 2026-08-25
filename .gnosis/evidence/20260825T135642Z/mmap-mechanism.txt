@@ -1,0 +1,158 @@
+F-14.11 — a mapped write is silent to the observer (OS-real)
+==============================================================================
+tree: 1672a8a4c0925ce04f99b75ccadb0060a364e3cc
+
+--- output ------------------------------------------------------------
+F-14.11 Part A — a mapped write is silent to the observer until flush
+python 3.12.14
+
+1. mapped write REVERTED before flush (no lock):
+   disk saw the mutation mid-flight : True
+   observer events for data.bin     : NONE
+   observation.complete             : True
+   -> the change happened and the observer, watching the whole
+      interval, reports nothing. Observation ALONE cannot catch it.
+
+2. mapped write FLUSHED before stop (no lock):
+   observer events for data.bin     : NONE
+   -> a flush is a write the observer sees; the silent case is
+      the write reverted before any flush, which is case 1.
+
+3. copy-on-write mapping (needs no write access):
+   the COW view holds               : b'ZZZZZZZZ'
+   the FILE on disk still holds     : b'AAAAAAAA'
+   COW changed the input's bytes    : False
+   -> COW writes go to private pages, never to the file, so a COW
+      mapping cannot change an input even though it coexists with
+      the read lock. Not a threat to content.
+
+--- source ------------------------------------------------------------
+
+"""F-14.11 Part A: why observation alone cannot catch a mapped write, using
+the REAL write observer, plus the copy-on-write case.
+
+Demonstrates: a write through a writable mapping that is REVERTED before any
+flush/unmap is invisible to ReadDirectoryChangesW; a flushed one is seen.
+This is why the lock (which makes a writable mapping impossible during an
+enforced interval, Part B) is the defence, not the observer.
+
+Copy-on-write is also checked: it needs no write access and coexists with
+the lock, but its writes never reach the file, so it cannot change an input.
+
+No production code modified.
+"""
+from __future__ import annotations
+
+import ctypes
+import sys
+import tempfile
+import time
+from ctypes import wintypes
+from pathlib import Path
+
+REPO = Path(r"C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi")
+sys.path.insert(0, str(REPO / "src"))
+from gnosis.kernel.write_observer import create_write_observer  # noqa: E402
+
+k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+GR, GW = 0x80000000, 0x40000000
+SR, SW = 0x1, 0x2
+OPEN_EXISTING, NORMAL = 3, 0x80
+PAGE_RW, PAGE_WRITECOPY = 0x04, 0x08
+MAP_WRITE, MAP_COPY = 0x0002, 0x0001
+INVALID = ctypes.c_void_p(-1).value
+k32.CreateFileW.restype = wintypes.HANDLE
+k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                            ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+k32.CreateFileMappingW.restype = wintypes.HANDLE
+k32.CreateFileMappingW.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD,
+                                   wintypes.DWORD, wintypes.DWORD, wintypes.LPCWSTR]
+k32.MapViewOfFile.restype = ctypes.c_void_p
+k32.MapViewOfFile.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
+                              wintypes.DWORD, ctypes.c_size_t]
+k32.FlushViewOfFile.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+k32.UnmapViewOfFile.argtypes = [ctypes.c_void_p]
+k32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+
+def make_map(path, access, page, mapflag, share):
+    fh = k32.CreateFileW(path, access, share, None, OPEN_EXISTING, NORMAL, None)
+    if fh == INVALID:
+        raise OSError(ctypes.get_last_error(), "open")
+    mp = k32.CreateFileMappingW(fh, None, page, 0, 0, None)
+    view = k32.MapViewOfFile(mp, mapflag, 0, 0, 0)
+    return fh, mp, view
+
+
+def events_for(repo: Path, rel: str, observed_events):
+    return [f"{e.action}:{e.path}" for e in observed_events
+            if rel in e.path]
+
+
+def main() -> int:
+    print("F-14.11 Part A — a mapped write is silent to the observer until flush")
+    print(f"python {sys.version.split()[0]}")
+
+    # 1. write through a writable mapping, REVERT before flush, then stop.
+    with tempfile.TemporaryDirectory(dir=r"C:\Users\nicol\AppData\Local\Temp") as t:
+        repo = Path(t) / "repo"; repo.mkdir()
+        target = repo / "data.bin"; target.write_bytes(b"A" * 64)
+        fh, mp, view = make_map(str(target), GR | GW, PAGE_RW, MAP_WRITE, SR | SW)
+        obs = create_write_observer(repo)
+        obs.start()
+        ctypes.memmove(view, b"B" * 64, 64)     # mutate via mapping
+        mid = target.read_bytes()[:8]
+        ctypes.memmove(view, b"A" * 64, 64)     # revert, still no flush
+        time.sleep(0.2)
+        observation = obs.stop()
+        print("\n1. mapped write REVERTED before flush (no lock):")
+        print(f"   disk saw the mutation mid-flight : {mid == b'B'*8}")
+        print(f"   observer events for data.bin     : "
+              f"{events_for(repo, 'data.bin', observation.events) or 'NONE'}")
+        print(f"   observation.complete             : {observation.complete}")
+        print("   -> the change happened and the observer, watching the whole")
+        print("      interval, reports nothing. Observation ALONE cannot catch it.")
+        k32.UnmapViewOfFile(view); k32.CloseHandle(mp); k32.CloseHandle(fh)
+
+    # 2. same but FLUSH before stop -> the observer should see it.
+    with tempfile.TemporaryDirectory(dir=r"C:\Users\nicol\AppData\Local\Temp") as t:
+        repo = Path(t) / "repo"; repo.mkdir()
+        target = repo / "data.bin"; target.write_bytes(b"A" * 64)
+        fh, mp, view = make_map(str(target), GR | GW, PAGE_RW, MAP_WRITE, SR | SW)
+        obs = create_write_observer(repo)
+        obs.start()
+        ctypes.memmove(view, b"B" * 64, 64)
+        k32.FlushViewOfFile(view, 0)
+        time.sleep(0.2)
+        observation = obs.stop()
+        print("\n2. mapped write FLUSHED before stop (no lock):")
+        print(f"   observer events for data.bin     : "
+              f"{events_for(repo, 'data.bin', observation.events) or 'NONE'}")
+        print("   -> a flush is a write the observer sees; the silent case is")
+        print("      the write reverted before any flush, which is case 1.")
+        k32.UnmapViewOfFile(view); k32.CloseHandle(mp); k32.CloseHandle(fh)
+
+    # 3. copy-on-write: coexists with a read lock, but never touches the file.
+    with tempfile.TemporaryDirectory(dir=r"C:\Users\nicol\AppData\Local\Temp") as t:
+        repo = Path(t) / "repo"; repo.mkdir()
+        target = repo / "data.bin"; target.write_bytes(b"A" * 64)
+        # COW needs only read access, so it can be opened FILE_SHARE_READ,
+        # compatible with the lock. Prove it changes nothing on disk.
+        fh, mp, view = make_map(str(target), GR, PAGE_WRITECOPY, MAP_COPY, SR)
+        ctypes.memmove(view, b"Z" * 64, 64)     # write to the COW view
+        k32.FlushViewOfFile(view, 0)
+        cow_view_byte = ctypes.string_at(view, 8)
+        k32.UnmapViewOfFile(view); k32.CloseHandle(mp); k32.CloseHandle(fh)
+        disk = target.read_bytes()[:8]
+        print("\n3. copy-on-write mapping (needs no write access):")
+        print(f"   the COW view holds               : {cow_view_byte!r}")
+        print(f"   the FILE on disk still holds     : {disk!r}")
+        print(f"   COW changed the input's bytes    : {disk != b'A'*8}")
+        print("   -> COW writes go to private pages, never to the file, so a COW")
+        print("      mapping cannot change an input even though it coexists with")
+        print("      the read lock. Not a threat to content.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

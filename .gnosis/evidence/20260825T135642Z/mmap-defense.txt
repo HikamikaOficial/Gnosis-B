@@ -1,0 +1,223 @@
+F-14.11 — the lock fails closed for any live writable mapping (OS-real)
+==============================================================================
+tree: 1672a8a4c0925ce04f99b75ccadb0060a364e3cc
+
+--- output ------------------------------------------------------------
+F-14.11 Part B — the lock vs a live writable mapping
+python 3.12.14
+
+1. mapping alive on a covered FILE, three attacker share modes:
+   [R|W|D] enforced=False   ['data.bin (error 32)']
+   [R|W  ] enforced=False   ['data.bin (error 32)']
+   [R    ] enforced=False   ['data.bin (error 32)']
+
+2. teardown-shape matrix (does the lock enforce AFTER the shape?):
+   mapping fully alive                     : enforced=False
+   view alive, both handles closed         : enforced=False
+   flushed + unmapped, handles still open  : enforced=False
+   fully torn down                         : enforced=True
+
+3. NAMED STREAM: mapping alive on a covered file's stream:
+   stream mapping alive -> enforced=False  ['data.bin:s (error 32)']
+
+4. END TO END through run_capture, mapping alive on a covered file:
+   verdict=UNPROTECTED  evidence_valid=False  exit=6
+   reason: 1 covered input(s) could not be protected as the objects the capture identified
+
+5. a NEW writable mapping attempted DURING the interval (lock held):
+   open-writable refused: [None] open C:\Users\nicol\AppData\Local\Temp\tmpf6izldua\repo\data.bin
+
+CONCLUSION
+  A writable mapping needs a write handle; the lock's FILE_SHARE_READ
+  open conflicts with any live write access, so a pre-existing mapping
+  blocks the lock (fail closed) and no new one can be made while it is
+  held. The only way the lock enforces is if NO writable mapping is
+  alive -- in which case none can appear during the interval either.
+
+--- source ------------------------------------------------------------
+
+"""F-14.11 Part B: can the lock enforce while a writable mapping is alive?
+
+If it can, a capture can run checks and end CLEAN while a mapped write
+changes bytes unobserved. If it cannot, the capture fails closed. No
+ReadDirectoryChangesW here, so no async-buffer complications — just the
+lock, the mapping, and run_capture.
+
+No production code modified.
+"""
+from __future__ import annotations
+
+import ctypes
+import subprocess
+import sys
+import tempfile
+from ctypes import wintypes
+from pathlib import Path
+
+REPO = Path(r"C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi")
+sys.path.insert(0, str(REPO / "src"))
+from gnosis.kernel.evidence_capture import (  # noqa: E402
+    CheckCommand, covered_paths, run_capture)
+from gnosis.kernel.input_lock import create_input_lock  # noqa: E402
+
+k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+GR, GW = 0x80000000, 0x40000000
+SR, SW, SD = 0x1, 0x2, 0x4
+OPEN_EXISTING, NORMAL, PAGE_RW, MAP_WRITE = 3, 0x80, 0x04, 0x0002
+INVALID = ctypes.c_void_p(-1).value
+k32.CreateFileW.restype = wintypes.HANDLE
+k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                            ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+k32.CreateFileMappingW.restype = wintypes.HANDLE
+k32.CreateFileMappingW.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD,
+                                   wintypes.DWORD, wintypes.DWORD, wintypes.LPCWSTR]
+k32.MapViewOfFile.restype = ctypes.c_void_p
+k32.MapViewOfFile.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
+                              wintypes.DWORD, ctypes.c_size_t]
+k32.FlushViewOfFile.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+k32.UnmapViewOfFile.argtypes = [ctypes.c_void_p]
+k32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+
+def opn(path, share, access=GR | GW):
+    h = k32.CreateFileW(path, access, share, None, OPEN_EXISTING, NORMAL, None)
+    if h == INVALID:
+        raise OSError(ctypes.get_last_error(), f"open {path}")
+    return h
+
+
+def mapping(path, share):
+    fh = opn(path, share)
+    mp = k32.CreateFileMappingW(fh, None, PAGE_RW, 0, 0, None)
+    if not mp:
+        e = ctypes.get_last_error(); k32.CloseHandle(fh)
+        raise OSError(e, "CreateFileMapping")
+    view = k32.MapViewOfFile(mp, MAP_WRITE, 0, 0, 0)
+    if not view:
+        e = ctypes.get_last_error(); k32.CloseHandle(mp); k32.CloseHandle(fh)
+        raise OSError(e, "MapViewOfFile")
+    return fh, mp, view
+
+
+def teardown(fh=None, mp=None, view=None):
+    if view:
+        k32.UnmapViewOfFile(view)
+    if mp:
+        k32.CloseHandle(mp)
+    if fh:
+        k32.CloseHandle(fh)
+
+
+def repo_at(tmp: Path, *, stream: bool = False) -> tuple[Path, str]:
+    repo = tmp / "repo"; repo.mkdir()
+    for a in (["init"], ["config", "user.email", "t@e.com"], ["config", "user.name", "T"],
+              ["config", "commit.gpgsign", "false"]):
+        subprocess.run(["git", *a], cwd=repo, capture_output=True, check=True)
+    (repo / "data.bin").write_bytes(b"A" * 64)
+    subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True, check=True)
+    if stream:
+        with open(f"{repo / 'data.bin'}:s", "w", encoding="utf-8") as h:
+            h.write("A" * 64)
+        return repo, "data.bin:s"
+    return repo, "data.bin"
+
+
+def lock_enforced(repo: Path):
+    lock = create_input_lock(repo)
+    outcome = lock.acquire(sorted(covered_paths(repo)))
+    lock.release()
+    return outcome
+
+
+def main() -> int:
+    print("F-14.11 Part B — the lock vs a live writable mapping")
+    print(f"python {sys.version.split()[0]}")
+
+    print("\n1. mapping alive on a covered FILE, three attacker share modes:")
+    for label, share in (("R|W|D", SR | SW | SD), ("R|W", SR | SW), ("R", SR)):
+        with tempfile.TemporaryDirectory(dir=r"C:\Users\nicol\AppData\Local\Temp") as t:
+            repo, rel = repo_at(Path(t))
+            try:
+                fh, mp, view = mapping(str(repo / rel), share)
+            except OSError as e:
+                print(f"   [{label:5s}] cannot open writable: [{e.errno}] {e.strerror}")
+                continue
+            o = lock_enforced(repo)
+            teardown(fh, mp, view)
+            refused = [r for r in o.refused if rel in r]
+            print(f"   [{label:5s}] enforced={o.enforced}   {refused[:1]}")
+
+    print("\n2. teardown-shape matrix (does the lock enforce AFTER the shape?):")
+    shapes = ["mapping fully alive", "view alive, both handles closed",
+              "flushed + unmapped, handles still open", "fully torn down"]
+    for shape in shapes:
+        with tempfile.TemporaryDirectory(dir=r"C:\Users\nicol\AppData\Local\Temp") as t:
+            repo, rel = repo_at(Path(t))
+            fh, mp, view = mapping(str(repo / rel), SR | SW | SD)
+            live = {"fh": fh, "mp": mp, "view": view}
+            if shape == "view alive, both handles closed":
+                k32.CloseHandle(mp); k32.CloseHandle(fh); live = {"view": view}
+            elif shape == "flushed + unmapped, handles still open":
+                k32.FlushViewOfFile(view, 0); k32.UnmapViewOfFile(view)
+                live = {"fh": fh, "mp": mp}
+            elif shape == "fully torn down":
+                teardown(fh, mp, view); live = {}
+            o = lock_enforced(repo)
+            print(f"   {shape:40s}: enforced={o.enforced}")
+            teardown(**live)
+
+    print("\n3. NAMED STREAM: mapping alive on a covered file's stream:")
+    with tempfile.TemporaryDirectory(dir=r"C:\Users\nicol\AppData\Local\Temp") as t:
+        repo, rel = repo_at(Path(t), stream=True)
+        try:
+            fh, mp, view = mapping(str(repo / "data.bin") + ":s", SR | SW | SD)
+            o = lock_enforced(repo)
+            teardown(fh, mp, view)
+            print(f"   stream mapping alive -> enforced={o.enforced}  "
+                  f"{[r for r in o.refused if 'data.bin' in r][:1]}")
+        except OSError as e:
+            print(f"   could not map the stream: [{e.errno}] {e.strerror}")
+
+    print("\n4. END TO END through run_capture, mapping alive on a covered file:")
+    with tempfile.TemporaryDirectory(dir=r"C:\Users\nicol\AppData\Local\Temp") as t:
+        repo, rel = repo_at(Path(t))
+        fh, mp, view = mapping(str(repo / rel), SR | SW | SD)
+        try:
+            cap = run_capture(repo, [CheckCommand("c", (sys.executable, "-c", "pass"))],
+                              Path(t) / "staging")
+            print(f"   verdict={cap.boundary.verdict.value}  "
+                  f"evidence_valid={cap.evidence_valid}  exit={cap.exit_code}")
+            print(f"   reason: {cap.boundary.reason}")
+        finally:
+            teardown(fh, mp, view)
+
+    print("\n5. a NEW writable mapping attempted DURING the interval (lock held):")
+    with tempfile.TemporaryDirectory(dir=r"C:\Users\nicol\AppData\Local\Temp") as t:
+        repo, rel = repo_at(Path(t))
+        lock = create_input_lock(repo)
+        o = lock.acquire(sorted(covered_paths(repo)))
+        try:
+            if not o.enforced:
+                print("   lock did not enforce on a clean tree  <- unexpected")
+            else:
+                try:
+                    fh = opn(str(repo / rel), SR | SW)
+                    print("   opened the covered file WRITABLE despite the lock  <- HOLE")
+                    k32.CloseHandle(fh)
+                except OSError as e:
+                    print(f"   open-writable refused: [{e.winerror}] {e.strerror.strip()}")
+        finally:
+            lock.release()
+
+    print("\nCONCLUSION")
+    print("  A writable mapping needs a write handle; the lock's FILE_SHARE_READ")
+    print("  open conflicts with any live write access, so a pre-existing mapping")
+    print("  blocks the lock (fail closed) and no new one can be made while it is")
+    print("  held. The only way the lock enforces is if NO writable mapping is")
+    print("  alive -- in which case none can appear during the interval either.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
