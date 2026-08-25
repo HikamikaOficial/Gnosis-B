@@ -109,8 +109,8 @@ ALLOWED_WRITES: tuple[str, ...] = (
     # Measured, not assumed: the first capture run under this policy
     # caught the code-intelligence suite writing a CodeGraph index into a
     # dataset fixture. The index is an output of the checks; the fixture
-    # around it is not, and OUTPUT is matched before OUT_OF_SCOPE so this
-    # carves out only the generated part.
+    # around it is not, so this names the generated part and leaves the
+    # fixture an INPUT like everything else.
     ".codegraph",
 )
 

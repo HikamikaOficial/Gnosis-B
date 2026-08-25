@@ -339,8 +339,11 @@ class TreeBinding:
                 "not part of the identified tree"
             ),
             "blind_spot": (
-                "git-ignored files are not enumerated by content_fingerprint "
-                "(build caches, .venv, the ignored parts of .gnosis/)"
+                "content_fingerprint enumerates what git tracks, so git-ignored "
+                "files (build caches, .venv, the ignored parts of .gnosis/) are "
+                "not in THIS digest. They are not unbound: every one of them is "
+                "locked, hashed through the handle holding it, and listed in "
+                "input-manifest.json, whose aggregate is protection.content_digest"
             ),
             "pre": self.pre.to_dict(),
             "post": self.post.to_dict(),
@@ -512,9 +515,9 @@ def classify_observation(
     the lock was taken, and the metadata changes that remain legal.
 
     A path is a violation when it is one of the covered files, or when it
-    is a path that is neither explicitly allowed nor ignored by git —
-    that second case is how a file created and deleted inside the run
-    gets caught, since it is in neither fingerprint.
+    is a path nobody declared — that second case is how a file created
+    and deleted inside the run gets caught, since it is in neither
+    fingerprint. Git's opinion about it is not part of the test.
 
     Directories are judged the same way as anything else, with one
     exception that is a fact about the filesystem rather than a

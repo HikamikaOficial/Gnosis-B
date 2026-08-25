@@ -1824,6 +1824,30 @@ covers `.venv`, by covering every input without exception.
   first thought; left alone, because making `tests/` deterministic is not
   a change F-14's evidence should carry.
 
+### Three sentences the repair had left behind
+
+The first full capture under this policy came back clean — 90,245 inputs
+locked, identified and hashed — and reading its own bundle turned up
+three strings that still described the previous model:
+
+- `tree_identity.blind_spot` said git-ignored files are not enumerated by
+  `content_fingerprint`. True of that function, and read as an admission
+  that `.venv` is outside the evidence, which is now exactly backwards.
+  It now says which digest they are missing from and which one has them.
+- `classify_observation`'s docstring said a violation is a path "neither
+  explicitly allowed nor ignored by git" — contradicting both the code
+  and the paragraph four lines below it in the same docstring.
+- `capture_evidence.py` justified the `.codegraph` carve-out by "OUTPUT is
+  matched before OUT_OF_SCOPE", a mechanism that no longer exists.
+
+None of them changes a guard and no mutant anchors any of them; all three
+are the same defect the fourth review named, where the artifact's wording
+outlives the mechanism it describes. The capture that found them
+(`68338c2`, 90,245 covered files, `content_digest`
+`430b79ef81d99701ced39802ce374ceaa88eaec4966a921bee2a26bf93cbfea3`,
+boundary CLEAN, `evidence_valid` true) is superseded by the one committed
+below and is not kept: it describes a tree that no longer exists.
+
 ### The mutation runner has a hole this round exposed
 
 Two runs were killed mid-flight — one by a ten-minute foreground cap, one
