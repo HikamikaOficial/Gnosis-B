@@ -202,8 +202,10 @@ when an ADR with captured evidence backs it.
   88,424 files and 2.4 GB, 1,170 s to hash cold. Pre-existing content
   under a declared OUTPUT root is hashed into `outputs_at_start`, so it
   cannot be an anonymous prior input. 127 tests; twenty-nine mutants,
-  none survived. **Next action: hand this unit to a NINTH independent
-  review.** It is not closed until one returns without findings.
+  none survived; captured on `de74053` as
+  `.gnosis/evidence/20260825T011601Z/` over 90,245 byte-bound inputs,
+  boundary CLEAN, exit 0. **Next action: hand this unit to a NINTH
+  independent review.** It is not closed until one returns without findings.
 
 - **Observed overlap with F-15..F-18, none of them marked repaired:**
   F-15's suggested correction is what this script now does, but the

@@ -1,0 +1,131 @@
+ADR-0026, eighth review, requirement 7 — the measurement behind
+"model (a) was tested and failed".
+
+tree:   de74053cdd561dc786de2f0f0408b58e6446f05b
+exit:   0
+
+--- output --------------------------------------------------------------
+OUT_OF_SCOPE, model (a): can a directory handle deny reads below it?
+==========================================================================
+python: 3.12.14
+
+held: CreateFileW(unclaimed, GENERIC_READ, FILE_SHARE_NONE,
+                  FILE_FLAG_BACKUP_SEMANTICS)  -> OK
+
+  list the directory        : DENIED  PermissionError [32] El proceso no tiene acceso al archivo porque está siendo utilizado por otro proceso
+  open a file inside by path: SUCCEEDED, read 'BYTES NO DIGEST NAMES'
+
+  listing denied by the seal: True
+  reading denied by the seal: False
+
+VERDICT: model (a) FAILS. The seal stops the directory being
+listed and does not stop a check reading a file inside it by
+path, so 'no check can consume this root' cannot be enforced
+with share modes. OUT_OF_SCOPE was deleted and its contents
+moved into the bound INPUT class instead -- model (b).
+
+--- the script that produced it -----------------------------------------
+
+"""Can a declared OUT_OF_SCOPE root be SEALED instead of bound?
+
+The eighth review allowed two models for a root the evidence claims
+nothing about: prove no check can consume it, or move its influential
+content into a bound class. This script is the test of the first model
+on Windows, because if a directory handle could deny reads to everything
+underneath it, an unbound class would be defensible.
+
+It cannot. A directory opened with FILE_SHARE_NONE denies another opener
+of the DIRECTORY OBJECT ITSELF -- which is what listing needs -- and says
+nothing about the files inside it, which are different objects with their
+own share modes. So the model fails and the class was deleted instead.
+
+Run: PYTHONUTF8=1 python seal_attempt.py
+"""
+from __future__ import annotations
+
+import ctypes
+import sys
+import tempfile
+from ctypes import wintypes
+from pathlib import Path
+
+GENERIC_READ = 0x80000000
+FILE_SHARE_NONE = 0x00000000
+OPEN_EXISTING = 3
+FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel32.CreateFileW.restype = wintypes.HANDLE
+kernel32.CreateFileW.argtypes = [
+    wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+    wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+
+def open_dir_exclusive(path: Path) -> int:
+    """The strongest share mode Windows offers, on the directory itself."""
+    handle = kernel32.CreateFileW(
+        str(path), GENERIC_READ, FILE_SHARE_NONE, None, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS, None)
+    if handle == INVALID_HANDLE_VALUE:
+        raise OSError(ctypes.get_last_error(), "CreateFileW on the directory")
+    return handle
+
+
+def main() -> int:
+    print("OUT_OF_SCOPE, model (a): can a directory handle deny reads below it?")
+    print("=" * 74)
+    print(f"python: {sys.version.split()[0]}")
+    print()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "unclaimed"
+        root.mkdir()
+        secret = root / "influential.txt"
+        secret.write_text("BYTES NO DIGEST NAMES\n", encoding="utf-8")
+
+        handle = open_dir_exclusive(root)
+        print(f"held: CreateFileW({root.name}, GENERIC_READ, FILE_SHARE_NONE,")
+        print("                  FILE_FLAG_BACKUP_SEMANTICS)  -> OK")
+        print()
+        try:
+            # 1. Listing the directory needs the directory object again.
+            try:
+                listed = sorted(p.name for p in root.iterdir())
+                print(f"  list the directory        : SUCCEEDED {listed}")
+                listing_denied = False
+            except OSError as exc:
+                print(f"  list the directory        : DENIED  {exc.__class__.__name__}"
+                      f" [{exc.winerror}] {exc.strerror}")
+                listing_denied = True
+
+            # 2. Opening a FILE inside it is a different object entirely.
+            try:
+                text = secret.read_text(encoding="utf-8").strip()
+                print(f"  open a file inside by path: SUCCEEDED, read {text!r}")
+                read_denied = False
+            except OSError as exc:
+                print(f"  open a file inside by path: DENIED  {exc.__class__.__name__}"
+                      f" [{exc.winerror}] {exc.strerror}")
+                read_denied = True
+        finally:
+            kernel32.CloseHandle(handle)
+
+    print()
+    print(f"  listing denied by the seal: {listing_denied}")
+    print(f"  reading denied by the seal: {read_denied}")
+    print()
+    if not read_denied:
+        print("VERDICT: model (a) FAILS. The seal stops the directory being")
+        print("listed and does not stop a check reading a file inside it by")
+        print("path, so 'no check can consume this root' cannot be enforced")
+        print("with share modes. OUT_OF_SCOPE was deleted and its contents")
+        print("moved into the bound INPUT class instead -- model (b).")
+        return 0
+    print("VERDICT: model (a) holds here, which contradicts ADR-0026.")
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

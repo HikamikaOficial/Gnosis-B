@@ -674,6 +674,13 @@ them to be refused. Whatever already exists under a declared OUTPUT root
 when a capture begins is hashed into `outputs_at_start`, so a file
 planted there and read by a check is named rather than anonymous.
 
+Captured on `de74053` as `.gnosis/evidence/20260825T011601Z/`: 90,245
+inputs locked, identified AND byte-bound, `fully_bound` true, boundary
+CLEAN, `evidence_valid` true, exit 0, with `identity_digest ec4dbb5c…`
+and `content_digest 55d64f5b…` as two different numbers over the same
+files. A 301-entry sample of `input-manifest.json` re-hashed 301 of 301.
+The bundle is ~28 MB, and later captures hash earlier bundles as inputs.
+
 **F-14 is still NOT closed.** Repaired nine times now, tested (127
 tests) and mutation-checked (twenty-nine mutants, none survived), it
 awaits a NINTH independent review. Eight reviews have each found

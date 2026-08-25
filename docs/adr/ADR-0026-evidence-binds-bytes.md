@@ -1708,10 +1708,13 @@ recorded. None of them is the identity.
 
 ### `.venv`: option (A), and the measurement is why
 
-Measured before choosing: the whole INPUT set is **2,958 files and
-99.4 MB**, hashed in **2.39 s warm** (37.5 s cold). A fourth TOOLCHAIN
-class with a provenance manifest would have been more machinery for a
-weaker guarantee and no saving. `.venv` stays an INPUT and is byte-bound
+Measured before choosing, on the input set as the SEVENTH review's
+declaration defined it — **2,958 files and 99.4 MB**, hashed in **2.39 s
+warm** (37.5 s cold), of which `.venv` is 2,130 files. That is the
+comparison the `.venv` decision turns on, and it is not the input set
+this round ships: deleting OUT_OF_SCOPE took the real one to 90,245. A
+fourth TOOLCHAIN class with a provenance manifest would have been more
+machinery for a weaker guarantee and no saving. `.venv` stays an INPUT and is byte-bound
 like everything else, so two toolchains reporting the same versions with
 different bytes produce different evidence — by the same rule as any
 other file, with no special case to get wrong.
@@ -1797,6 +1800,47 @@ Item 16's second line — "toolchain identity, if introduced" — has no
 mutant because no TOOLCHAIN class was introduced. MF26 is the mutant that
 covers `.venv`, by covering every input without exception.
 
+### Evidence
+
+`.gnosis/evidence/20260825T011601Z/`, bound to `de74053`.
+
+| | |
+|---|---|
+| binding | BOUND — pre, post and post-lock identity all `87a56324…` |
+| boundary | CLEAN, 0 violations; 64 events, 24 allowed, 40 `.git/` machinery |
+| covered inputs | **90,245** — `locked_inputs` = `identified_objects` = `byte_bound_inputs` |
+| `fully_identified` / `fully_bound` | true / true |
+| `identity_digest` | `ec4dbb5cea3e58bae9cf29f390e333bce48d55942c6318656e313a4af42c5090` |
+| `content_digest` | `55d64f5bd9f0597320bc86e197fa60a5a5aa4158f176dd6e185941ca6f4d8bb9` |
+| volume | `fixed`, `NTFS`, supported |
+| pytest | 1001 passed, 70 subtests, 831 s |
+| mypy | clean, 58 source files |
+| ruff | 19, the recorded baseline |
+| `evidence_valid` / exit | true / 0 |
+
+The two digests are different numbers over the same 90,245 files, which
+is the whole point of the round: one answers "which objects", the other
+"which bytes".
+
+Re-derivation was checked rather than asserted: a 301-file sample spread
+across the manifest re-hashed to the recorded digest, 301 of 301, none
+missing and none mismatched. `outputs_at_start` names 207 files that
+already existed under a declared OUTPUT root.
+
+Three artifacts beyond the gate transcripts:
+
+- `mutation-check.f14-round11.txt` — 29 mutants, none survived, with the
+  baseline and the restored tree both green in the same transcript.
+- `probe-f14-boundary.txt` — the ten break attempts of the earlier
+  reviews re-run against `de74053`; only B0 is broken, which is the case
+  that exists to show why prevention is needed.
+- `out-of-scope-seal-attempt.txt` — the measurement behind requirement 7,
+  with the script that produced it. A directory held by
+  `CreateFileW(GENERIC_READ, FILE_SHARE_NONE, FILE_FLAG_BACKUP_SEMANTICS)`
+  refuses to be listed (`PermissionError` 32) and does not stop a file
+  inside it being opened by path and read. Model (a) is unavailable, so
+  model (b) shipped.
+
 ### What is still not closed
 
 - **F-14 remains OPEN.** Eight reviews, eight findings.
@@ -1807,9 +1851,12 @@ covers `.venv`, by covering every input without exception.
 - **The manifest is bytes at lock time.** It says what was there when
   nothing could change it any more; it is not a history of how the tree
   got that way.
-- **Captures are slower.** The input set went from 2,958 files to
-  ~91,000, and the wall-clock cost of the lock and the hash is now the
-  dominant part of a capture on a cold cache.
+- **Captures are slower and bundles are large.** The input set went from
+  2,958 files to **90,245**, of which 58,117 are the read-only clones
+  under `external/`. `input-manifest.json` is 14.98 MB and
+  `input-identities.json` 13.42 MB, so a bundle is ~28 MB and every later
+  capture hashes the earlier bundles as inputs. That compounding is real
+  and is not addressed here.
 - **F-15..F-18 remain open and untouched.**
 - **The full suite is not green, and not because of this unit.** Two
   concurrency tests in `tests/test_work_queue.py` —
