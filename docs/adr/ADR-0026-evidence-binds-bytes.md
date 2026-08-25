@@ -2299,6 +2299,45 @@ Five added, 35 → 40, none survived:
 | MF39 | the tolerance of `modified_stream`, so hashing a locked stream falsely fails |
 | MF40 | the merge of the root watch's incompleteness, so an unwatchable root reads clean |
 
+### Evidence
+
+`.gnosis/evidence/20260825T093442Z/`, bound to `534bda2`.
+
+| | |
+|---|---|
+| binding | BOUND — pre, post and post-lock identity all `93bec21e…` |
+| boundary | CLEAN, 0 violations; 63 events, 23 allowed, 40 `.git/` machinery |
+| covered inputs | 90,279 — `locked` = `identified` = `byte_bound` |
+| named-stream entries in this tree | **0** (the capability rests on the transcripts and tests, not a specimen) |
+| `fully_identified` / `fully_bound` | true / true, with `scope_note` stating they are snapshot properties |
+| `identity_digest` | `5d2e1b5e713fb7f391ce7de0d9236440c6e2162def319900f9119816058b2110` |
+| `content_digest` | `d19b3d1de6dc3eb9e16371d58d77abda195605964ffe869e9fb8989fbd4d37d4` |
+| pytest | 1030 passed, 70 subtests, 946 s |
+| mypy | clean, 58 source files |
+| ruff | 19, the recorded baseline |
+| `evidence_valid` / exit | true / 0 |
+
+A clean capture with the stream filters live produced zero stream
+violations — the observer sees stream transitions but this tree has none,
+so it flags nothing. Re-derivation checked, not asserted: a 251-file
+sample re-hashed to the recorded digest, 251 of 251.
+
+Four artifacts beyond the gate transcripts:
+
+- `ads-directory-aba.txt` — the reviewer's minimal case through
+  `run_capture`, the same script against `git archive 8dd621c` (CLEAN,
+  evidence_valid true — the bypass) and against `534bda2`
+  (STREAMS_MUTATED, exit 8), for a child directory and for the root.
+- `ads-mechanisms.txt` — the four measurement scripts and their output:
+  stream actions distinguish a directory stream from an entry move; a read
+  emits `modified_stream`; the watched directory's own streams are
+  invisible to its recursive watch; a parent watch catches the root; the
+  USN journal records the ABA but needs an elevated volume handle.
+- `mutation-check.f14-round13.txt` — 40 mutants, none survived, baseline
+  and restored both green in the same transcript, run over `534bda2`.
+- `probe-f14-boundary.txt` — the earlier reviews' break attempts re-run
+  here; only B0 breaks, and B0 exists to show why prevention is needed.
+
 ### What is still not closed
 
 - **F-14 remains OPEN.** Ten reviews, ten findings.
