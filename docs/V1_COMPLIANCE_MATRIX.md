@@ -1,10 +1,12 @@
 # GNOSIS — Matriz V1 viva
 
-**Última actualización:** 2026-08-25 · **Unidad:** ADR-0026 + once
-revisiones independientes (las diez anteriores más **F-14.11 auditoría de
-CLEAN sobre COMPLETE / memory-mapping**) — **F-14 CERRADO** por la
-**duodécima revisión independiente (2026-08-25): APPROVED**, dentro del
-contrato formal declarado.
+**Última actualización:** 2026-08-25 · **Unidad actual:** ADR-0027 —
+**F-17 (tamper-evidence)** reparado y **PENDIENTE de primera revisión
+independiente**. F-17 **sigue ABIERTO** hasta que una revisión vuelva sin
+hallazgos.
+**Unidad previa:** ADR-0026 + once revisiones independientes — **F-14
+CERRADO** por la **duodécima revisión independiente (2026-08-25):
+APPROVED**, dentro del contrato formal declarado.
 Unidad anterior: ADR-0025 + cuatro addenda (FAIL PARCIAL, FAIL PARCIAL,
 **FAIL CRÍTICO**, **PASS**) — F-34 **CERRADO** por la cuarta revisión,
 sin hallazgos sobre el código `9c6064c` y la evidencia `f02e18e`
@@ -198,6 +200,20 @@ pendiente de validación real**, no una garantía actual: se rechaza con un
 motivo que dice explícitamente que nadie ha ejecutado la frontera ahí.
 Cualquier otro entorno se rechaza antes de tomar un solo handle, en lugar
 de suponerse equivalente.
+
+## F-17 — reparación entregada, PENDIENTE DE REVISIÓN INDEPENDIENTE
+
+**F-17 sigue ABIERTO.** La reparación existe, está probada y tiene
+evidencia; le falta una revisión independiente, y esta tabla no mueve un
+hallazgo a «cerrado» por parecerlo. Seleccionado tras cerrar F-14 porque el
+residuo `.git/ contado pero no juzgado` estaba asignado aquí; la definición
+autoritativa del hallazgo (auditoría congelada) es más amplia: **la
+evidencia que sostiene las afirmaciones era la parte menos protegida** — el
+bundle no tenía hash-chain ni firma.
+
+| Hallazgo | ADR | Fecha | Estado | Evidencia |
+|---|---|---|---|---|
+| **F-17** — `SUMMARY.json` sin HEAD/status y bundle sin hash-chain ni firma; la evidencia menos protegida que el ledger | ADR-0027 | 2026-08-25 | **reparado, pendiente de primera revisión** | (1) HEAD/status ya viven en `SUMMARY.json` desde las rondas de F-14; (2) `MANIFEST.sha256.json`: SHA-256 de cada fichero del bundle + un `bundle_digest`, escrito el último (cubre `SUMMARY.json`), re-derivable por `verify_bundle()` que **falla cerrado** ante cualquier fichero añadido/borrado/cambiado; (3) firma criptográfica declarada **fuera de alcance** (necesita gestión de claves) — limitación, no reclamación. Además, residuo `.git/` de F-14: se **juzga** toda escritura a `.git/hooks/**` (salvo `.sample`) o `.git/config` como `MACHINERY_MUTATED` (salida 9), observada en el intervalo (una ABA hook create+delete se detecta; un fingerprint before/after es ciego, medido); el resto de `.git/` sigue contado (bookkeeping de git). Medido: captura normal ~37 eventos machinery, 0 juzgados, CLEAN. 179 pruebas dirigidas; cuarenta y siete mutantes |
 
 ## Hallazgos abiertos
 

@@ -111,7 +111,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .canonical import hash_canonical
+from .canonical import hash_canonical, sha256_hex
 from .git_evidence import content_fingerprint
 from .input_lock import (
     InputLock,
@@ -140,12 +140,39 @@ EXIT_BOUNDARY_UNAVAILABLE = 5
 EXIT_INPUTS_UNPROTECTED = 6
 EXIT_PREPARATION_DRIFT = 7
 EXIT_STREAMS_MUTATED = 8
+EXIT_MACHINERY_MUTATED = 9
 
 _UNREADABLE_PREFIX = "unreadable: "
 
 # Not a covered input and not the caller's choice: `content_fingerprint`
 # never hashes `.git`, and git writes there while reading the tree.
 _GIT_DIR = ".git/"
+# Inside `.git`, most writes are git's own bookkeeping during a read —
+# index, refs, logs, ORIG_HEAD, packed-refs, loose objects — and forgiving
+# them is what makes the mechanism usable (F-14's machinery count). But two
+# parts of `.git` can EXECUTE or REDIRECT: a hook is code that runs on the
+# next git operation, and `config` chooses what a filter runs and where a
+# push goes. F-17: a check that installs a hook or rewrites config during
+# the capture has tampered with the machinery that produced the evidence,
+# and that is judged, not counted. Narrowed to exactly the set
+# `_machinery_fingerprint` already treats as dangerous, and caught in the
+# interval by the observer, so a create+delete (ABA) is caught too — a
+# before/after fingerprint would be blind to it, measured.
+_GIT_HOOKS = ".git/hooks/"
+_GIT_CONFIG = ".git/config"
+_HOOK_SAMPLE = ".sample"
+
+
+def _is_git_machinery_tamper(path: str) -> bool:
+    """A `.git` write that can execute or redirect: a hook or config.
+
+    Stream paths (`owner:stream`) count too — a stream on config or a hook
+    is a write channel. Sample hooks git ships as inert examples do not.
+    """
+    owner = path.split(":", 1)[0]
+    if owner.startswith(_GIT_HOOKS) and not owner.endswith(_HOOK_SAMPLE):
+        return True
+    return owner == _GIT_CONFIG
 
 
 class BindingVerdict(Enum):
@@ -221,6 +248,7 @@ class ObservationVerdict(Enum):
     UNPROTECTED = "UNPROTECTED"
     PREPARATION_DRIFT = "PREPARATION_DRIFT"
     STREAMS_MUTATED = "STREAMS_MUTATED"
+    MACHINERY_MUTATED = "MACHINERY_MUTATED"
 
 
 @dataclass(frozen=True)
@@ -652,12 +680,20 @@ def classify_observation(
 
     violations: list[str] = []
     stream_violations: list[str] = []
+    machinery_violations: list[str] = []
     allowed_count = 0
     machinery = 0
     unknown: dict[str, str] = {}
     for event in observation.events:
         path = event.path
-        if ":" in path:
+        if _is_git_machinery_tamper(path):
+            # F-17: a hook or config written during the capture is a tamper
+            # of the machinery that produced the evidence. Checked before
+            # the .git bookkeeping count below, so it is judged, not
+            # forgiven, and before the stream branch so a stream on a hook
+            # or on config is judged too.
+            machinery_violations.append(f"{event.action}: {path}")
+        elif ":" in path:
             # A named data stream, delivered by the observer's stream
             # filters as `owner:name` (or `:name` on the root itself). A
             # repository-relative path never otherwise contains a colon, so
@@ -721,6 +757,22 @@ def classify_observation(
             tuple(dict.fromkeys(stream_violations)), len(covered), tuple(allowed),
             "a named data stream on a covered path changed during the capture, "
             "observed in the interval and not merely at its endpoints",
+            machinery_events=machinery, protection=protection,
+            locked_identity=prepared)
+
+    if machinery_violations:
+        # F-17: the execute/redirect surface of `.git` changed inside the
+        # interval — a hook installed or config rewritten. Observed, so a
+        # create+delete (ABA) is caught, which a before/after machinery
+        # fingerprint is blind to (measured). Its own verdict, because the
+        # operator response differs: the tree the checks ran against was
+        # sound, but the machinery that ran them was tampered.
+        return Boundary(
+            ObservationVerdict.MACHINERY_MUTATED, observation.mechanism,
+            len(observation.events), allowed_count,
+            tuple(dict.fromkeys(machinery_violations)), len(covered), tuple(allowed),
+            "a hook or config under .git was written during the capture, "
+            "tampering with the machinery that produced the evidence",
             machinery_events=machinery, protection=protection,
             locked_identity=prepared)
 
@@ -895,6 +947,8 @@ def _exit_code(binding: TreeBinding, checks: ChecksVerdict, boundary: Boundary) 
         return EXIT_PREPARATION_DRIFT
     if boundary.verdict is ObservationVerdict.STREAMS_MUTATED:
         return EXIT_STREAMS_MUTATED
+    if boundary.verdict is ObservationVerdict.MACHINERY_MUTATED:
+        return EXIT_MACHINERY_MUTATED
     if boundary.verdict is ObservationVerdict.INPUTS_MUTATED:
         return EXIT_INPUTS_MUTATED
     if checks not in (ChecksVerdict.ALL_CLEAN, ChecksVerdict.WITHIN_BASELINE):
@@ -921,6 +975,10 @@ def _verdict_line(binding: TreeBinding, checks: ChecksVerdict, boundary: Boundar
     if boundary.verdict is ObservationVerdict.STREAMS_MUTATED:
         return ("INVALID EVIDENCE: a named data stream appeared, vanished or "
                 "changed length during the capture; see boundary.violations")
+    if boundary.verdict is ObservationVerdict.MACHINERY_MUTATED:
+        return ("INVALID EVIDENCE: a hook or config under .git was written during "
+                "the capture, tampering with the machinery that produced it; see "
+                "boundary.violations")
     if boundary.verdict is ObservationVerdict.INPUTS_MUTATED:
         return ("INVALID EVIDENCE: a covered input was written during the capture "
                 "and the endpoints do not show it; see boundary.violations")
@@ -1058,6 +1116,106 @@ def write_summary(staging: Path, summary: Mapping[str, Any]) -> Path:
     return path
 
 
+# F-17: the evidence that sustains the project's claims was the least
+# protected part of it — a bundle with no hash chain and no signature, so a
+# file could be edited after capture and nothing would notice. This is the
+# ledger's protection (kernel.ledger) applied to the bundle: a SHA-256 of
+# every file plus one digest over them all, written last so it covers
+# SUMMARY.json too, and re-derivable so a third party checks the claim
+# rather than trusting it.
+BUNDLE_MANIFEST = "MANIFEST.sha256.json"
+
+
+def write_bundle_manifest(staging: Path) -> Path:
+    """Hash every file in the bundle, then hash that map into one digest.
+
+    Written after everything else, so SUMMARY.json and every artifact are
+    covered. It cannot hash itself, so it names itself as the one unlisted
+    file and says so — the rule the review-package manifest already follows.
+    `bundle_digest` is the root a reviewer records out of band or reads off
+    the git commit that carries the bundle; editing any listed file changes
+    it, and editing the manifest to match is what a signature would prevent,
+    which is the declared limitation, not a hidden one.
+    """
+    files: dict[str, str] = {}
+    for item in sorted(staging.rglob("*")):
+        if item.is_file() and item.name != BUNDLE_MANIFEST:
+            files[item.relative_to(staging).as_posix()] = sha256_hex(item.read_bytes())
+    bundle_digest = hash_canonical(sorted(files.items()))
+    path = staging / BUNDLE_MANIFEST
+    path.write_text(json.dumps({
+        "note": (
+            "SHA-256 of every file in this bundle. bundle_digest is one hash "
+            "over the whole map. Re-derive it with verify_bundle(): any file "
+            "added, removed or changed after capture is detected. The manifest "
+            "cannot hash itself, so it is the one file not listed; a "
+            "cryptographic signature over bundle_digest — which would also stop "
+            "an editor from recomputing this manifest — needs key management "
+            "that is out of scope and is a declared limitation, not a claim."
+        ),
+        "unlisted": BUNDLE_MANIFEST,
+        "bundle_digest": bundle_digest,
+        "files": files,
+    }, indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
+@dataclass(frozen=True)
+class BundleVerification:
+    """Whether a bundle is byte-for-byte what its manifest recorded."""
+
+    verified: bool
+    bundle_digest: str | None
+    problems: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "verified": self.verified,
+            "bundle_digest": self.bundle_digest,
+            "problems": list(self.problems),
+        }
+
+
+def verify_bundle(bundle: Path) -> BundleVerification:
+    """Re-derive the manifest and report any file added, removed or changed.
+
+    Fail-closed: a missing or unparseable manifest, a recomputed
+    `bundle_digest` that disagrees with the recorded one, or any file that
+    is present-but-unlisted, listed-but-absent, or hashed differently, all
+    make `verified` false. Only an exact match verifies.
+    """
+    manifest_path = bundle / BUNDLE_MANIFEST
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return BundleVerification(False, None, (f"manifest unreadable: {exc}",))
+    recorded = manifest.get("files")
+    if not isinstance(recorded, dict):
+        return BundleVerification(False, None, ("manifest has no files map",))
+
+    problems: list[str] = []
+    on_disk = {
+        item.relative_to(bundle).as_posix()
+        for item in bundle.rglob("*")
+        if item.is_file() and item.name != BUNDLE_MANIFEST
+    }
+    for rel in sorted(on_disk - set(recorded)):
+        problems.append(f"present but unlisted: {rel}")
+    for rel in sorted(set(recorded) - on_disk):
+        problems.append(f"listed but absent: {rel}")
+    for rel in sorted(on_disk & set(recorded)):
+        actual = sha256_hex((bundle / rel).read_bytes())
+        if actual != recorded[rel]:
+            problems.append(f"changed: {rel}")
+
+    recomputed = hash_canonical(sorted(recorded.items()))
+    if recomputed != manifest.get("bundle_digest"):
+        problems.append("bundle_digest does not match the files map")
+
+    return BundleVerification(not problems, manifest.get("bundle_digest"),
+                             tuple(problems))
+
+
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -1170,6 +1328,9 @@ def run_capture(
         captured_at=now(),
     )
     write_summary(staging, summary)
+    # Last, so it covers SUMMARY.json and every other artifact: F-17's
+    # tamper-evidence over the bundle itself.
+    write_bundle_manifest(staging)
     exit_code = summary["exit_code"]
     return Capture(binding, tuple(results), checks_verdict, staging, summary,
                    int(exit_code), boundary)

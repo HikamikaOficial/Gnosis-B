@@ -29,11 +29,13 @@ from pathlib import Path
 from gnosis.kernel import input_lock as input_lock_module
 from gnosis.kernel.canonical import hash_canonical
 from gnosis.kernel.evidence_capture import (
+    BUNDLE_MANIFEST,
     EXIT_BOUNDARY_UNAVAILABLE,
     EXIT_CHECKS_FAILED,
     EXIT_IDENTITY_UNAVAILABLE,
     EXIT_INPUTS_MUTATED,
     EXIT_INPUTS_UNPROTECTED,
+    EXIT_MACHINERY_MUTATED,
     EXIT_OK,
     EXIT_PREPARATION_DRIFT,
     EXIT_STREAMS_MUTATED,
@@ -48,6 +50,7 @@ from gnosis.kernel.evidence_capture import (
     ObservationVerdict,
     PathClass,
     TreeIdentity,
+    _is_git_machinery_tamper,
     bind_tree,
     classify_observation,
     classify_path,
@@ -58,6 +61,7 @@ from gnosis.kernel.evidence_capture import (
     publish_bundle,
     run_capture,
     stream_directories,
+    verify_bundle,
 )
 from gnosis.kernel.git_evidence import content_fingerprint
 from gnosis.kernel.input_lock import (
@@ -3360,6 +3364,180 @@ class TestNoUnobservedWindow(unittest.TestCase):
             note = capture.summary["boundary"]["complete_note"]
             self.assertIn("does NOT mean every possible filesystem", note)
             self.assertIn("UNOBSERVED, never CLEAN", note)
+
+
+class TestBundleIsTamperEvident(unittest.TestCase):
+    """F-17: the evidence bundle was the least-protected part of the project
+    — no hash chain, no signature. A capture now writes a manifest that
+    SHA-256s every file plus one bundle_digest over them all, and
+    verify_bundle re-derives it, so any file added, removed or changed after
+    capture is detected. A cryptographic signature (which would also stop an
+    editor recomputing the manifest) is a declared out-of-scope limitation,
+    not a hidden claim.
+    """
+
+    @staticmethod
+    def _repo(root: Path) -> Path:
+        return _make_repo(root)
+
+    @WINDOWS_ONLY
+    def test_a_fresh_bundle_carries_a_manifest_that_verifies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = run_capture(self._repo(root), [_script("pass")], root / "s")
+            manifest = capture.bundle / BUNDLE_MANIFEST
+            self.assertTrue(manifest.exists())
+            recorded = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertIn("SUMMARY.json", recorded["files"])
+            self.assertNotIn(BUNDLE_MANIFEST, recorded["files"])  # cannot hash itself
+            self.assertRegex(recorded["bundle_digest"], r"\A[0-9a-f]{64}\Z")
+
+            result = verify_bundle(capture.bundle)
+            self.assertTrue(result.verified, result.problems)
+            self.assertEqual(result.bundle_digest, recorded["bundle_digest"])
+
+    @WINDOWS_ONLY
+    def test_editing_any_bundle_file_is_detected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = run_capture(self._repo(root), [_script("pass")], root / "s")
+            summary = capture.bundle / "SUMMARY.json"
+            summary.write_text(summary.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+
+            result = verify_bundle(capture.bundle)
+            self.assertFalse(result.verified)
+            self.assertTrue(any("changed: SUMMARY.json" in p for p in result.problems),
+                            result.problems)
+
+    @WINDOWS_ONLY
+    def test_adding_or_removing_a_bundle_file_is_detected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = run_capture(self._repo(root), [_script("pass")], root / "s")
+
+            planted = capture.bundle / "planted.txt"
+            planted.write_text("smuggled", encoding="utf-8")
+            self.assertFalse(verify_bundle(capture.bundle).verified)
+            planted.unlink()
+
+            (capture.bundle / "input-manifest.json").unlink()
+            result = verify_bundle(capture.bundle)
+            self.assertFalse(result.verified)
+            self.assertTrue(any("absent: input-manifest.json" in p
+                                for p in result.problems), result.problems)
+
+    @WINDOWS_ONLY
+    def test_a_recomputed_manifest_that_lies_about_its_digest_is_caught(self):
+        # An editor who changes a file AND its recorded hash but forgets the
+        # bundle_digest is caught; this pins the digest-vs-map cross-check.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = run_capture(self._repo(root), [_script("pass")], root / "s")
+            manifest = capture.bundle / BUNDLE_MANIFEST
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            # Flip one recorded hash without touching bundle_digest.
+            key = next(iter(data["files"]))
+            data["files"][key] = "0" * 64
+            manifest.write_text(json.dumps(data), encoding="utf-8")
+            result = verify_bundle(capture.bundle)
+            self.assertFalse(result.verified)
+
+    def test_a_missing_manifest_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            empty = Path(tmp) / "not-a-bundle"
+            empty.mkdir()
+            self.assertFalse(verify_bundle(empty).verified)
+
+
+class TestGitMachineryIsJudged(unittest.TestCase):
+    """F-17 / the F-14 residual: most `.git` writes are git's own bookkeeping
+    during a read and stay counted, but a hook (code that runs on the next
+    git op) or config (what a filter runs, where a push goes) written during
+    the capture is a tamper of the machinery that produced the evidence, and
+    is judged. Caught in the interval, so a create+delete is caught too —
+    a before/after machinery fingerprint is blind to that (measured).
+    """
+
+    @staticmethod
+    def _repo(root: Path) -> Path:
+        return _make_repo(root)
+
+    # -- the predicate ------------------------------------------------------
+    def test_the_predicate_names_the_execute_or_redirect_surface(self):
+        self.assertTrue(_is_git_machinery_tamper(".git/hooks/pre-commit"))
+        self.assertTrue(_is_git_machinery_tamper(".git/config"))
+        self.assertTrue(_is_git_machinery_tamper(".git/config:stream"))
+        self.assertTrue(_is_git_machinery_tamper(".git/hooks/pre-push:x"))
+        # not the execute/redirect surface:
+        self.assertFalse(_is_git_machinery_tamper(".git/hooks/pre-commit.sample"))
+        self.assertFalse(_is_git_machinery_tamper(".git/index"))
+        self.assertFalse(_is_git_machinery_tamper(".git/refs/heads/main"))
+        self.assertFalse(_is_git_machinery_tamper(".git/objects/ab/cdef"))
+        self.assertFalse(_is_git_machinery_tamper("src/config"))  # not under .git
+
+    # -- end to end ---------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_installing_a_hook_during_the_capture_is_judged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = run_capture(self._repo(root), [_script(
+                "import os",
+                "open(os.path.join('.git', 'hooks', 'pre-commit'), "
+                "'w', encoding='utf-8').write('evil')",
+            )], root / "s")
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.MACHINERY_MUTATED)
+            self.assertFalse(capture.evidence_valid)
+            self.assertEqual(capture.exit_code, EXIT_MACHINERY_MUTATED)
+            self.assertTrue(any(".git/hooks/pre-commit" in v
+                                for v in capture.boundary.violations),
+                            capture.boundary.violations)
+
+    @WINDOWS_ONLY
+    def test_a_hook_installed_and_deleted_in_the_interval_is_judged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = run_capture(self._repo(root), [_script(
+                "import os",
+                "h = os.path.join('.git', 'hooks', 'pre-commit')",
+                "open(h, 'w', encoding='utf-8').write('evil')",
+                "os.remove(h)",
+            )], root / "s")
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.MACHINERY_MUTATED)
+            self.assertEqual(capture.exit_code, EXIT_MACHINERY_MUTATED)
+
+    @WINDOWS_ONLY
+    def test_rewriting_git_config_during_the_capture_is_judged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = run_capture(self._repo(root), [_script(
+                "import subprocess",
+                "subprocess.run(['git', 'config', 'core.pager', 'evil'], check=True)",
+            )], root / "s")
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.MACHINERY_MUTATED)
+            self.assertEqual(capture.exit_code, EXIT_MACHINERY_MUTATED)
+
+    @WINDOWS_ONLY
+    def test_a_sample_hook_write_is_not_a_violation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = run_capture(self._repo(root), [_script(
+                "import os",
+                "open(os.path.join('.git', 'hooks', 'pre-commit.sample'), "
+                "'w', encoding='utf-8').write('inert')",
+            )], root / "s")
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
+            self.assertTrue(capture.evidence_valid)
+
+    @WINDOWS_ONLY
+    def test_ordinary_git_bookkeeping_stays_counted_not_judged(self):
+        # A normal capture: git updates its index/refs while reading, which
+        # must stay counted (machinery), not become a violation.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = run_capture(self._repo(root), [_script("pass")], root / "s")
+            self.assertIs(capture.boundary.verdict, ObservationVerdict.CLEAN)
+            self.assertTrue(capture.evidence_valid)
+            self.assertGreater(capture.boundary.machinery_events, 0)
 
 
 if __name__ == "__main__":

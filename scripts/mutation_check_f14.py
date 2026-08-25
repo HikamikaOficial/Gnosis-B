@@ -541,6 +541,46 @@ MUTANTS: list[Mutant] = [
           "                    if owner != self.entry or not stream:",
           "                    if not stream:")],
     ),
+    # MF43..MF47 are F-17's: the evidence bundle is now tamper-evident, and
+    # a hook or config written under .git during the capture is judged.
+    Mutant(
+        "MF43", "the bundle manifest is never written, so the evidence has no "
+                "hash chain and a post-capture edit goes unnoticed",
+        [(CAPTURE,
+          "    write_bundle_manifest(staging)",
+          "    pass  # write_bundle_manifest(staging)")],
+    ),
+    Mutant(
+        "MF44", "verify_bundle stops comparing hashes, so a changed bundle "
+                "file still verifies",
+        [(CAPTURE,
+          "        if actual != recorded[rel]:",
+          "        if False:")],
+    ),
+    Mutant(
+        "MF45", "a hook or config written under .git is no longer judged, so "
+                "installing a hook during the capture reads as CLEAN",
+        [(CAPTURE,
+          "    owner = path.split(\":\", 1)[0]\n"
+          "    if owner.startswith(_GIT_HOOKS) and not owner.endswith(_HOOK_SAMPLE):\n"
+          "        return True\n"
+          "    return owner == _GIT_CONFIG",
+          "    return False")],
+    ),
+    Mutant(
+        "MF46", "the .sample exclusion is dropped, so writing an inert sample "
+                "hook is falsely a machinery tamper",
+        [(CAPTURE,
+          "    if owner.startswith(_GIT_HOOKS) and not owner.endswith(_HOOK_SAMPLE):",
+          "    if owner.startswith(_GIT_HOOKS):")],
+    ),
+    Mutant(
+        "MF47", "the machinery-tamper verdict is dropped, so a judged hook "
+                "write is collected and then ignored",
+        [(CAPTURE,
+          "    if machinery_violations:",
+          "    if False:")],
+    ),
 ]
 
 

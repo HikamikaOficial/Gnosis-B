@@ -3,7 +3,17 @@
 **Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION; THE PROBE HAS A CALLER; MULTI-CREDENTIAL ROTATION
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
-**Last update:** 2026-08-25 (F-34 closed; **F-14 CLOSED by independent review #12**; the stale lines below are F-19..F-32, still open)
+**Last update:** 2026-08-25 (F-34 closed; **F-14 CLOSED by independent review #12**; **F-17 repaired (ADR-0027), pending first review**; the stale lines below are F-19..F-32, still open)
+
+## F-17 — tamper-evidence of the evidence (ADR-0027, repaired, NOT closed)
+
+**F-17 is repaired and PENDING its first independent review; it is NOT closed.** Selected after F-14 because the `.git/ counted-not-judged` residual was parked here, but the authoritative finding is broader: the evidence bundle was the least-protected part of the project — no hash-chain, no signature. Repair, all additive and touching no accepted F-14 contract:
+
+- **Bundle tamper-evidence.** `write_bundle_manifest` writes `MANIFEST.sha256.json` last (covering `SUMMARY.json`): a SHA-256 of every bundle file plus one `bundle_digest`. `verify_bundle()` re-derives it and fails closed on any file added, removed or changed. HEAD/status were already inside `SUMMARY.json` from F-14's rounds. A cryptographic signature is a declared out-of-scope limitation (needs key management), not a faked guarantee.
+- **`.git/` machinery judged.** A write to `.git/hooks/**` (not `.sample`) or `.git/config` during the capture is `MACHINERY_MUTATED` (exit 9) — code that runs on the next git op, or what a filter runs / where a push goes. Observed in the interval, so a hook create+delete ABA is caught; a before/after fingerprint is blind (measured). Ordinary git bookkeeping (index, refs, logs, objects) stays counted; a normal capture produces ~37 machinery events, 0 judged, and stays CLEAN.
+
+179 directed tests; forty-seven mutants. No F-14 guarantee weakened; `MACHINERY_MUTATED` only adds a fail-closed verdict.
+
 
 ## Kernel hardening (post-Phase -1)
 
