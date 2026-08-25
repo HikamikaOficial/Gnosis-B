@@ -3,7 +3,7 @@
 **Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION; THE PROBE HAS A CALLER; MULTI-CREDENTIAL ROTATION
 **Target machine:** Nicol
 **Phase:** 1 — Kernel hardening per archaeology directives
-**Last update:** 2026-08-25 (F-34 closed; F-14 repaired ten times and audited an eleventh, still open; the stale lines below are F-19..F-32, still open)
+**Last update:** 2026-08-25 (F-34 closed; **F-14 CLOSED by independent review #12**; the stale lines below are F-19..F-32, still open)
 
 ## Kernel hardening (post-Phase -1)
 
@@ -774,11 +774,23 @@ mechanism was lost -- and separated in the evidence (`complete_note`) from
 the snapshot booleans, so nothing claims "every filesystem modification was
 observed". The only production change is that one advisory string.
 
-**F-14 is still NOT closed.** Ten repairs and one audit now, tested (166
-tests) and mutation-checked (forty-two mutants, none survived), it awaits
-a TWELFTH independent review. Ten reviews found a defect; the eleventh
-audited the interval guarantee and found no new bypass -- which is
-evidence, not proof.
+**F-14 is CLOSED.** The twelfth independent review (2026-08-25) returned
+APPROVED / CLOSE F-14 within the declared formal contract, after ten
+repairs and an eleventh-round audit: tested (166 directed, 1040 full
+suite) and mutation-checked (forty-two mutants, none survived). Ten
+reviews found a defect; the eleventh found no new bypass; the twelfth
+accepted the state. Implementation `1672a8a`, evidence `cd6d1b5`, bundle
+`.gnosis/evidence/20260825T135642Z/`, closure recorded in ADR-0026 and
+`docs/V1_COMPLIANCE_MATRIX.md`.
+
+The closure preserves, and does not soften, the declared limitations:
+`fully_identified`/`fully_bound` are snapshot properties, not interval
+claims; `COMPLETE` is limited to the supported observation mechanism;
+fail-closed on overflow / observer failure / unwatchable parent; the
+`modified_stream` tolerance is conditional on revalidation if the platform
+or a write route changes; the scope is Windows + local + fixed + NTFS;
+`.git/` counted-not-judged belongs to F-17; and F-15..F-18 remain open and
+untouched.
 
 **Overlap recorded, not claimed:** F-15 (the unused primitive) is what
 this script now uses; F-16 (capture order) no longer affects the binding

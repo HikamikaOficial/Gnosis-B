@@ -264,9 +264,19 @@ when an ADR with captured evidence backs it.
   now a demonstrated invariant (a locked stream admits no modification
   route); COMPLETE formally defined and separated from the snapshot
   booleans (`complete_note`). Only production change: that advisory
-  string. 166 tests; forty-two mutants, none survived. **Next action:
-  hand this unit to a TWELFTH independent review.** It is not closed until
-  one returns without findings.
+  string. 166 tests; forty-two mutants, none survived.
+
+- **Twelfth independent review (2026-08-25): APPROVED / CLOSE F-14.**
+  **F-14 is CLOSED** within the declared formal contract. Implementation
+  `1672a8a`, evidence `cd6d1b5`, bundle
+  `.gnosis/evidence/20260825T135642Z/`, closure in ADR-0026 and the
+  compliance matrix. The declared limitations are preserved and not
+  softened (snapshot-scoped `fully_identified`/`fully_bound`; `COMPLETE`
+  limited to the supported mechanism; fail-closed on overflow/observer
+  failure/unwatchable parent; conditional `modified_stream` tolerance;
+  Windows+local+fixed+NTFS scope; `.git/` counted-not-judged is F-17).
+  **No further F-14 action.** F-15..F-18 remain open and untouched; do not
+  start F-15 until instructed.
 
 - **Observed overlap with F-15..F-18, none of them marked repaired:**
   F-15's suggested correction is what this script now does, but the

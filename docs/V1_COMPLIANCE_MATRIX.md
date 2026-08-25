@@ -2,8 +2,9 @@
 
 **Última actualización:** 2026-08-25 · **Unidad:** ADR-0026 + once
 revisiones independientes (las diez anteriores más **F-14.11 auditoría de
-CLEAN sobre COMPLETE / memory-mapping**) — **F-14 sigue ABIERTO**,
-entregado para una duodécima revisión independiente.
+CLEAN sobre COMPLETE / memory-mapping**) — **F-14 CERRADO** por la
+**duodécima revisión independiente (2026-08-25): APPROVED**, dentro del
+contrato formal declarado.
 Unidad anterior: ADR-0025 + cuatro addenda (FAIL PARCIAL, FAIL PARCIAL,
 **FAIL CRÍTICO**, **PASS**) — F-34 **CERRADO** por la cuarta revisión,
 sin hallazgos sobre el código `9c6064c` y la evidencia `f02e18e`
@@ -93,8 +94,9 @@ siguen abiertas y F-13 no se declara cerrado.
 | Hallazgo | ADR | Cerrado | Veredicto que lo cierra |
 |---|---|---|---|
 | **F-34** — `COMPLETED` sin evidencia | ADR-0025 (+4 addenda) | 2026-08-22 | **cuarta revisión independiente: PASS**, sin hallazgos en alcance; código `9c6064c`, evidencia `f02e18e` |
+| **F-14** — la evidencia no vinculaba los bytes probados (y sus derivados a lo largo de once revisiones) | ADR-0026 (+11 addenda) | 2026-08-25 | **duodécima revisión independiente: APPROVED**, dentro del contrato formal; implementación `1672a8a`, evidencia `cd6d1b5`, paquete `.gnosis/evidence/20260825T135642Z/` |
 
-Uno de 43. F-34 ya fue marcado cerrado una vez, el 2026-08-22, y hubo que
+Dos de 43. F-34 ya fue marcado cerrado una vez, el 2026-08-22, y hubo que
 retirarlo de esta sección cuando tres revisiones independientes
 consecutivas encontraron un lector nuevo del mismo campo. Vuelve ahora
 por el único motivo que esta tabla admite: una revisión independiente que
@@ -111,12 +113,16 @@ conserva abajo sin reescribir.
 | **F-34 (tercera revisión)** — `CompositeVerifier` lavaba evidencia MALFORMED (`all(r.passed …)` → `passed=True`) y un compuesto vacío pasaba con `all([])`; los tres lectores diferidos seguían vivos; **FAIL CRÍTICO** | ADR-0025 addendum 3 | 2026-08-22 | `.gnosis/evidence/20260822T181937Z/` (874 passed, árbol limpio en `9c6064c`; nueve mutantes capturados) |
 | **F-34 (cuarta revisión)** — las dos reproducciones críticas fallan cerradas, `CompositeVerifier` con un miembro `passed=1` produce `MalformedEvidence` y el motor termina FAILED/PARTIAL registrando el problema, el compuesto vacío lanza `EmptyCompositeError`, y no queda lector productivo de `.passed` que decida fuera de `verification_verdict()`; **PASS, sin hallazgos** | ADR-0025 addendum 4 | 2026-08-22 | revisada sobre código `9c6064c` y evidencia `f02e18e`; 249 pruebas y 39 subtests dirigidos verificados por el revisor; el bundle registra 874 pruebas, 60 subtests, mypy limpio y ruff en baseline |
 
-## F-14 — reparación entregada, PENDIENTE DE REVISIÓN INDEPENDIENTE
+## F-14 — CERRADO por la duodécima revisión independiente
 
-**F-14 sigue ABIERTO.** La reparación existe, está probada y tiene
-evidencia; lo que no tiene todavía es una revisión independiente. Esta
-tabla no mueve un hallazgo a «cerrado» por parecerlo, y menos después de
-lo que costó F-34.
+**F-14 está CERRADO.** Tras diez reparaciones y una auditoría, la
+**duodécima revisión independiente (2026-08-25)** devolvió **APPROVED /
+CLOSE F-14** dentro del contrato formal declarado. Esta tabla mueve un
+hallazgo a «cerrado» por la única regla que admite: una revisión
+independiente que acepta el estado. El historial completo de las once
+revisiones previas se conserva abajo, y las limitaciones y condiciones de
+revalidación se preservan explícitamente y **no** se convierten en
+garantías más fuertes.
 
 | Hallazgo | ADR | Fecha | Estado | Evidencia |
 |---|---|---|---|---|
@@ -184,6 +190,7 @@ lo ve), y la frontera entera es un mecanismo de Windows.
 | **F-14 (novena revisión)** — **NTFS Alternate Data Streams**. Un path no es un flujo de bytes: en NTFS es `::$DATA` más cualquier número de streams con nombre, cada uno abrible como `path:name`, cada uno legible por un check, y ninguno visible para `git ls-files`, para `Path.read_bytes` ni para un handle sobre el stream principal. Reproducido antes de tocar código: con `probe.txt::$DATA` intacto y `probe.txt:gnosis-f14` pasando de `ALLOW` a `DENY`, el check leyó bytes distintos y los dos paquetes salieron con `identity_digest` y `content_digest` **idénticos**, ambos `evidence_valid: true`. Medido además: el handle sobre el stream principal dejaba el stream con nombre **escribible y borrable**, y los directorios también llevan streams | ADR-0026 addendum 9 | 2026-08-25 | **reparado, pendiente de décima revisión** | opción **A**: cada stream con nombre de cada INPUT —y de cada directorio, incluida la raíz— recibe su propio handle, su propia identidad y su propio digest leído a través de ese handle. La identidad es `owner-id:file-id:nombre:longitud` porque `FILE_ID_INFO` devuelve el MISMO id para todos los streams de un fichero; sólo el digest separa dos contenidos de igual longitud, y hay una prueba que lo demuestra. Enumeración con `FindFirstStreamW`; un path cuyos streams no se pueden enumerar es **refusal**, nunca un encogimiento de hombros. Ningún share mode impide **crear** un stream nuevo (medido, incluido `FILE_SHARE_NONE`), así que hay un segundo detector independiente del observador: el inventario se toma con la frontera levantada y otra vez tras los checks, y cualquier stream que aparezca, desaparezca o cambie de longitud es `STREAMS_MUTATED`, salida 8. El disco se recorre para los 83 directorios que no contienen ningún input. `outputs_at_start` hashea también los streams preexistentes. 148 pruebas; treinta y cinco mutantes, ninguno sobrevive. Captura `.gnosis/evidence/20260825T043839Z/` sobre `42f461b`: 90.261 inputs, **0 streams con nombre** en este árbol (ítem 8: ningún falso positivo), `identity_digest eb7af0e4…`, `content_digest 3568d3ef…`, frontera CLEAN, `evidence_valid` true, salida 0 |
 | **F-14 (décima revisión, F-14.10)** — **ABA de named streams sobre directorios**. Un stream con nombre creado y borrado sobre un **directorio** durante el intervalo deja los dos inventarios idénticos; el cerrojo no puede pre-abrir un stream que aún no existe; y el observador perdonaba el único evento que un directorio produce, `modified <dir>`, porque un movimiento de entradas produce lo mismo. Reproducido antes de tocar código contra `git archive 8dd621c`, por `run_capture`: `pkg:secret` (y un stream sobre la **raíz** del repo) creado→leído→borrado, el check leyó `ALLOW`, frontera **CLEAN**, `evidence_valid: true`, salida 0 | ADR-0026 addendum 10 | 2026-08-25 | **reparado, pendiente de undécima revisión** | el observador pide ahora los filtros de stream (`0x200|0x400|0x800`) y mapea las acciones 6/7/8; un `added_stream`/`removed_stream` sobre cualquier ruta cubierta es `STREAMS_MUTATED` (salida 8). Medido: un `added_stream` distingue el stream de un movimiento de entradas (que no produce acción de stream), y **leer** un stream produce `modified_stream` —así que esa acción no es violación; el capture lee cada stream bloqueado para hashearlo, y un **escritura** sobre un stream presente al bloquear está prohibida por el cerrojo—. Los streams propios de la **raíz** son invisibles a su propio watch recursivo, así que un segundo watch **no recursivo sobre el padre** los cubre, filtrado a la entrada de la raíz y con su propia barrera; si no hay padre observable, la observación es INCOMPLETA (fail-closed), no CLEAN. El USN journal registra el ABA (`STREAM_CHANGE`, append-only) pero exige handle de volumen con privilegios de admin, así que corrobora y no se usa como dependencia. `fully_identified`/`fully_bound` se documentan explícitamente como propiedades del **snapshot**, no del intervalo (`scope_note` en el paquete). 156 pruebas; cuarenta mutantes, ninguno sobrevive |
 | **F-14 (undécima revisión, F-14.11)** — auditoría de `CLEAN over COMPLETE observation`: ¿existe una ventana temporal sin observar entre el inicio real del boundary y el final real de la captura, en especial vía **memory mapping** creado antes del boundary? **No se halló bypass nuevo.** Medido en NTFS real: una escritura por *mapping* cambia los bytes al instante y `ReadDirectoryChangesW` no notifica nada (ni siquiera en `FlushViewOfFile`), así que la observación no es la defensa; lo es el cerrojo, que **falla cerrado** ante cualquier *mapping* escribible vivo (`ERROR_SHARING_VIOLATION`), bajo todos los share modes, en fichero y en named stream, y no permite crear uno nuevo mientras sostiene el input; `run_capture` con un *mapping* vivo → UNPROTECTED, salida 6, sin ejecutar checks. COW coexiste pero no toca el fichero | ADR-0026 addendum 11 | 2026-08-25 | **auditado, pendiente de duodécima revisión** | única alteración productiva: `complete_note` en el paquete (honestidad; ninguna lógica resultó defectuosa). Lifecycle confirmado en el código: watch armado ANTES del boundary; barrera ordenada drenada ANTES de aceptar CLEAN → sin start-race ni end-race. Overflow / watch caído / padre inobservable → UNOBSERVED, nunca CLEAN. Invariante `modified_stream` demostrada: un stream bloqueado no admite sobrescritura, truncado, borrado, segundo handle escribible ni *mapping*. `COMPLETE` definido formalmente como «ningún evento del mecanismo soportado se perdió», separado de `fully_identified`/`fully_bound` (propiedades del snapshot). 166 pruebas; cuarenta y dos mutantes, ninguno sobrevive |
+| **F-14 (duodécima revisión) — CIERRE** | ADR-0026 (cierre) | 2026-08-25 | **APPROVED / CLOSE F-14** | la revisión independiente acepta: `fully_identified`/`fully_bound` son propiedades del **snapshot** (no del intervalo); `COMPLETE` se limita al mecanismo de observación soportado; no hay ventana sin observar entre el armado de los watchers y la barrera final; overflow / observer failure / unavailable observer / unwatchable parent **fallan cerrado**; el parent watcher cubre la raíz y el ruido de hermanos está probado; el directory ADS ABA queda cubierto dentro de una observación COMPLETE; el escenario memory-mapped se probó en Windows/NTFS real y un *mapping* escribible no puede modificar el objeto con el lock adquirido; los streams bajo lock son inmutables por las rutas medidas; la tolerancia de `modified_stream` se acepta **condicionada a revalidación** si cambia la plataforma o aparece una nueva ruta de escritura; las limitaciones restantes quedan declaradas y no se elevan a garantías. Implementación `1672a8a`, evidencia `cd6d1b5`, paquete `.gnosis/evidence/20260825T135642Z/`. 166 pruebas, 1040 en suite completa, 42 mutantes 0 supervivientes, mypy limpio, Ruff baseline, frontera CLEAN, `evidence_valid=true` |
 
 **F-14 está demostrado sobre:** Windows, volumen local, tipo `fixed`,
 filesystem `NTFS`. Y sobre nada más. **ReFS es una extensión candidata
@@ -194,21 +201,21 @@ de suponerse equivalente.
 
 ## Hallazgos abiertos
 
-F-01, F-02, F-03, F-04, F-05, F-07, F-08, F-10, F-12, F-13, **F-14**,
+F-01, F-02, F-03, F-04, F-05, F-07, F-08, F-10, F-12, F-13,
 F-15, F-16, F-17, F-18, F-19…F-32, F-33, F-35, F-36, F-37, F-38, F-39,
-F-40.
+F-40. (**F-14 ya no está aquí: CERRADO 2026-08-25.**)
 
 **Recuento, para que ningún documento vivo lo repita mal:** el diagnóstico
 congelado tiene **43 elementos** (F-01…F-42 más F-29b). De ellos **6 son
-PASS** y no son defectos (F-06, F-09, F-11, F-29b, F-41, F-42), **1 está
-cerrado** (F-34) y **36 siguen abiertos** — exactamente los enumerados
-arriba, F-14 incluido: reparado en ADR-0026 y **no** cerrado, porque
-ninguna revisión independiente lo ha visto todavía. El recuento no cambia
-en esta unidad. Historial del recuento, porque ha estado mal dos veces: una
+PASS** y no son defectos (F-06, F-09, F-11, F-29b, F-41, F-42), **2 están
+cerrados** (F-34 y ahora F-14) y **35 siguen abiertos** — los enumerados
+arriba, ya **sin** F-14, que la duodécima revisión independiente cerró el
+2026-08-25. Historial del recuento, porque ha estado mal varias veces: una
 versión dijo 41, contando los PASS y F-34 como trabajo; otra dijo
 "1 cerrado (F-34)" antes de que la tercera revisión lo reabriera; otra
-dijo "0 cerrados y 37 abiertos", correcto mientras F-34 estuvo reabierto.
-El recuento vivo es **6 PASS · 1 cerrado · 36 abiertos**.
+dijo "0 cerrados y 37 abiertos", correcto mientras F-34 estuvo reabierto;
+y durante once revisiones F-14 estuvo reparado pero abierto. El recuento
+vivo es **6 PASS · 2 cerrados · 35 abiertos**.
 
 Ninguno de los 36 se ha tocado en ninguna de las cuatro pasadas de F-34.
 ADR-0026 toca exactamente uno de ellos, F-14, y lo deja abierto. Los 15

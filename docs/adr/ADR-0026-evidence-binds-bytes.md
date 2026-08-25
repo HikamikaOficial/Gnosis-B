@@ -1,6 +1,6 @@
 # ADR-0026 — Evidence that cannot name its own bytes is a transcript, not proof
 
-- Status: ACCEPTED
+- Status: ACCEPTED — **F-14 CLOSED by independent review #12 (2026-08-25): APPROVED**, within the declared formal contract. See the closure section at the end of this ADR.
 - Date: 2026-08-22
 - Repairs: **F-14** (`docs/V1_TRACEABILITY_AUDIT.md`) — and F-14 only.
 - Independent review, round 1 (Codex, 2026-08-23): **FAIL CRÍTICO** — the
@@ -45,10 +45,12 @@
   object behind each handle, the window while the locks are taken, and
   the volume the guarantee rests on. All four answered by measurement in
   addendum 3.
-- **An eighth independent review is OUTSTANDING**; F-14 stays OPEN in
-  `docs/V1_COMPLIANCE_MATRIX.md` until one returns without findings.
-  Three reviews have now found something this unit's own tests and
-  mutants did not.
+- **Review history (superseded by the closure below):** rounds 1–11 are
+  recorded in the addenda at the foot of this ADR, each with the finding it
+  raised and the repair or measurement that answered it. Review #12
+  (2026-08-25) returned APPROVED and CLOSED F-14. The per-round bullets
+  above are kept as the record of when they were written; the addenda and
+  the closure section are the authority for the final state.
 - Boundary domain: every path git can enumerate — tracked, untracked and
   **ignored** — is an INPUT unless declared an OUTPUT or OUT_OF_SCOPE
   root in `scripts/capture_evidence.py`. `git check-ignore` is not an
@@ -76,9 +78,11 @@
   the project whose own `SUMMARY.json` states the identity of the tree it
   ran against: `320dfc5ccebe8904194c78c474af7f1295d637f92f27805ae33555c520fcbf7c`,
   before and after, `BOUND`, drift empty.
-- Scope: F-14 only. Of the 43 items in the frozen audit, 6 are PASS, 1 is
-  closed (F-34) and 36 are open. This unit closes none of them — F-14
-  included, which remains open pending review.
+- Scope: F-14 only. Of the 43 items in the frozen audit, 6 are PASS and 2
+  are now closed (F-34 and, as of review #12 on 2026-08-25, F-14), leaving
+  35 open. This unit repairs F-14 only; F-15..F-18 and the rest remain open
+  and untouched. `docs/V1_TRACEABILITY_AUDIT.md` stays frozen; the closure
+  is recorded in `docs/V1_COMPLIANCE_MATRIX.md` and here.
 
 ## Context
 
@@ -2570,3 +2574,85 @@ Four artifacts beyond the gate transcripts:
   which is evidence, not proof; a twelfth may still find one.
 - The residuals above.
 - **F-15..F-18 remain open and untouched.**
+
+## Closure — twelfth independent review, 2026-08-25: **APPROVED / CLOSE F-14**
+
+The twelfth independent review returned `APPROVED` with
+`RECOMMENDATION: CLOSE F-14`, judging that the blockers which kept F-14
+open are sufficiently resolved **within the declared formal contract**.
+F-14 is therefore CLOSED. Eleven prior reviews each found a defect or a
+scope gap; the eleventh audited the interval guarantee and found no new
+bypass; the twelfth accepted the state.
+
+### Reference commits and evidence
+
+- Implementation commit: `1672a8a` (the eleventh-review audit tree; the
+  full repair spans ADR-0026 and its eleven addenda).
+- Evidence commit: `cd6d1b5`.
+- Evidence bundle: `.gnosis/evidence/20260825T135642Z/`, bound to
+  `1672a8a` — `identity_digest 7deb630b…`, `content_digest e71a35de…`,
+  90,296 inputs, boundary CLEAN, `evidence_valid` true, exit 0; 166
+  directed tests, 1040 in the full suite, 42 mutants none survived, mypy
+  clean, ruff at the 19 baseline.
+- Closure commit: recorded in the git log as the commit that carries this
+  section; the historical commits above are not rewritten.
+
+### Properties the independent review accepted
+
+- `fully_identified` is **only** a property of the snapshot taken when the
+  boundary went up, not a claim about every object that could have existed
+  during the interval.
+- `fully_bound` is **only** a property of the covered objects in that
+  snapshot, not a claim of temporal completeness.
+- `COMPLETE observation` is **explicitly limited to the supported
+  observation mechanism** (ReadDirectoryChangesW, recursive plus the
+  non-recursive parent watch for the root's own streams).
+- There is no unobserved window between the effective arming of the
+  watchers and the drained final barrier, within the supported lifecycle.
+- Overflow, observer failure, an unavailable observer, and an unwatchable
+  parent all **fail closed** and cannot produce CLEAN.
+- The parent watcher covers the relevant changes on the root, and sibling
+  noise has been tested.
+- The directory-ADS ABA that previously kept F-14 open is covered within a
+  COMPLETE observation.
+- The memory-mapped scenario was tested on real Windows/NTFS; a writable
+  mapping cannot modify the object once the enforcing lock is acquired.
+- Streams present under the lock are immutable by the measured routes.
+- The tolerance of `modified_stream` is accepted within the current scope
+  and **conditioned on revalidation** if the platform changes or a new
+  write route appears.
+
+### Limitations and revalidation conditions — preserved, not softened
+
+These remain in force and must NOT be promoted into stronger guarantees:
+
+- **Scope:** the guarantee holds on **Windows + local + fixed + NTFS**
+  only. Every other drive type, filesystem, and UNC path is refused before
+  any input is opened. ReFS is a candidate extension pending real
+  validation.
+- **`COMPLETE` is not universal observation.** It means no event from the
+  supported mechanism was lost; it does not mean every possible filesystem
+  modification was observed. A memory-mapped write is caught by the lock
+  failing closed, not by observation.
+- **`modified_stream` tolerance is conditional.** It rests on a measured
+  invariant — a stream present at lock time admits no overwrite, truncate,
+  delete, second writable handle, or writable mapping. If a future
+  platform or a new write route breaks that invariant, this tolerance must
+  be revalidated (L-0057).
+- **`.git/` is counted, not judged** — that residual belongs to **F-17**,
+  not F-14.
+- **The interval is `[watch arm, barrier]`.** A write after the barrier is
+  after the capture, not part of it.
+- **The absence of a known bypass is strong evidence within this scope,
+  not a claim of absolute impossibility.**
+- **F-15, F-16, F-17 and F-18 remain open and untouched.**
+
+### Why the existing evidence remains valid after this documentary closure
+
+This closure edits documentation only; it changes no production logic and
+no test. The evidence bundle attests to the exact tree it was captured
+over (`1672a8a`), identified by content digests recorded inside its own
+`SUMMARY.json`. A later documentary commit produces a new tree but does
+not alter the historical commit `1672a8a` or the bundle bound to it, so
+the digests still correspond byte-for-byte to what they attest. No
+regeneration is required, and none was done.
