@@ -1,0 +1,11 @@
+{
+  "bundle_digest": "b23dc24a2d7196ee5eedb36eae4b56a40a44dbd40314c323f064fd46b7c7bf1f",
+  "files": {
+    "CAPTURE-NOTE.md": "67bde794a9735d01344fe680a9e6df7ab3ec4a8384c66ebd93bb615dbb1cb3e3",
+    "TOOLCHAIN-RESULTS.txt": "c560cf64f2ce9bbc62293562fe12ec1b5491d217b4ebde9f6a6451ee7196287a",
+    "f17_toolchain_orchestrator.ps1": "444c4cb4c6f9e5b5b4af1e7bbecae5acc57f23c843871d525ee52200de52607e",
+    "worker_toolchain.ps1": "0c29c30c194e9ac54ababaaf9b224d4b961902931acb331639b6c0bfdde30fbb"
+  },
+  "note": "SHA-256 of every file in this bundle. bundle_digest is one hash over the whole map. Re-derive it with verify_bundle(): any file added, removed or changed after capture is detected. The manifest cannot hash itself, so it is the one file not listed; a cryptographic signature over bundle_digest \u2014 which would also stop an editor from recomputing this manifest \u2014 needs key management that is out of scope and is a declared limitation, not a claim.",
+  "unlisted": "MANIFEST.sha256.json"
+}

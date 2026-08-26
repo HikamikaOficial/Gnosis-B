@@ -1114,3 +1114,62 @@ code, tests, dev tools) stays worker-writable and worker-owned.
   operational change the operator must approve.
 - A/A' (same-user MIC) stays as defense-in-depth; the MIC lab is kept.
 - No wiring, no §14, no fresh capture this round (by instruction). F-17 OPEN.
+
+## Eighth-review addendum — Dedicated-worker TOOLCHAIN qualification (2026-08-26)
+
+Operator-authorized, reversible OS-real probe. The feasibility probe (seventh
+review) qualified the *security boundary* but left the *toolchain* untested
+relocated. This probe proves the full Gnosis worker toolchain runs from a
+worker-non-writable root outside the operator profile.
+
+**Setup.** Dedicated non-admin worker `GnosisWorkerProbe` (group `Usuarios`,
+admin=False), launched via `CreateProcessWithLogonW` (no handle inheritance),
+crypto-random SecureString password never materialized as plaintext, deleted in
+rollback. Toolchain root `C:\ProgramData\GnosisWorkerToolchainProbe` holds
+disposable copies of python 3.12.14 + venv site-packages, `claude.exe`,
+`codex.ps1` + `@openai/codex`, and the gnosis package. ACL = allowlist-only:
+`/inheritance:r` + Administrators:F + SYSTEM:F + Usuarios:(OI)(CI)**RX** — no
+DENY (a DENY on `Usuarios` also blocks admins who are members). Node and Git are
+the shared Program Files installs (read-only to Users). Worktree/scripts under
+`C:\ProgramData\GnosisWorkerTCprobe`, OUTSIDE `C:\Users\nicol`.
+
+**Result = `TOOLCHAIN RESULT: QUALIFIED`.** As the worker: all five toolchain
+binaries WRITE-DENIED (`UnauthorizedAccessException`); python runs, imports the
+stdlib and `gnosis.kernel.canonical`, and runs pytest (`1 passed in 0.03s`);
+node v24.19.0; git commit PASS; claude 2.1.246 and codex-cli 0.148.0 both
+STARTUP PASS (`--version` only, no login — missing-auth is EXPECTED ISOLATION,
+not a bug); a worker-planted `evilmod.py` in the worker's CWD did NOT poison the
+trusted import from the RX-only ToolRoot (`TRUSTED_IMPORT_STILL_CLEAN`); operator
+`.claude`/`.codex`/`.ssh` are ABSENT-from-worker.
+
+**Hygiene.** `pycache_in_toolchain_after=True` is pre-existing `.pyc` from the
+site-packages copy plus an admin self-test; every worker write to the toolchain
+is denied, so pytest ran without caching bytecode into the RX root — RX-only does
+not break pytest. Secret scan clean (the only match is a SecureString *variable
+reference*, no value).
+
+**Required worker-writable locations (for the wiring).** worktree/CWD (untrusted
+code runs here); a per-worker temp; the git working repo. The trust plane
+(toolchain root, `src/` package + interpreter, AnchorStore, RunIdentity) stays
+RX/worker-non-writable. The worktree and trust plane must both live OUTSIDE the
+operator profile (worker cannot traverse `C:\Users\nicol`).
+
+**External anchor (BLOCKER 2 root of trust).** Evidence bundle
+`.gnosis/evidence/20260826T213728Z/` `bundle_digest` =
+`b23dc24a2d7196ee5eedb36eae4b56a40a44dbd40314c323f064fd46b7c7bf1f`, recorded here
+and on the git commit that carries the bundle; re-derive with
+`verify_bundle(expected_digest=…)`.
+
+**P2 (service-SID publisher) — DESIGN ONLY, not installed.** A publisher running
+under a service account / virtual service SID (`NT SERVICE\<svc>`) would own the
+AnchorStore DACL (service SID: Full; worker SID: no access; SYSTEM/Administrators:
+Full) and run detached from any interactive operator logon, so a compromised
+worker session cannot reach it even by the operator's own token. Trade-offs vs
+P1 (Director-High): P2 survives operator logoff and needs no interactive
+elevation, but requires service install + start authority (a privileged,
+non-reversible operational change) — deferred to the wiring decision, unbuilt.
+
+**Rollback.** No Gnosis* users / services / scheduled tasks / Win32 profiles;
+toolchain root and probe dir deleted; no operator or production ACL changed
+(real paths were only read/copied-from); HEAD unchanged. This probe does NOT
+close F-17: production wiring, §14, and a fresh FULL `run_capture` remain.
