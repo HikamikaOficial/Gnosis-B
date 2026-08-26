@@ -787,3 +787,116 @@ token + ACL, or a mediating service), OR accept the cryptographic
 authenticity root. Only then can `ANCHORED` and `verify_anchored_bundle`
 exist without being a false promise. No production code changed in this
 unit; the finding, the threat model and the §14 contract are the deliverable.
+
+## Fifth review — F-17 OS AUTHORITY BOUNDARY: a real, Windows-enforced boundary
+
+The independent review confirmed BLOCKER C and scoped the next unit to
+building a **real OS authority boundary** — one imposed by Windows, not by
+Python roles, prompts or path convention — such that
+`worker_write_authority ∩ anchor_write_authority = ∅`. Done and demonstrated.
+
+### FASE 1 — the primitive, and the alternatives rejected
+
+**Chosen: Windows Mandatory Integrity Control (MIC).** A process at a lower
+integrity level cannot write an object labelled at a higher level
+(NO_WRITE_UP), kernel-enforced, regardless of the DACL — an authority
+boundary between two processes of the SAME OS user, which is exactly the
+worker/Director situation. Minimal and auditable: one `icacls` label + one
+token operation.
+
+Rejected as heavier or unavailable here:
+- **Separate OS user + DACL** — cleanest conceptually, but creating a user and
+  launching as it needs admin provisioning and `CreateProcessAsUser`
+  (SeAssignPrimaryTokenPrivilege, not held); heavy infra for no more security
+  than MIC gives against T2.
+- **Restricted-SID token (`CreateRestrictedToken`)** — can deny SIDs, but
+  same-user SID identity makes a SID-deny awkward; MIC separates by the
+  orthogonal integrity axis, the right tool.
+- **Job Objects / sandbox / container** — lifecycle/containment, not a
+  write-authority boundary; not needed.
+- **A separate broker service** — a same-user broker is itself
+  worker-writable unless it too is integrity- or user-separated; MIC gives the
+  separation without a new daemon.
+
+Measured here: `SeImpersonatePrivilege` held (so `CreateProcessWithTokenW`
+launches a child with a modified token); `icacls /setintegritylevel
+(OI)(CI)High` applies NO_WRITE_UP; the Director session runs elevated
+(**High**). No admin-provisioned user, no crypto.
+
+### The design
+
+- **AnchorStore** = an NTFS directory labelled **High, NO_WRITE_UP**,
+  inherited. Only a High process can write it.
+- **Publisher / Director** = runs at **High** (elevated). Precondition: the
+  Director runs elevated — within the trust boundary (T3 is out of scope).
+- **Worker** = launched at **MEDIUM** by `authority.run_at_integrity` (a
+  duplicate of the Director token with IL lowered to `S-1-16-8192`, via
+  `CreateProcessWithTokenW`). Medium is the normal user level, so the worker's
+  whole toolchain runs unaffected; only the small anchor is above it.
+
+### OS-real attack matrix (`git-authority-audit.txt`) — all pass
+
+Worker at Medium: `write_worktree` **ALLOWED**; against the High anchor
+**DENIED** on every one of `write`, `create`, `delete`, `rename`,
+`change-DACL`, `lower-label`, `take-ownership`, a **cmd child** write, a
+**python child** write (inheritance — no privilege recovery), and **raising
+its own integrity** (winerr 1314 ERROR_PRIVILEGE_NOT_HELD). Publisher at High:
+**ALLOWED**. After the run the anchor holds only the seed and the publisher's
+record. `worker ∩ anchor = ∅` by effective process authority.
+
+### Anchor record, protocol, confused-deputy defence
+
+`AnchorRecord` binds `{schema, task_id, run_id, repository_id, head_sha,
+tree_identity, bundle_path, bundle_digest, seq, prev_record_digest}` —
+append-only, hash-chained from `GENESIS_HASH`, re-verified before every append.
+`publish_anchor` never trusts the worker: the bundle path comes from the
+Director's `RunIdentity`; `verify_bundle` **recomputes** the digest (no
+worker-supplied digest parameter exists); the bundle's bound `head_sha` must
+equal the Director's, rejecting a cross-run/replay bundle; the record is
+chained and re-read. `verify_anchored_bundle` verifies against the
+**authoritative** store digest, failing closed on a missing record or broken
+chain — a caller cannot pass an arbitrary `expected_digest` and call it trusted.
+
+### Threat model
+
+Defeats **T2** (a malicious same-user Medium worker). NOT **T3** (compromised
+Director — runs High, owns the anchor) or **T4** (admin/full-OS — can relabel).
+Out of scope; no cryptography. STOP conditions checked — worker keeps full
+authority for its own work (Medium is normal); children do not recover
+authority; the worker cannot relabel/re-own the anchor; the publisher is not an
+arbitrary-write oracle; no worker-readable secret. None triggered.
+
+### Tests, mutants, states
+
+`tests/test_authority_boundary.py` — 13 tests (record chain; store
+append-only/chained + refusal to extend a broken chain; honest note that the
+last record's authenticity comes from the OS label not the chain; publication
+protocol; verify uses the authoritative digest and fails closed). Windows +
+elevated only; skips otherwise. `scripts/mutation_check_authority.py` — 7
+mutants AM1..AM7, **0 survived**; baseline/restored GREEN (13 passed).
+`SELF_CONSISTENT` and `ANCHORED` are now distinct and real; `AUTHENTICATED`
+(crypto) stays deferred.
+
+### What is NOT done — why F-17 stays OPEN
+
+1. **Wiring the Medium launch into the production engine/runner** and
+   constructing the store + publisher in the pipeline — touches every agent
+   launch and ADR-0009's isolation model, so it is not landed half-validated.
+2. **A fresh FULL `scripts/capture_evidence.py`** publishing/verifying against
+   the anchor. The cold hash of ~90k inputs (~2.4 GB) plus the suite exceeds
+   this environment's long-run limit (a detached capture crawled and was
+   abandoned), so it could not be produced. Per the review, no fresh full
+   capture ⇒ **do not close F-17.**
+
+§14 (unknown `.git` → fail closed) stays the decided contract; it lands with
+the same closure step.
+
+### Evidence (fifth review)
+
+`.gnosis/evidence/20260826T181515Z/`, `verify_bundle` → verified,
+**`bundle_digest 0dfbeb855240bfde29d2f02dd333eced36ece3c7768c366c301c6e0342ffce5a`**.
+Contains `git-authority-audit.txt` (OS-real matrix), `mutation-check.authority.txt`
+(7/7 caught), `authority-directed.txt` (13 passed), `CAPTURE-NOTE.md`. New code:
+`authority.py`, `tests/test_authority_boundary.py`,
+`scripts/mutation_check_authority.py`; engine/runner untouched (wiring is the
+closure step). mypy clean (59 files), ruff at baseline.

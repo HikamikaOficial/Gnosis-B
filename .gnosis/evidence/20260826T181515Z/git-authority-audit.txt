@@ -1,0 +1,359 @@
+F-17 OS AUTHORITY BOUNDARY — OS-real demonstration (git 2.55, Windows 11)
+==========================================================================
+Property: worker_write_authority ∩ anchor_write_authority = ∅, enforced by
+Windows Mandatory Integrity Control (MIC), not by role/prompt/path. The
+Director/publisher runs at HIGH integrity; the AnchorStore is labelled HIGH
+NO_WRITE_UP; the worker is launched at MEDIUM integrity (a duplicate of the
+Director token with its IL lowered) via CreateProcessWithTokenW. A Medium
+worker and every child it spawns is DENIED write to the High anchor; the High
+publisher is ALLOWED. Productionised as src/gnosis/kernel/authority.py and
+tested by tests/test_authority_boundary.py (13 passed) and mutants AM1..AM7
+(0 survived).
+
+--- output (attack matrix) --------------------------------------------
+PARENT (publisher/Director) integrity: High
+label AnchorStore High: OK
+launching worker at MEDIUM integrity...
+worker exit code: 0
+
+=== WORKER (Medium) authority attack matrix ===
+child_integrity: Medium
+OK worker_write_worktree: ALLOWED  [expect ALLOWED]
+OK worker_write_anchor: DENIED (PermissionError: [Errno 13] Permission denied: 'C:\\Users\\nicol\\AppData\\Local\\Temp\)  [expect DENIED]
+OK worker_create_anchor: DENIED (PermissionError: [Errno 13] Permission denied: 'C:\\Users\\nicol\\AppData\\Local\\Temp\)  [expect DENIED]
+OK worker_delete_anchor: DENIED (PermissionError: [WinError 5] Acceso denegado: 'C:\\Users\\nicol\\AppData\\Local\\Temp\)  [expect DENIED]
+OK worker_rename_anchor: DENIED (PermissionError: [WinError 5] Acceso denegado: 'C:\\Users\\nicol\\AppData\\Local\\Temp\)  [expect DENIED]
+OK worker_change_dacl: DENIED (PermissionError: C:\Users\nicol\AppData\Local\Temp\claude\C--Users-nicol-Desktop-Claude)  [expect DENIED]
+OK worker_lower_label: DENIED (PermissionError: C:\Users\nicol\AppData\Local\Temp\claude\C--Users-nicol-Desktop-Claude)  [expect DENIED]
+OK worker_take_ownership: DENIED (PermissionError: C:\Users\nicol\AppData\Local\Temp\claude\C--Users-nicol-Desktop-Claude)  [expect DENIED]
+OK worker_shell_child_write_anchor: DENIED (PermissionError: cmd redirect to anchor produced no file (denied))  [expect DENIED]
+OK worker_python_child_write_anchor: DENIED (PermissionError: python grandchild denied: DENIED PermissionError)  [expect DENIED]
+OK worker_raise_own_integrity: DENIED (OSError: SetTokenInformation(IL) (winerr 1314))  [expect DENIED]
+
+=== PUBLISHER (High) writes the anchor -> expect ALLOWED ===
+OK  publisher_write_anchor: ALLOWED
+
+anchor contents after the run: ['published_by_director.txt', 'seed.txt']
+(expected: seed.txt + published_by_director.txt only; no worker files)
+
+--- source (investigation harness) ------------------------------------
+
+===== mic_lib.py =====
+"""Windows MIC authority primitives for F-17 OS AUTHORITY BOUNDARY (investigation).
+
+Launch a child at MEDIUM integrity from an elevated (High) parent, using the
+parent's LINKED (filtered, Medium) token via CreateProcessWithTokenW (needs
+SeImpersonatePrivilege, which this environment has enabled). Also: read a
+process token's integrity level, and set a directory's mandatory label.
+
+No production code; scratchpad investigation only.
+"""
+from __future__ import annotations
+import ctypes as C
+from ctypes import wintypes as W
+
+k32 = C.WinDLL("kernel32", use_last_error=True)
+a32 = C.WinDLL("advapi32", use_last_error=True)
+
+# Prototypes — without these, 64-bit HANDLEs (incl. the GetCurrentProcess
+# pseudo-handle 0xFFFFFFFFFFFFFFFF) truncate to 32-bit and calls fail with
+# ERROR_INVALID_HANDLE.
+k32.GetCurrentProcess.restype = W.HANDLE
+k32.GetCurrentProcess.argtypes = []
+k32.WaitForSingleObject.argtypes = [W.HANDLE, W.DWORD]
+k32.GetExitCodeProcess.argtypes = [W.HANDLE, C.POINTER(W.DWORD)]
+k32.CloseHandle.argtypes = [W.HANDLE]
+a32.OpenProcessToken.argtypes = [W.HANDLE, W.DWORD, C.POINTER(W.HANDLE)]
+a32.OpenProcessToken.restype = W.BOOL
+a32.GetTokenInformation.argtypes = [W.HANDLE, C.c_int, C.c_void_p, W.DWORD,
+                                    C.POINTER(W.DWORD)]
+a32.GetTokenInformation.restype = W.BOOL
+a32.DuplicateTokenEx.argtypes = [W.HANDLE, W.DWORD, C.c_void_p, C.c_int,
+                                 C.c_int, C.POINTER(W.HANDLE)]
+a32.DuplicateTokenEx.restype = W.BOOL
+a32.GetSidSubAuthorityCount.argtypes = [C.c_void_p]
+a32.GetSidSubAuthority.argtypes = [C.c_void_p, W.DWORD]
+a32.SetTokenInformation.argtypes = [W.HANDLE, C.c_int, C.c_void_p, W.DWORD]
+a32.SetTokenInformation.restype = W.BOOL
+a32.ConvertStringSidToSidW.argtypes = [W.LPCWSTR, C.POINTER(C.c_void_p)]
+a32.ConvertStringSidToSidW.restype = W.BOOL
+a32.GetLengthSid.argtypes = [C.c_void_p]
+a32.GetLengthSid.restype = W.DWORD
+
+TOKEN_ADJUST_DEFAULT = 0x0080
+SE_GROUP_INTEGRITY = 0x00000020
+SID_MEDIUM = "S-1-16-8192"
+SID_LOW = "S-1-16-4096"
+
+TOKEN_QUERY = 0x0008
+TOKEN_DUPLICATE = 0x0002
+TOKEN_ASSIGN_PRIMARY = 0x0001
+TOKEN_ALL_ACCESS = 0xF01FF
+TokenLinkedToken = 33
+TokenIntegrityLevel = 25
+SecurityImpersonation = 2
+TokenPrimary = 1
+LOGON_WITH_PROFILE = 0x00000001
+CREATE_UNICODE_ENVIRONMENT = 0x00000400
+
+
+class TOKEN_LINKED_TOKEN(C.Structure):
+    _fields_ = [("LinkedToken", W.HANDLE)]
+
+
+class SID_AND_ATTRIBUTES(C.Structure):
+    _fields_ = [("Sid", C.c_void_p), ("Attributes", W.DWORD)]
+
+
+class TOKEN_MANDATORY_LABEL(C.Structure):
+    _fields_ = [("Label", SID_AND_ATTRIBUTES)]
+
+
+class STARTUPINFO(C.Structure):
+    _fields_ = [
+        ("cb", W.DWORD), ("lpReserved", W.LPWSTR), ("lpDesktop", W.LPWSTR),
+        ("lpTitle", W.LPWSTR), ("dwX", W.DWORD), ("dwY", W.DWORD),
+        ("dwXSize", W.DWORD), ("dwYSize", W.DWORD), ("dwXCountChars", W.DWORD),
+        ("dwYCountChars", W.DWORD), ("dwFillAttribute", W.DWORD),
+        ("dwFlags", W.DWORD), ("wShowWindow", W.WORD), ("cbReserved2", W.WORD),
+        ("lpReserved2", C.c_void_p), ("hStdInput", W.HANDLE),
+        ("hStdOutput", W.HANDLE), ("hStdError", W.HANDLE),
+    ]
+
+
+class PROCESS_INFORMATION(C.Structure):
+    _fields_ = [("hProcess", W.HANDLE), ("hThread", W.HANDLE),
+                ("dwProcessId", W.DWORD), ("dwThreadId", W.DWORD)]
+
+
+def _err(msg: str) -> None:
+    raise OSError(f"{msg} (winerr {C.get_last_error()})")
+
+
+def current_integrity() -> str:
+    """Integrity level of the current process, as a name."""
+    hToken = W.HANDLE()
+    if not a32.OpenProcessToken(k32.GetCurrentProcess(), TOKEN_QUERY, C.byref(hToken)):
+        _err("OpenProcessToken")
+    size = W.DWORD()
+    a32.GetTokenInformation(hToken, TokenIntegrityLevel, None, 0, C.byref(size))
+    buf = C.create_string_buffer(size.value)
+    if not a32.GetTokenInformation(hToken, TokenIntegrityLevel, buf, size, C.byref(size)):
+        _err("GetTokenInformation(IL)")
+    tml = C.cast(buf, C.POINTER(TOKEN_MANDATORY_LABEL)).contents
+    # last sub-authority of the integrity SID is the RID
+    get_count = a32.GetSidSubAuthorityCount
+    get_count.restype = C.POINTER(C.c_ubyte)
+    get_sub = a32.GetSidSubAuthority
+    get_sub.restype = C.POINTER(W.DWORD)
+    n = get_count(tml.Label.Sid)[0]
+    rid = get_sub(tml.Label.Sid, n - 1)[0]
+    names = {0x0000: "Untrusted", 0x1000: "Low", 0x2000: "Medium",
+             0x3000: "High", 0x4000: "System"}
+    return names.get(rid, f"0x{rid:04x}")
+
+
+def lowered_primary_token(sid_string: str) -> W.HANDLE:
+    """Duplicate the current token to PRIMARY and lower its integrity to
+    `sid_string` (Medium or Low). Lowering one's own token IL needs no
+    privilege; a lowered token can never be raised again."""
+    hToken = W.HANDLE()
+    if not a32.OpenProcessToken(
+            k32.GetCurrentProcess(),
+            TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT,
+            C.byref(hToken)):
+        _err("OpenProcessToken")
+    primary = W.HANDLE()
+    if not a32.DuplicateTokenEx(hToken, TOKEN_ALL_ACCESS, None,
+                                SecurityImpersonation, TokenPrimary, C.byref(primary)):
+        _err("DuplicateTokenEx")
+    pSid = C.c_void_p()
+    if not a32.ConvertStringSidToSidW(sid_string, C.byref(pSid)):
+        _err("ConvertStringSidToSidW")
+    label = TOKEN_MANDATORY_LABEL()
+    label.Label.Sid = pSid
+    label.Label.Attributes = SE_GROUP_INTEGRITY
+    size = C.sizeof(SID_AND_ATTRIBUTES) + a32.GetLengthSid(pSid)
+    if not a32.SetTokenInformation(primary, TokenIntegrityLevel, C.byref(label), size):
+        _err("SetTokenInformation(IL)")
+    return primary
+
+
+def run_as_medium(cmdline: str, cwd: str, sid_string: str = SID_MEDIUM) -> int:
+    """Launch cmdline at the given integrity (Medium by default). Exit code."""
+    token = lowered_primary_token(sid_string)
+    si = STARTUPINFO(); si.cb = C.sizeof(si)
+    pi = PROCESS_INFORMATION()
+    a32.CreateProcessWithTokenW.argtypes = [
+        W.HANDLE, W.DWORD, W.LPCWSTR, W.LPWSTR, W.DWORD, C.c_void_p,
+        W.LPCWSTR, C.POINTER(STARTUPINFO), C.POINTER(PROCESS_INFORMATION)]
+    ok = a32.CreateProcessWithTokenW(
+        token, LOGON_WITH_PROFILE, None, cmdline, CREATE_UNICODE_ENVIRONMENT,
+        None, cwd, C.byref(si), C.byref(pi))
+    if not ok:
+        _err("CreateProcessWithTokenW")
+    k32.WaitForSingleObject(pi.hProcess, 0xFFFFFFFF)
+    code = W.DWORD()
+    k32.GetExitCodeProcess(pi.hProcess, C.byref(code))
+    k32.CloseHandle(pi.hProcess); k32.CloseHandle(pi.hThread)
+    return code.value
+
+
+if __name__ == "__main__":
+    print("current integrity:", current_integrity())
+
+===== mic_child.py =====
+"""Runs at MEDIUM integrity (launched by mic_experiment). Performs the F-17
+authority attack matrix against a HIGH-IL AnchorStore and writes results to a
+file in its own (Medium) worktree. argv: result_path anchor_dir worktree_dir scratch
+"""
+import os
+import subprocess
+import sys
+
+result_path, anchor, worktree, scratch = sys.argv[1:5]
+sys.path.insert(0, scratch)
+from mic_lib import current_integrity, SID_MEDIUM, run_as_medium  # noqa: E402
+
+lines = [f"child_integrity: {current_integrity()}"]
+
+
+def rec(name, fn, expect_denied):
+    try:
+        fn()
+        verdict = "ALLOWED"
+    except Exception as e:
+        verdict = f"DENIED ({type(e).__name__}: {str(e).splitlines()[0][:70]})"
+    ok = ("DENIED" in verdict) == expect_denied
+    lines.append(f"{'OK ' if ok else 'XX '}{name}: {verdict}  [expect {'DENIED' if expect_denied else 'ALLOWED'}]")
+
+
+def icacls_denied(args):
+    r = subprocess.run(["icacls", anchor, *args], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise PermissionError((r.stdout + r.stderr).strip().splitlines()[-1][:70])
+
+
+def shell_write_anchor():
+    tgt = os.path.join(anchor, "gc_shell.txt")
+    subprocess.run(["cmd", "/c", f'echo gc> "{tgt}"'], capture_output=True, text=True)
+    if not os.path.exists(tgt):
+        raise PermissionError("cmd redirect to anchor produced no file (denied)")
+
+
+def py_child_write_anchor():
+    tgt = os.path.join(anchor, "gc_py.txt")
+    code = ("import sys\n"
+            "try:\n"
+            f"    open(r'{tgt}','w').write('x'); print('WROTE')\n"
+            "except Exception as e:\n"
+            "    print('DENIED', type(e).__name__)\n")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    if "WROTE" in r.stdout or os.path.exists(tgt):
+        raise RuntimeError("PRIVILEGE RECOVERY: python grandchild wrote the anchor")
+    # denied is the expected/healthy path -> raise so rec() records DENIED
+    raise PermissionError("python grandchild denied: " + r.stdout.strip()[:50])
+
+
+# 1 worker writes its worktree -> ALLOWED
+rec("worker_write_worktree", lambda: open(os.path.join(worktree, "w.txt"), "w").write("x"), expect_denied=False)
+# 2 worker writes anchor -> DENIED
+rec("worker_write_anchor", lambda: open(os.path.join(anchor, "a.txt"), "w").write("x"), expect_denied=True)
+# 3 worker creates anchor file -> DENIED
+rec("worker_create_anchor", lambda: open(os.path.join(anchor, "new.txt"), "x").write("x"), expect_denied=True)
+# 4 worker deletes an existing anchor record -> DENIED
+rec("worker_delete_anchor", lambda: os.remove(os.path.join(anchor, "seed.txt")), expect_denied=True)
+# 5 worker renames/replaces an anchor record -> DENIED
+rec("worker_rename_anchor", lambda: os.rename(os.path.join(anchor, "seed.txt"), os.path.join(anchor, "seed2.txt")), expect_denied=True)
+# 6 worker changes the anchor DACL to grant itself -> DENIED
+rec("worker_change_dacl", lambda: icacls_denied(["/grant", "*S-1-1-0:(F)"]), expect_denied=True)
+# 7 worker lowers the anchor mandatory label to Medium -> DENIED
+rec("worker_lower_label", lambda: icacls_denied(["/setintegritylevel", "(OI)(CI)Medium"]), expect_denied=True)
+# 8 worker takes ownership of the anchor -> DENIED
+rec("worker_take_ownership", lambda: icacls_denied(["/setowner", os.environ.get("USERNAME", "")]), expect_denied=True)
+# 9 worker's shell child writes the anchor -> DENIED (inheritance)
+rec("worker_shell_child_write_anchor", shell_write_anchor, expect_denied=True)
+# 10 worker's python child writes the anchor -> DENIED (inheritance / no privilege recovery)
+rec("worker_python_child_write_anchor", py_child_write_anchor, expect_denied=True)
+# 11 worker tries to RAISE its own integrity back to High -> must fail
+def raise_to_high():
+    # attempting to launch a High child from a Medium token: SetTokenInformation
+    # can only LOWER; raising must be impossible.
+    from mic_lib import lowered_primary_token
+    lowered_primary_token("S-1-16-12288")  # High
+rec("worker_raise_own_integrity", raise_to_high, expect_denied=True)
+
+open(result_path, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+
+===== mic_experiment.py =====
+"""F-17 OS AUTHORITY BOUNDARY — OS-real demonstration (investigation).
+
+Parent runs at HIGH integrity (elevated = the Director/publisher domain).
+Sets up a HIGH-IL AnchorStore and a MEDIUM worktree, launches the worker at
+MEDIUM integrity, and runs the authority attack matrix. Then, as the
+publisher (High), writes the anchor to show ALLOWED.
+"""
+import os
+import shutil
+import subprocess
+import sys
+
+SCRATCH = r"C:\Users\nicol\AppData\Local\Temp\claude\C--Users-nicol-Desktop-Claude-Code-Proyectos-GnosisAgentAi\6ff48a69-99d0-47f4-96c7-ff4ce9d8b55d\scratchpad"
+sys.path.insert(0, SCRATCH)
+from mic_lib import current_integrity, run_as_medium  # noqa: E402
+
+BASE = os.path.join(SCRATCH, "mic_run")
+ANCHOR = os.path.join(BASE, "anchorstore")
+WORKTREE = os.path.join(BASE, "worktree")
+RESULT = os.path.join(WORKTREE, "child_result.txt")
+
+
+def icacls(*args):
+    return subprocess.run(["icacls", *args], capture_output=True, text=True)
+
+
+def main():
+    print("PARENT (publisher/Director) integrity:", current_integrity())
+    if os.path.isdir(BASE):
+        # clear any prior label first so removal is permitted
+        icacls(ANCHOR, "/setintegritylevel", "Medium")
+        shutil.rmtree(BASE, ignore_errors=True)
+    os.makedirs(ANCHOR); os.makedirs(WORKTREE)
+
+    # Seed an existing anchor record (as High), then label the store HIGH with
+    # NO_WRITE_UP, inherited by contents.
+    with open(os.path.join(ANCHOR, "seed.txt"), "w") as f:
+        f.write("existing anchor record")
+    r = icacls(ANCHOR, "/setintegritylevel", "(OI)(CI)High")
+    print("label AnchorStore High:", "OK" if r.returncode == 0 else r.stderr.strip())
+
+    # Launch the worker at MEDIUM integrity.
+    exe = sys.executable
+    child = os.path.join(SCRATCH, "mic_child.py")
+    cmd = f'"{exe}" "{child}" "{RESULT}" "{ANCHOR}" "{WORKTREE}" "{SCRATCH}"'
+    print("launching worker at MEDIUM integrity...")
+    code = run_as_medium(cmd, WORKTREE)
+    print("worker exit code:", code)
+
+    print("\n=== WORKER (Medium) authority attack matrix ===")
+    if os.path.exists(RESULT):
+        print(open(RESULT, encoding="utf-8").read())
+    else:
+        print("NO RESULT FILE — worker could not write its own worktree?")
+
+    print("=== PUBLISHER (High) writes the anchor -> expect ALLOWED ===")
+    try:
+        with open(os.path.join(ANCHOR, "published_by_director.txt"), "w") as f:
+            f.write("anchor record written by the trusted publisher")
+        print("OK  publisher_write_anchor: ALLOWED")
+    except Exception as e:
+        print("XX  publisher_write_anchor: DENIED", type(e).__name__, e)
+
+    # verify the worker's denied writes really left the anchor unchanged
+    present = sorted(os.listdir(ANCHOR))
+    print("\nanchor contents after the run:", present)
+    print("(expected: seed.txt + published_by_director.txt only; no worker files)")
+
+
+if __name__ == "__main__":
+    main()
