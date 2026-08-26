@@ -586,5 +586,44 @@ interval classifier stops routing redirects to the judged set.
 
 ### Evidence (third review)
 
-_Filled by the evidence commit that carries the bundle bound to this
-repair._
+`.gnosis/evidence/20260826T074918Z/`, carrying the third-review artifacts,
+`verify_bundle` → verified.
+
+| | |
+|---|---|
+| directed suite | 202 passed (`test_evidence_binding.py`), 204 with `test_git_evidence.py`, incl. the 15 new `TestGitResolutionMustBeUnredirected` tests |
+| mutation | `mutation-check.f14-round17.txt` — **56 mutants (MF1–MF56), 0 survived**; baseline and restored GREEN (204 passed). MF51–MF56 target the BLOCKER A guarantees |
+| OS-real audit | `git-resolution-audit.txt` — refs/replace (loose / packed / raw packed-refs), alternates, grafts, shallow, config.worktree; start gate refuses each, interval classifier judges each; pre-existing replace → MACHINERY_REDIRECTED (exit 11, 0 checks), ABA → MACHINERY_MUTATED (exit 9), clean repo stays CLEAN |
+| full capture over `ff37069` | `capture-summary.json`: **BOUND**, boundary **CLEAN** (0 violations; 41 machinery events, **0 judged**), `evidence_valid` true, **90,350 byte-bound inputs**, `identity_digest d9cd7e54…`, `content_digest 329d904f…`; mypy clean (58 files); ruff at the 19 baseline; git-head `ff37069…` |
+| pytest | 1075 passed, 70 subtests; the sole failure is the pre-existing work-queue timing flake (`test_concurrent_workers_never_run_a_brief_twice`, ~1 in 5, `docs/NEXT_ACTIONS.md`), NOT F-17 — every F-17/F-14 test is in the 1075 passed |
+| bundle manifest | `MANIFEST.sha256.json`; `verify_bundle` → verified; **`bundle_digest ed3aef4843530fe8d4a8ec5937a0eb48e1c3fec8dba3587e78f13ebf40f8446b`** (external anchor: `verify_bundle(bundle, expected_digest=<this>)` is the tamper-evidence check; a wrong digest is refused) |
+
+**On the bundle shape.** The full `run_capture` bundle hashes ~90k inputs
+(~2.4 GB of external-repository sources) through their handles before the
+checks run. On this workstation's slow synced volume that cold pass plus the
+full suite exceeds the environment's long-run limit; only a warm-cache run
+completed, and its SUMMARY is `capture-summary.json` here (BOUND / CLEAN /
+evidence_valid true over `ff37069`). The third-review evidence is therefore
+delivered as this verify_bundle-verified bundle of the review's artifacts,
+with the completed capture's SUMMARY inside it; the full bundle is
+reproducible with a warm cache via `scripts/capture_evidence.py` run
+detached from the main checkout. `CAPTURE-NOTE.md` states this in the bundle.
+
+### Decisions this repair makes that need independent review
+
+1. **BLOCKER A judged set.** refs/replace, packed-refs, alternates,
+   http-alternates, config.worktree, commondir judged as machinery; grafts
+   and shallow refused as a faithful-repository precondition (ANCESTRY, not
+   demonstrated to corrupt today's binding). Confirm the line, especially
+   whether grafts/shallow should be judged or merely counted.
+2. **Not an F-14 reopen.** The review judges that refs/replace corrupts only
+   the git-derived identity fields (F-17's charge), not F-14's byte-binding.
+   Confirm no accepted F-14 guarantee is contradicted.
+3. **Unknown-`.git` stays counted**, not failed-closed. Confirm this is the
+   right trade against git-version fragility.
+4. **BLOCKER C is a reported GAP**, not an implementation; the proposed
+   anchor-ledger-outside-the-tree primitive is unbuilt and needs its own
+   authority review.
+5. **Evidence delivered as an artifact bundle** with the completed capture's
+   SUMMARY, not a fresh full `run_capture` bundle, for the environment
+   reason above. Confirm this is acceptable or require a warm-cache re-run.
