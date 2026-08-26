@@ -1173,3 +1173,68 @@ non-reversible operational change) — deferred to the wiring decision, unbuilt.
 toolchain root and probe dir deleted; no operator or production ACL changed
 (real paths were only read/copied-from); HEAD unchanged. This probe does NOT
 close F-17: production wiring, §14, and a fresh FULL `run_capture` remain.
+
+## Ninth-review addendum — P2 service-SID publisher probe: QUALIFIED (2026-08-27)
+
+Operator-authorized, reversible OS-real probe of the P2 design (with the review's
+mandatory corrections). F-17 stays OPEN. **`P2 PROBE RESULT: QUALIFIED —
+RESTRICTED SERVICE SID`.**
+
+**SCM host (P2A, no gap).** A pure-ctypes SCM host (`StartServiceCtrlDispatcher`
+/ `ServiceMain` / control handler / `SetServiceStatus`) — no pywin32, keeping the
+TCB minimal — reached RUNNING, reported status, and stopped cleanly (~360 ms).
+`python.exe -I -S main.py` alone is NOT a service; the ctypes dispatcher is what
+makes it one. **No `P2A SCM HOST GAP`.**
+
+**RESTRICTED first, verified in the OS-real token** (not just `sc` config).
+token-dump from inside the running service: `user_sid` = the service SID
+`S-1-5-80-…`; `is_token_restricted = true` with the service SID in the
+restricting-SID list; `privileges_present = [SeChangeNotifyPrivilege]` only (no
+SeDebug/SeImpersonate/SeBackup/SeRestore/SeTakeOwnership/SeTcb/SeAssignPrimaryToken/
+SeCreateToken); integrity High (services' default — the boundary is the DACL-by-SID
+plus the write-restricted token, MIC is DiD). RESTRICTED did NOT block startup, the
+trust-code read, RunIdentity read, AnchorStore append, or pipe creation — so **no
+fallback to UNRESTRICTED was needed** (and none was taken silently).
+
+**Attack matrix — worker = a distinct non-admin SID (`GnosisP2Worker`).** Legit
+`PublishCompletedRun(run_A)` → `ANCHORED seq=0`; duplicate → `ALREADY_ANCHORED`;
+cross-run (a run owned by another SID) → `owner-mismatch`; unknown/malformed/
+oversized → rejected; worker create-pipe → DENIED; worker writes to the service
+binary / trust python / anchor code / RunIdentity / AnchorStore / a shadow module →
+ALL DENIED (`UnauthorizedAccessException`); worker `sc` change-config / stop /
+delete → ERROR 5; worker `OpenProcess(publisher, VM_WRITE|DUP_HANDLE|CREATE_THREAD|
+VM_OPERATION|CREATE_PROCESS)` → ALL DENIED err 5.
+
+**Confused-deputy defense.** The worker sends only `run_id`; the publisher derives
+task_id/repo/head/tree/bundle_path/owner from the trusted RunIdentity, recomputes
+the bundle digest from bytes, and checks the bound head — never a worker-supplied
+value. Authorization root = the pipe DACL (only the exact worker SID can open the
+endpoint, granted `0x0012019B` — read+write-data, NOT `FILE_CREATE_PIPE_INSTANCE` /
+not GENERIC_WRITE) **plus** `RunIdentity.owner_worker_sid`; no
+`GetNamedPipeClientProcessId`/token as the trust root, no `SeImpersonatePrivilege`.
+
+**Pipe squatting.** With the service down, the worker pre-created a pipe of the same
+name; on start the service refused (`FILE_FLAG_FIRST_PIPE_INSTANCE` failed →
+"refuse to attach") and did NOT connect to the worker's pipe — fail-closed, no
+retry onto an unauthenticated endpoint.
+
+**Crash consistency.** An unconfirmed ledger record beyond the committed watermark
+was truncated by the trusted startup recovery, and the committed `ANCHORED` record
+survived — never a false `ANCHORED`. The watermark lives in worker-non-writable
+trusted state; truncation is an explicit trusted recovery action, not a property of
+append-only.
+
+**T2 defeated; T3/T4 excluded.** The guarantee demonstrated is exactly `Worker SID
+cannot obtain Publisher authority`. SYSTEM/Admins retain full control of the service
+and stores (T4, declared, not a boundary).
+
+**Reversibility.** Full rollback verified: no Gnosis* services / users / profiles /
+scheduled tasks / files / pipe; no real-path ACL changed; HEAD unchanged.
+
+**External anchor.** Evidence `.gnosis/evidence/20260826T234424Z/` `bundle_digest` =
+`4cfb63712ae4ad2372b4265b16a912a1c047dac1dd73468c2240bf3398b4aefb`, recorded here
+and on the carrying commit; re-derive with `verify_bundle(expected_digest=…)`.
+
+**Still to do before closing F-17 (unchanged):** production worker + publisher +
+trusted-RunIdentity wiring; §14 unknown-`.git`; full validation; a fresh FULL
+`run_capture`; authoritative anchor; a final independent review.
