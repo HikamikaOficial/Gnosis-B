@@ -126,6 +126,93 @@ def git_topology_eligible(repo_path: Path) -> tuple[bool, str | None]:
     return True, None
 
 
+def git_resolution_faithful(repo_path: Path) -> tuple[bool, str | None]:
+    """Is git's object / ref / ancestry resolution UNredirected here?
+
+    F-17 third review, BLOCKER A. The tree-identity binding
+    (`content_fingerprint`) reads `git diff HEAD` and `git status`, and both
+    honour git's resolution machinery. A `refs/replace/*` ref substitutes
+    one object for another during resolution WITHOUT touching the original
+    object's bytes — measured OS-real on git 2.55: with a replace ref
+    active, a working tree that matches HEAD reads as dirty (and the
+    reverse), so `content_fingerprint` computes `patch_sha256` / `status_sha256`
+    against the substituted tree. A replace ref active when the capture
+    starts is present at BOTH endpoints, so the binding certifies a false
+    tree identity with `identical: true` and nothing catches it (the replace
+    surface is `.git` machinery, counted-not-judged). `objects/info/alternates`
+    redirects object lookup to an external store; `info/grafts` and a
+    `shallow` file redirect ancestry.
+
+    This does NOT touch F-14's guarantee: F-14 hashes each covered input's
+    bytes THROUGH the handle that holds it, never through git, so a replace
+    ref cannot change a `content_digest`. What it protects is the
+    git-derived identity fields (`head_sha`, `patch_sha256`, `status_sha256`)
+    the F-17 bundle carries.
+
+    Returns ``(True, None)`` for a repo whose resolution is faithful (and for
+    a non-repo, which has no resolution to redirect) and ``(False, reason)``
+    when a redirection is active at capture start. Read-only. Intended to run
+    only for a topology that already passed `git_topology_eligible`, so the
+    common-dir is the in-tree `.git`; it resolves the common-dir rather than
+    assuming it.
+    """
+    code, _ = _run_git(repo_path, ["rev-parse", "--is-inside-work-tree"])
+    if code != 0:
+        # Not a git repository: there is no resolution machinery to redirect.
+        return True, None
+
+    # Replace refs — loose OR packed — substitute objects during resolution.
+    # `for-each-ref` lists refs/replace/* whichever backend holds them, so a
+    # replace injected by a raw packed-refs edit is caught the same as a
+    # `git replace` (both reproduced OS-real).
+    code, out = _run_git(
+        repo_path, ["for-each-ref", "--format=%(refname)", "refs/replace"])
+    if code == 0 and out.strip():
+        first = out.strip().splitlines()[0]
+        return False, (
+            f"a replace ref is active ({first}): git substitutes one object "
+            "for another during resolution, so the tree-identity binding "
+            "cannot be trusted")
+
+    # A shallow repository truncates ancestry (measured: rev-list count drops).
+    code, out = _run_git(repo_path, ["rev-parse", "--is-shallow-repository"])
+    if code == 0 and out.strip() == "true":
+        return False, (
+            "the repository is shallow: its ancestry is truncated, so it is "
+            "not a faithful full repository to capture")
+
+    # Redirection files live in the common git-dir. Resolve it rather than
+    # assume `repo/.git`, even though an eligible topology makes them equal.
+    code, common = _run_git(repo_path, ["rev-parse", "--git-common-dir"])
+    if code != 0:
+        return False, f"git could not report its common-dir: {common}"
+    common_path = Path(common)
+    if not common_path.is_absolute():
+        common_path = repo_path / common_path
+
+    redirections = {
+        "objects/info/alternates":
+            "objects/info/alternates redirects object lookup to an external "
+            "object store",
+        "objects/info/http-alternates":
+            "objects/info/http-alternates redirects object lookup to an "
+            "external object store",
+        "info/grafts":
+            "info/grafts rewrites commit ancestry (deprecated but still "
+            "honoured by this git)",
+    }
+    for rel, why in redirections.items():
+        target = common_path / rel
+        try:
+            present = target.is_file() and target.stat().st_size > 0
+        except OSError:
+            present = False
+        if present:
+            return False, (
+                f"{why}; a faithful capture requires unredirected resolution")
+    return True, None
+
+
 def capture_git_evidence(repo_path: Path) -> GitEvidence:
     code, _ = _run_git(repo_path, ["rev-parse", "--is-inside-work-tree"])
     if code != 0:

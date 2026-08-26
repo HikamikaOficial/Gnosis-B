@@ -112,7 +112,11 @@ from pathlib import Path
 from typing import Any
 
 from .canonical import hash_canonical, sha256_hex
-from .git_evidence import content_fingerprint, git_topology_eligible
+from .git_evidence import (
+    content_fingerprint,
+    git_resolution_faithful,
+    git_topology_eligible,
+)
 from .input_lock import (
     InputLock,
     LockOutcome,
@@ -142,6 +146,7 @@ EXIT_PREPARATION_DRIFT = 7
 EXIT_STREAMS_MUTATED = 8
 EXIT_MACHINERY_MUTATED = 9
 EXIT_MACHINERY_UNOBSERVABLE = 10
+EXIT_MACHINERY_REDIRECTED = 11
 
 _UNREADABLE_PREFIX = "unreadable: "
 
@@ -174,6 +179,46 @@ def _is_git_machinery_tamper(path: str) -> bool:
     if owner.startswith(_GIT_HOOKS) and not owner.endswith(_HOOK_SAMPLE):
         return True
     return owner == _GIT_CONFIG
+
+
+# F-17 third review, BLOCKER A. The parts of `.git` that redirect git's
+# object / ref / ancestry RESOLUTION, or carry per-worktree config. A write
+# to any of these during the capture tampers with how git resolves the very
+# objects the evidence names, exactly the way a hook or config write tampers
+# with what git executes — so it is judged, not counted. Demonstrated OS-real
+# (git 2.55): a `refs/replace/*` ref (loose, packed, or injected by a raw
+# `packed-refs` edit) makes `git diff HEAD` report against a substituted tree
+# with the original object bytes intact; `objects/info/alternates` redirects
+# object lookup to an external store; `config.worktree` (when
+# extensions.worktreeConfig is on) sets executable keys like core.fsmonitor.
+# A normal read-only capture writes none of them (verified: the product repo
+# has no packed-refs, no replace ref, no alternates), so judging them adds no
+# false positive. The start-of-capture presence of an ALREADY-ACTIVE
+# redirection is a separate gate, `git_resolution_faithful`
+# (MACHINERY_REDIRECTED); this catches an in-interval write, including an ABA
+# the endpoints are blind to.
+_GIT_REFS_REPLACE = ".git/refs/replace/"
+_GIT_REDIRECT_SURFACES = frozenset({
+    ".git/packed-refs",
+    ".git/objects/info/alternates",
+    ".git/objects/info/http-alternates",
+    ".git/info/grafts",
+    ".git/shallow",
+    ".git/config.worktree",
+    ".git/commondir",
+})
+
+
+def _is_git_resolution_redirect(path: str) -> bool:
+    """A `.git` write that redirects object / ref / ancestry resolution.
+
+    Judged like a hook or config. Stream paths (`owner:stream`) count too —
+    a stream on `packed-refs` is a write channel to the ref backend.
+    """
+    owner = path.split(":", 1)[0]
+    if owner.startswith(_GIT_REFS_REPLACE):
+        return True
+    return owner in _GIT_REDIRECT_SURFACES
 
 
 class BindingVerdict(Enum):
@@ -251,6 +296,7 @@ class ObservationVerdict(Enum):
     STREAMS_MUTATED = "STREAMS_MUTATED"
     MACHINERY_MUTATED = "MACHINERY_MUTATED"
     MACHINERY_UNOBSERVABLE = "MACHINERY_UNOBSERVABLE"
+    MACHINERY_REDIRECTED = "MACHINERY_REDIRECTED"
 
 
 @dataclass(frozen=True)
@@ -589,6 +635,7 @@ def classify_observation(
     locked_identity: Mapping[str, Any] | None = None,
     streams: Sequence[str] = (),
     topology_reason: str | None = None,
+    resolution_reason: str | None = None,
 ) -> Boundary:
     """Turn prevention plus a stream of writes into one verdict.
 
@@ -634,6 +681,22 @@ def classify_observation(
             "the git machinery is outside the watched tree, so a tamper of it "
             "could not be observed; this topology is not eligible for the "
             "evidence guarantee",
+            protection=protection, locked_identity=prepared)
+    if resolution_reason is not None:
+        # F-17 / BLOCKER A: git's object/ref/ancestry resolution is redirected
+        # at capture start — a replace ref, an alternates store, grafts, or a
+        # shallow boundary. The tree-identity binding reads `git diff HEAD` /
+        # `git status`, which honour the redirection, so it would certify a
+        # false identity with `identical: true` and nothing would catch it
+        # (the redirect surface is `.git`, counted-not-judged). Fails closed
+        # rather than degrade to a protected-looking verdict; nothing ran.
+        return Boundary(
+            ObservationVerdict.MACHINERY_REDIRECTED, observation.mechanism,
+            len(observation.events), 0, (resolution_reason,), len(covered),
+            tuple(allowed),
+            "git object/ref/ancestry resolution is redirected, so the "
+            "tree-identity binding cannot be trusted; this repository state is "
+            "not eligible for the evidence guarantee",
             protection=protection, locked_identity=prepared)
     if lock is not None and not lock.enforced:
         return Boundary(
@@ -704,12 +767,15 @@ def classify_observation(
     unknown: dict[str, str] = {}
     for event in observation.events:
         path = event.path
-        if _is_git_machinery_tamper(path):
+        if _is_git_machinery_tamper(path) or _is_git_resolution_redirect(path):
             # F-17: a hook or config written during the capture is a tamper
-            # of the machinery that produced the evidence. Checked before
-            # the .git bookkeeping count below, so it is judged, not
-            # forgiven, and before the stream branch so a stream on a hook
-            # or on config is judged too.
+            # of the machinery that produced the evidence; a write to a
+            # resolution-redirect surface (refs/replace, alternates, grafts,
+            # shallow, packed-refs, config.worktree) tampers with how git
+            # resolves the objects the evidence names (BLOCKER A). Checked
+            # before the .git bookkeeping count below, so both are judged,
+            # not forgiven, and before the stream branch so a stream on any
+            # of them is judged too.
             machinery_violations.append(f"{event.action}: {path}")
         elif ":" in path:
             # A named data stream, delivered by the observer's stream
@@ -789,8 +855,10 @@ def classify_observation(
             ObservationVerdict.MACHINERY_MUTATED, observation.mechanism,
             len(observation.events), allowed_count,
             tuple(dict.fromkeys(machinery_violations)), len(covered), tuple(allowed),
-            "a hook or config under .git was written during the capture, "
-            "tampering with the machinery that produced the evidence",
+            "a hook, config, or a resolution-redirect surface (refs/replace, "
+            "alternates, grafts, shallow, packed-refs, config.worktree) under "
+            ".git was written during the capture, tampering with the machinery "
+            "that produced the evidence",
             machinery_events=machinery, protection=protection,
             locked_identity=prepared)
 
@@ -961,6 +1029,8 @@ def _exit_code(binding: TreeBinding, checks: ChecksVerdict, boundary: Boundary) 
         return EXIT_BOUNDARY_UNAVAILABLE
     if boundary.verdict is ObservationVerdict.MACHINERY_UNOBSERVABLE:
         return EXIT_MACHINERY_UNOBSERVABLE
+    if boundary.verdict is ObservationVerdict.MACHINERY_REDIRECTED:
+        return EXIT_MACHINERY_REDIRECTED
     if boundary.verdict is ObservationVerdict.UNPROTECTED:
         return EXIT_INPUTS_UNPROTECTED
     if boundary.verdict is ObservationVerdict.PREPARATION_DRIFT:
@@ -993,6 +1063,11 @@ def _verdict_line(binding: TreeBinding, checks: ChecksVerdict, boundary: Boundar
         return ("INVALID EVIDENCE: the git machinery is outside the watched tree "
                 "(worktree, submodule or separate git-dir), so a tamper of it "
                 f"could not be observed and nothing ran - {boundary.reason}")
+    if boundary.verdict is ObservationVerdict.MACHINERY_REDIRECTED:
+        return ("INVALID EVIDENCE: git object/ref/ancestry resolution is "
+                "redirected (a replace ref, alternates, grafts or a shallow "
+                "boundary), so the tree-identity binding cannot be trusted and "
+                f"nothing ran - {boundary.reason}")
     if boundary.verdict is ObservationVerdict.PREPARATION_DRIFT:
         return ("INVALID EVIDENCE: the tree changed while the boundary was being "
                 "built, so nothing ran; see boundary.violations")
@@ -1318,9 +1393,15 @@ def run_capture(
     # and config unobserved. Determined once, treated as adversarial input
     # (the .git redirect is resolved by git and checked to lie in-tree).
     topology_ok, topology_reason = git_topology_eligible(repo)
+    # F-17 / BLOCKER A: only meaningful for an eligible (standard) topology —
+    # for an ineligible one the topology gate already refuses, and the
+    # resolution probe would run git against machinery outside the tree.
+    resolution_ok, resolution_reason = (True, None)
+    if topology_ok:
+        resolution_ok, resolution_reason = git_resolution_faithful(repo)
     try:
         pre = identity(repo)
-        if pre.available and topology_ok:
+        if pre.available and topology_ok and resolution_ok:
             covered = covered_paths(repo, allowed_writes)
             env = check_environment(scratch)
             lock = input_lock(repo)
@@ -1359,10 +1440,12 @@ def run_capture(
                 lock.release()
             post = identity(repo)
         elif pre.available:
-            # The tree can be bound, but the topology is ineligible (its git
-            # machinery is outside the watched tree), so nothing ran. Take
-            # the post fingerprint anyway — the binding is honest, and the
-            # boundary carries the MACHINERY_UNOBSERVABLE refusal.
+            # The tree can be bound, but either the topology is ineligible
+            # (its git machinery is outside the watched tree) or git's
+            # resolution is redirected (a replace ref, alternates, grafts,
+            # shallow), so nothing ran. Take the post fingerprint anyway — the
+            # binding is honest, and the boundary carries the
+            # MACHINERY_UNOBSERVABLE or MACHINERY_REDIRECTED refusal.
             post = identity(repo)
         else:
             post = TreeIdentity(
@@ -1375,7 +1458,7 @@ def run_capture(
     boundary = classify_observation(repo, observation, covered, allowed_writes,
                                     lock_outcome, drift,
                                     prepared.to_dict() if prepared is not None else None,
-                                    streams, topology_reason)
+                                    streams, topology_reason, resolution_reason)
     checks_verdict = _checks_verdict(results)
     summary = build_summary(
         binding, results, checks_verdict, boundary,

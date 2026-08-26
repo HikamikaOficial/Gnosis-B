@@ -84,6 +84,7 @@ CAPTURE = "src/gnosis/kernel/evidence_capture.py"
 LOCK = "src/gnosis/kernel/input_lock.py"
 SCRIPT = "scripts/capture_evidence.py"
 OBSERVER = "src/gnosis/kernel/write_observer.py"
+GITEV = "src/gnosis/kernel/git_evidence.py"
 
 # Narrower than `tests/` on purpose: these are the tests that assert the
 # binding, and a mutant that leaves them green has not been caught by
@@ -595,8 +596,8 @@ MUTANTS: list[Mutant] = [
         "MF49", "run_capture runs the checks even on an ineligible topology, "
                 "so a worktree capture executes with its machinery unobserved",
         [(CAPTURE,
-          "        if pre.available and topology_ok:",
-          "        if pre.available:")],
+          "        if pre.available and topology_ok and resolution_ok:",
+          "        if pre.available and resolution_ok:")],
     ),
     Mutant(
         "MF50", "verify_bundle ignores the external anchor, so a recomputed "
@@ -604,6 +605,61 @@ MUTANTS: list[Mutant] = [
         [(CAPTURE,
           "    if expected_digest is not None and recomputed != expected_digest:",
           "    if False:")],
+    ),
+    # MF51..MF56 are the THIRD F-17 review's BLOCKER A: git's object / ref /
+    # ancestry RESOLUTION can be redirected without touching the objects'
+    # bytes — a refs/replace ref (loose, packed, or a raw packed-refs edit)
+    # makes `git diff HEAD` report against a substituted tree, and the binding
+    # honours it. A redirection active at capture start fails closed
+    # (MACHINERY_REDIRECTED); a write to a redirect surface during the interval
+    # is judged (MACHINERY_MUTATED). These put each half of that back.
+    Mutant(
+        "MF51", "the resolution-redirect predicate returns False, so "
+                "refs/replace, alternates, grafts, shallow and packed-refs "
+                "writes go back to counted-not-judged",
+        [(CAPTURE,
+          "    owner = path.split(\":\", 1)[0]\n"
+          "    if owner.startswith(_GIT_REFS_REPLACE):\n"
+          "        return True\n"
+          "    return owner in _GIT_REDIRECT_SURFACES",
+          "    return False")],
+    ),
+    Mutant(
+        "MF52", "run_capture ignores the resolution gate, so a capture over a "
+                "repository with an active replace ref runs its checks anyway",
+        [(CAPTURE,
+          "        if pre.available and topology_ok and resolution_ok:",
+          "        if pre.available and topology_ok:")],
+    ),
+    Mutant(
+        "MF53", "the classifier drops the MACHINERY_REDIRECTED branch, so an "
+                "active redirection no longer fails closed",
+        [(CAPTURE,
+          "    if resolution_reason is not None:",
+          "    if False and resolution_reason is not None:")],
+    ),
+    Mutant(
+        "MF54", "git_resolution_faithful stops looking for replace refs, so a "
+                "replace ref active at capture start is not refused",
+        [(GITEV,
+          "        repo_path, [\"for-each-ref\", \"--format=%(refname)\", \"refs/replace\"])\n"
+          "    if code == 0 and out.strip():",
+          "        repo_path, [\"for-each-ref\", \"--format=%(refname)\", \"refs/replace\"])\n"
+          "    if False and code == 0 and out.strip():")],
+    ),
+    Mutant(
+        "MF55", "git_resolution_faithful stops checking the alternates / grafts "
+                "redirection files, so an external object store is accepted",
+        [(GITEV,
+          "    for rel, why in redirections.items():",
+          "    for rel, why in {}.items():")],
+    ),
+    Mutant(
+        "MF56", "the interval classifier stops routing resolution redirects to "
+                "the judged set, so an ABA replace or packed-refs edit passes",
+        [(CAPTURE,
+          "        if _is_git_machinery_tamper(path) or _is_git_resolution_redirect(path):",
+          "        if _is_git_machinery_tamper(path):")],
     ),
 ]
 

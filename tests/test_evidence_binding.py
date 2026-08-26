@@ -36,6 +36,7 @@ from gnosis.kernel.evidence_capture import (
     EXIT_INPUTS_MUTATED,
     EXIT_INPUTS_UNPROTECTED,
     EXIT_MACHINERY_MUTATED,
+    EXIT_MACHINERY_REDIRECTED,
     EXIT_MACHINERY_UNOBSERVABLE,
     EXIT_OK,
     EXIT_PREPARATION_DRIFT,
@@ -52,6 +53,7 @@ from gnosis.kernel.evidence_capture import (
     PathClass,
     TreeIdentity,
     _is_git_machinery_tamper,
+    _is_git_resolution_redirect,
     bind_tree,
     classify_observation,
     classify_path,
@@ -66,6 +68,7 @@ from gnosis.kernel.evidence_capture import (
 )
 from gnosis.kernel.git_evidence import (
     content_fingerprint,
+    git_resolution_faithful,
     git_topology_eligible,
 )
 from gnosis.kernel.input_lock import (
@@ -3675,6 +3678,236 @@ class TestGitTopologyMustBeInTree(unittest.TestCase):
             )], Path(tmp) / "staging")
             self.assertIs(capture.binding.verdict, BindingVerdict.TREE_MUTATED)
             self.assertFalse(capture.evidence_valid)
+
+
+class TestGitResolutionMustBeUnredirected(unittest.TestCase):
+    """F-17 third review, BLOCKER A. The tree-identity binding reads
+    `git diff HEAD` / `git status`, which honour git's resolution machinery.
+    A `refs/replace/*` ref substitutes one object for another during
+    resolution WITHOUT changing the original object's bytes — measured OS-real
+    on git 2.55: a working tree that matches HEAD reads as dirty (and the
+    reverse). A replace ref active at capture start is present at both
+    endpoints, so the binding would certify a false identity with
+    `identical: true`; the replace surface is `.git`, counted-not-judged, so
+    nothing else catches it. `objects/info/alternates` redirects object
+    lookup; `info/grafts` and `shallow` redirect ancestry. A redirection
+    ALREADY ACTIVE at start fails closed (MACHINERY_REDIRECTED, exit 11); a
+    write to a redirect surface DURING the interval is judged like a hook
+    (MACHINERY_MUTATED, exit 9), so an ABA the endpoints are blind to is
+    caught too. F-14 is untouched: it hashes each input's bytes THROUGH its
+    handle, never through git, so a replace ref cannot move a content_digest.
+    """
+
+    @staticmethod
+    def _git(cwd, *a):
+        r = subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True,
+                           check=False)  # returncode handled explicitly below
+        if r.returncode != 0:
+            raise RuntimeError(f"git {a}: {r.stderr}")
+        return r.stdout.strip()
+
+    def _repo(self, root: Path, name: str = "repo") -> Path:
+        repo = root / name
+        repo.mkdir()
+        for a in (["init"], ["config", "user.email", "t@e.com"],
+                  ["config", "user.name", "T"], ["config", "commit.gpgsign", "false"],
+                  ["config", "core.autocrlf", "false"]):
+            self._git(repo, *a)
+        (repo / "a.txt").write_text("REAL\n", encoding="utf-8")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-m", "c1")
+        (repo / "a.txt").write_text("FAKE\n", encoding="utf-8")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-m", "c2")
+        return repo
+
+    # -- the predicate ------------------------------------------------------
+    def test_the_predicate_names_the_resolution_redirect_surface(self):
+        self.assertTrue(_is_git_resolution_redirect(".git/refs/replace/abc"))
+        self.assertTrue(_is_git_resolution_redirect(".git/packed-refs"))
+        self.assertTrue(_is_git_resolution_redirect(".git/packed-refs:s"))
+        self.assertTrue(_is_git_resolution_redirect(".git/objects/info/alternates"))
+        self.assertTrue(_is_git_resolution_redirect(".git/objects/info/http-alternates"))
+        self.assertTrue(_is_git_resolution_redirect(".git/info/grafts"))
+        self.assertTrue(_is_git_resolution_redirect(".git/shallow"))
+        self.assertTrue(_is_git_resolution_redirect(".git/config.worktree"))
+        self.assertTrue(_is_git_resolution_redirect(".git/commondir"))
+        # NOT a resolution-redirect surface — ordinary bookkeeping stays counted:
+        self.assertFalse(_is_git_resolution_redirect(".git/index"))
+        self.assertFalse(_is_git_resolution_redirect(".git/HEAD"))
+        self.assertFalse(_is_git_resolution_redirect(".git/refs/heads/main"))
+        self.assertFalse(_is_git_resolution_redirect(".git/logs/HEAD"))
+        self.assertFalse(_is_git_resolution_redirect(".git/objects/ab/cdef"))
+        self.assertFalse(_is_git_resolution_redirect("refs/replace/x"))  # not under .git
+
+    def test_the_redirected_exit_code_is_distinct(self):
+        self.assertEqual(
+            len({EXIT_OK, EXIT_MACHINERY_MUTATED, EXIT_MACHINERY_UNOBSERVABLE,
+                 EXIT_MACHINERY_REDIRECTED}), 4)
+
+    # -- the gate -----------------------------------------------------------
+    def test_a_clean_repo_is_faithful(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ok, reason = git_resolution_faithful(self._repo(Path(tmp)))
+            self.assertTrue(ok, reason)
+            self.assertIsNone(reason)
+
+    def test_a_non_repo_directory_is_faithful_nothing_to_redirect(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plain = Path(tmp) / "plain"
+            plain.mkdir()
+            ok, reason = git_resolution_faithful(plain)
+            self.assertTrue(ok, reason)
+
+    def test_a_loose_replace_ref_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp))
+            c1 = self._git(repo, "rev-parse", "HEAD~1")
+            c2 = self._git(repo, "rev-parse", "HEAD")
+            self._git(repo, "replace", c1, c2)
+            ok, reason = git_resolution_faithful(repo)
+            self.assertFalse(ok)
+            self.assertIn("replace ref", reason or "")
+
+    def test_a_packed_replace_ref_is_still_refused(self):
+        # A replace ref carried by packed-refs (not a loose ref) must be
+        # refused just the same — `for-each-ref` sees both backends.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp))
+            c1 = self._git(repo, "rev-parse", "HEAD~1")
+            c2 = self._git(repo, "rev-parse", "HEAD")
+            self._git(repo, "replace", c1, c2)
+            self._git(repo, "pack-refs", "--all")
+            ok, reason = git_resolution_faithful(repo)
+            self.assertFalse(ok)
+            self.assertIn("replace ref", reason or "")
+
+    def test_an_alternates_object_store_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp))
+            info = repo / ".git" / "objects" / "info"
+            info.mkdir(parents=True, exist_ok=True)
+            (info / "alternates").write_text("/some/other/objects\n", encoding="utf-8")
+            ok, reason = git_resolution_faithful(repo)
+            self.assertFalse(ok)
+            self.assertIn("alternates", reason or "")
+
+    def test_a_grafts_file_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp))
+            c2 = self._git(repo, "rev-parse", "HEAD")
+            info = repo / ".git" / "info"
+            info.mkdir(parents=True, exist_ok=True)
+            (info / "grafts").write_text(c2 + "\n", encoding="utf-8")
+            ok, reason = git_resolution_faithful(repo)
+            self.assertFalse(ok)
+            self.assertIn("grafts", reason or "")
+
+    def test_a_shallow_repository_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp))
+            c2 = self._git(repo, "rev-parse", "HEAD")
+            (repo / ".git" / "shallow").write_text(c2 + "\n", encoding="utf-8")
+            ok, reason = git_resolution_faithful(repo)
+            self.assertFalse(ok)
+            self.assertIn("shallow", reason or "")
+
+    def test_an_empty_redirection_file_is_not_a_redirection(self):
+        # A zero-byte alternates/grafts file does not redirect anything; the
+        # gate keys on non-empty, so it must not false-positive.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp))
+            info = repo / ".git" / "objects" / "info"
+            info.mkdir(parents=True, exist_ok=True)
+            (info / "alternates").write_text("", encoding="utf-8")
+            ok, reason = git_resolution_faithful(repo)
+            self.assertTrue(ok, reason)
+
+    def test_the_binding_is_actually_fooled_by_a_replace_ref(self):
+        # WHY the gate exists, reproduced against the product primitive: with a
+        # replace ref active, content_fingerprint records a different patch and
+        # status while head_sha is unchanged. Present at both endpoints it
+        # would bind with identical:true to a tree that is not the real one.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp))
+            c1 = self._git(repo, "rev-parse", "HEAD~1")
+            c2 = self._git(repo, "rev-parse", "HEAD")
+            self._git(repo, "checkout", c1)  # tree matches c1, git diff HEAD empty
+            before = content_fingerprint(repo)
+            self._git(repo, "replace", c1, c2)
+            after = content_fingerprint(repo)
+            self.assertEqual(before["head_sha"], after["head_sha"])
+            self.assertNotEqual(before["patch_sha256"], after["patch_sha256"])
+            self.assertNotEqual(before["status_sha256"], after["status_sha256"])
+            ok, _ = git_resolution_faithful(repo)
+            self.assertFalse(ok, "the gate must refuse the state that fools the binding")
+
+    # -- end to end ---------------------------------------------------------
+    @WINDOWS_ONLY
+    def test_a_pre_existing_replace_ref_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp))
+            c1 = self._git(repo, "rev-parse", "HEAD~1")
+            c2 = self._git(repo, "rev-parse", "HEAD")
+            self._git(repo, "checkout", c1)
+            self._git(repo, "replace", c1, c2)
+            capture = run_capture(repo, [_script("pass")], Path(tmp) / "staging")
+            self.assertIs(capture.boundary.verdict,
+                          ObservationVerdict.MACHINERY_REDIRECTED)
+            self.assertFalse(capture.evidence_valid)
+            self.assertEqual(capture.exit_code, EXIT_MACHINERY_REDIRECTED)
+            self.assertEqual(capture.checks, ())  # nothing ran
+
+    @WINDOWS_ONLY
+    def test_a_replace_ref_installed_and_removed_in_the_interval_is_judged(self):
+        # ABA: absent at both endpoints, so the start gate and the endpoints
+        # are blind; only the interval observer catches the write to
+        # refs/replace, exactly as it does for a hook create+delete.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp))
+            c1 = self._git(repo, "rev-parse", "HEAD~1")
+            c2 = self._git(repo, "rev-parse", "HEAD")
+            capture = run_capture(repo, [_script(
+                "import subprocess",
+                f"subprocess.run(['git','replace','{c1}','{c2}'],check=True)",
+                f"subprocess.run(['git','replace','-d','{c1}'],check=True)",
+            )], Path(tmp) / "staging")
+            self.assertIs(capture.boundary.verdict,
+                          ObservationVerdict.MACHINERY_MUTATED)
+            self.assertEqual(capture.exit_code, EXIT_MACHINERY_MUTATED)
+            self.assertTrue(any("refs/replace" in v
+                                for v in capture.boundary.violations),
+                            capture.boundary.violations)
+
+    @WINDOWS_ONLY
+    def test_a_raw_packed_refs_replace_injection_in_the_interval_is_judged(self):
+        # A raw packed-refs edit installs a replace ref with no `git replace`
+        # command (reproduced OS-real). The write to packed-refs is judged,
+        # so even this ABA is caught.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp))
+            c1 = self._git(repo, "rev-parse", "HEAD~1")
+            c2 = self._git(repo, "rev-parse", "HEAD")
+            capture = run_capture(repo, [_script(
+                "import os",
+                "pr = os.path.join('.git', 'packed-refs')",
+                f"open(pr, 'a', encoding='utf-8').write('{c2} refs/replace/{c1}\\n')",
+                "os.remove(pr)",
+            )], Path(tmp) / "staging")
+            self.assertIs(capture.boundary.verdict,
+                          ObservationVerdict.MACHINERY_MUTATED)
+            self.assertTrue(any("packed-refs" in v
+                                for v in capture.boundary.violations),
+                            capture.boundary.violations)
+
+    @WINDOWS_ONLY
+    def test_a_standard_repo_capture_is_not_refused_for_resolution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp))
+            capture = run_capture(repo, [_script("pass")], Path(tmp) / "staging")
+            self.assertIsNot(capture.boundary.verdict,
+                             ObservationVerdict.MACHINERY_REDIRECTED)
+            self.assertTrue(capture.evidence_valid)
 
 
 class TestBundleRootOfTrust(unittest.TestCase):

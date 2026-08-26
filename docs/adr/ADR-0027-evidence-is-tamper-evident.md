@@ -363,3 +363,228 @@ Three artifacts beyond the gate transcripts:
   `0629b8b`, including MF48–MF50 (the topology gate and the external
   anchor).
 - `probe-f14-boundary.txt` — the earlier reviews' attempts re-run.
+
+## Third independent review addendum — BLOCKERS A, B, C
+
+F-17 stays OPEN. This addendum records the third review, scoped by the
+operator to three blockers. Only BLOCKER A required a production change;
+B is already satisfied by the existing design and is demonstrated rather
+than coded; C is a reported GAP with a proposed minimal primitive, not an
+implementation. Method: reconstruct → threat-model → OS-real / in-code
+evidence → design → implement, on git **2.55.0.windows.4**.
+
+### BLOCKER A — the counted `.git` surfaces that redirect resolution
+
+**The finding, demonstrated.** The machinery judgement judged exactly two
+surfaces (`hooks`, `config`) and COUNTED every other `.git` write,
+including the surfaces that redirect git's OBJECT / REF / ANCESTRY
+resolution. That is a real hole, not a naming worry, and it corrupts the
+one thing F-14/F-17 exist to make honest: the tree-identity binding.
+
+- **refs/replace/**** — OS-real: a `refs/replace/<C1> → <C2>` ref makes
+  `git cat-file HEAD:file` return C2's bytes, `git diff HEAD` report a
+  diff, and `git status` say `M file`, **with C1's original object bytes
+  unchanged on disk**. `GIT_NO_REPLACE_OBJECTS=1` reverses all of it, and
+  `git rev-parse HEAD` (the value of the ref) is *not* substituted — so
+  the git-head check is untouched, but the binding's `git diff HEAD` /
+  `git status` are not. In-code: `content_fingerprint` (the F-14/F-17
+  binding primitive) recomputes a different `patch_sha256` /
+  `status_sha256` under a replace ref, with `head_sha` unchanged. A
+  replace ref active at capture start is present at BOTH endpoints, so the
+  binding certifies a false tree identity with `identical: true`, and
+  nothing else catches it — the replace surface is `.git`,
+  counted-not-judged.
+- **packed-refs** — the assumption `packed-refs → inert` is **REVOKED and
+  refuted by demonstration**. `git pack-refs --all` moves a replace ref
+  into `packed-refs` and it still redirects; and a **raw append to
+  `.git/packed-refs`** (no `git replace` command) installs a replace ref
+  that `for-each-ref` sees and object resolution honours. packed-refs is
+  therefore a REF backend that can carry an OBJECT_RESOLUTION redirection.
+- **objects/info/alternates**, **objects/info/http-alternates** — redirect
+  object lookup to an external store (OBJECT_RESOLUTION; content-addressing
+  bounds substitution, but it is a trust-boundary redirection to a path
+  outside the tree).
+- **info/grafts** — still honoured by git 2.55 (deprecated, prints a hint):
+  truncated ancestry, `rev-list --count` dropped. ANCESTRY.
+- **shallow** — `.git/shallow` set `is-shallow-repository=true` and
+  truncated ancestry. ANCESTRY.
+- **config.worktree** — not read in a standard repo UNLESS
+  `extensions.worktreeConfig` is enabled; when it is, it is read and honours
+  executable keys (`core.fsmonitor` demonstrated). EXECUTION/CONFIG,
+  conditional on the extension.
+- **HEAD / index / refs/heads** — a persisted change moves the binding
+  (`git rev-parse HEAD` / `git diff HEAD`), caught as `TREE_MUTATED`
+  (measured). REF_RESOLUTION / TREE_IDENTITY, safely counted for the
+  persisted case.
+
+**Classification (semantic category → treatment after this repair).**
+
+| surface | category | treatment |
+|---|---|---|
+| `refs/replace/**` | OBJECT_RESOLUTION | **judged**: refused if active at start (MACHINERY_REDIRECTED), judged if written in the interval (MACHINERY_MUTATED) |
+| `packed-refs` | REF_RESOLUTION (replace carrier) | **judged** in the interval; an active packed replace ref is caught by the start gate via `for-each-ref` |
+| `objects/info/alternates`, `objects/info/http-alternates` | OBJECT_RESOLUTION | **judged** (start gate + interval) |
+| `info/grafts` | ANCESTRY | **judged** (faithful-repo precondition) |
+| `shallow` | ANCESTRY | **judged** (faithful-repo precondition) |
+| `config.worktree` | EXECUTION/CONFIG | **judged** in the interval (config's per-worktree twin) |
+| `commondir` | TOPOLOGY/REDIRECTION | **judged** in the interval (defence; only exists in worktrees, already refused by the topology gate) |
+| `config`, `hooks/**` (non-`.sample`) | EXECUTION/CONFIG | judged (unchanged, F-17 first delivery) |
+| `HEAD`, `refs/heads/**`, `index`, `sharedindex.*` | REF_RESOLUTION / TREE_IDENTITY | counted; a persisted change moves the binding → `TREE_MUTATED` (measured) |
+| `objects/**`, `logs/**`, `ORIG_HEAD`, `*.lock`, `COMMIT_EDITMSG` | CONTENT_OBJECT / BOOKKEEPING_INERT | counted (content-addressed or inert; do not redirect or execute) |
+
+**The fix (additive, two halves mirroring F-14's snapshot + interval).**
+
+1. `git_evidence.git_resolution_faithful(repo) -> (bool, reason)`: a
+   read-only START gate. Refuses (fails closed) when a redirection is
+   ALREADY ACTIVE — any `refs/replace/*` ref (loose OR packed, via
+   `for-each-ref`), a shallow repository, or a non-empty `alternates` /
+   `http-alternates` / `grafts`. `run_capture` calls it after
+   `git_topology_eligible`; an active redirection yields
+   **`MACHINERY_REDIRECTED`, exit 11**, no checks run, never CLEAN. This
+   catches a PRE-EXISTING replace the observer cannot see.
+2. `_is_git_resolution_redirect(path)`: an interval classifier. A WRITE to
+   any redirect surface during the capture is judged like a hook →
+   **`MACHINERY_MUTATED`, exit 9** — so an ABA (install+remove inside the
+   interval, e.g. a raw packed-refs edit) is caught, which the endpoints
+   are blind to.
+
+**Grafts / shallow, stated honestly.** They change ANCESTRY, which the
+current binding and checks do NOT consume (`git diff HEAD` is unaffected —
+measured), so they do not corrupt today's evidence. They are refused as a
+**faithful-repository precondition**, not as a demonstrated evidence
+corruption, at zero cost (the product repo is neither shallow nor grafted).
+This distinction is offered for the independent review to accept or narrow.
+
+**Not an F-14 reopen.** F-14 hashes each covered input's bytes THROUGH the
+handle that holds it, never through git, so a replace ref cannot move a
+`content_digest`; the 90k byte-bound inputs are untouched. What refs/replace
+corrupts is the git-DERIVED identity fields the bundle carries, which F-14
+explicitly assigned to F-17 (".git counted-not-judged belongs to F-17").
+No accepted F-14 guarantee is contradicted. This judgement is flagged for
+the independent review rather than acted on as a silent reopen.
+
+**The unknown-`.git` line, deliberately not moved.** The catch-all still
+COUNTS an unrecognised `.git` write rather than failing closed on it.
+Flipping it to fail-closed-on-unknown was rejected: it is fragile across
+git versions (git writes many transient files) and the operator's own rule
+forbids protection without demonstrated effect. Residual: a genuinely novel
+execute/redirect surface a future git introduces would be counted until
+classified.
+
+### BLOCKER B — Gnosis-managed worktrees: already satisfied, demonstrated
+
+**Reconstruction (ADR-0007/0009 + code).** GNOSIS mints per-task worktrees
+via `WorktreeManager` (`kernel/worktree.py`), provenance-recorded in a
+`.<task_id>.worktree.json` marker outside the tree, used as the CLI child's
+`exec_root` (`kernel/engine.py`), with landing by `WorkIntegrator` in a
+throwaway detached staging worktree (`kernel/integration.py`).
+
+**The decision: does F-17 need to run inside a linked worktree in normal
+operation? NO — demonstrated architecturally.**
+
+- The F-17 tool `run_capture` has **zero callers in `src/`**. Its only
+  production invocation is `scripts/capture_evidence.py`, hard-anchored to
+  the main checkout (`REPO = __file__.parent.parent`), and the working
+  method runs captures from the main checkout, never a worktree.
+- What runs INSIDE worktrees is the lightweight `capture_git_evidence`, the
+  verifier, and the CLI reviewers — none of them the F-17 tamper-evidence
+  tool.
+- The eligibility gate checks the CAPTURED path's own topology; a main
+  checkout that merely HAS linked worktrees registered stays eligible
+  (its `.git` is a directory, git-dir == common-dir == `repo/.git`).
+
+So the collision named in the first delivery is **latent, not actual**. If
+someone ever wired a governed run whose `Verifier` shelled out to the F-17
+capture with cwd = a task worktree, every such run would exit 10 /
+`MACHINERY_UNOBSERVABLE` and fail closed — safely and loudly, by design.
+
+**Arbitrary external gitdir stays refused, demonstrated.**
+`git_topology_eligible` refuses a `.git` FILE **before** resolving it
+(`.git` file → refused, never followed), so a `.git` redirect pointing at
+an external/other gitdir (path confusion, foreign repository identity) is
+refused — reproduced in-code against a `.git` file pointing outside the
+tree, a real linked worktree, and a real submodule working dir.
+
+**Design IF a future milestone needs capture inside a Gnosis-managed
+worktree** (not built now — no production path needs it): admit a worktree
+ONLY when its provenance is proven first — the `WorktreeManager` marker
+must exist and bind `{canonical repository, canonical worktree root,
+canonical gitdir, canonical common-dir, creator/owner}`; every path is
+resolved, canonicalised and checked against the recorded identity; a
+git-dir/common-dir that does not match the recorded expectation FAILS
+CLOSED. A `.git` redirect is never followed because git accepts it. An
+arbitrary external gitdir and an unknown topology stay refused. Until such
+a milestone exists, `linked worktree → fail closed` is the correct,
+demonstrated behaviour.
+
+### BLOCKER C — TRUST ANCHOR GAP (reported, not silently invented)
+
+The ladder is unchanged: **self-consistency ≠ tamper-evidence ≠
+authenticity**, authenticity still out of scope.
+
+**Requirement:** the anchor holding `expected_digest` must lie outside the
+surface the producer/worker who writes the bundle can rewrite —
+`worker write-authority ∩ anchor write-authority = ∅`.
+
+**Finding: no existing Gnosis primitive satisfies this. GAP.**
+
+- Every durable candidate — `RunLedger` (`kernel/ledger.py`), the claims
+  plane (`kernel/claims.py`), `.gnosis/state/**`, `BriefRecordStore` —
+  lives INSIDE `<repo>/.gnosis/**` or `runs/`, inside the git working tree
+  the bundle producer writes; the tracked `.gnosis/state/*.json` sit in the
+  very commits that carry the bundle. `worker ∩ anchor` is non-empty
+  everywhere.
+- `.gnosis/state/**` is specifically the WORST candidate: it is a declared
+  capture OUTPUT (`ALLOWED_WRITES`), writable during the very capture it
+  would anchor.
+- Even `RunLedger`, the most disciplined, verifies only against the
+  constant `GENESIS_HASH = "0"*64` with unkeyed SHA-256: it resists partial
+  edits and races, **not** whole-file regeneration by a same-user process
+  (its own docstring concedes this). Today's actual producer — the agent
+  running `capture_evidence.py` in the main checkout — has total write
+  authority over ALL candidates including ADR-0027, so moving
+  `expected_digest` into any of them changes the file format, not the
+  authority model.
+
+**Proposed minimal primitive (no Cosign/in-toto/TUF/PKI/keys):** reuse
+`RunLedger`'s append-only hash-chain mechanics but change its LOCATION and
+WRITER — an anchor ledger at `source_repo.parent/.gnosis-anchors/…jsonl`
+(the sibling-of-repo convention `.gnosis-integration` already uses),
+written only by the Director/Kernel publication step (never by the checks,
+never in `ALLOWED_WRITES`), each entry binding
+`{task_id, run_id, head_sha, bundle_path, bundle_digest}`. This moves the
+anchor OUT of every worktree checkout, out of `git status`, and out of any
+commit. Verification: `verify_chain()` on the anchor ledger, then
+`verify_bundle(bundle, expected_digest=entry.bundle_digest)`. Honest
+residual: against a same-OS-user adversary the anchor file is still
+regenerable (unkeyed hashes, constant genesis); the real gain is shrinking
+the trusted out-of-band surface to a single 64-char tail hash the operator
+records — anything stronger (distinct OS identity, off-machine replica) is
+operational hardening, and full anti-forgery remains the declared
+out-of-scope authenticity rung. **This primitive is proposed, not built —
+it is its own unit under Dependency/authority review.**
+
+### Relationship to F-14
+
+F-14 stays CLOSED and untouched. `MACHINERY_REDIRECTED` is a fail-closed
+addition that only strengthens the contract; no F-14 guarantee is weakened,
+and none was found false.
+
+### Tests and mutants added
+
+Fifteen tests (`TestGitResolutionMustBeUnredirected`): the predicate; the
+gate over a clean repo, a non-repo, a loose replace ref, a packed replace
+ref, alternates, grafts, a shallow repo, an empty redirection file; the
+in-code proof that a replace ref fools `content_fingerprint`; and end-to-end
+— a pre-existing replace ref failing closed (MACHINERY_REDIRECTED, exit 11,
+nothing ran), an ABA `git replace` and a raw packed-refs replace injection
+judged in the interval, and a standard capture not refused. Six mutants
+(MF51–MF56): the predicate returns False; run_capture ignores the gate; the
+classifier drops the MACHINERY_REDIRECTED branch; `git_resolution_faithful`
+stops looking for replace refs; it stops checking alternates/grafts; the
+interval classifier stops routing redirects to the judged set.
+
+### Evidence (third review)
+
+_Filled by the evidence commit that carries the bundle bound to this
+repair._
