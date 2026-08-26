@@ -1,0 +1,91 @@
+﻿===== F-17 DEDICATED-WORKER FEASIBILITY PROBE =====
+PRE-FLIGHT: HEAD=4e746f0  users(Gnosis*)=  services(*Gnosis*)=
+created NON-admin user GnosisWorkerProbe  SID=S-1-5-21-1160728320-3593568380-93362170-1008  groups=Usuarios
+is in Administradores: False
+launching worker via CreateProcessWithLogonW (Director PID=27488, integrity High)...
+worker launch rc=0
+
+===== WORKER RESULTS =====
+STARTED user=desktop-vtqpqvl\gnosisworkerprobe cwd=C:\ProgramData\GnosisWorkerProbe\results
+== IDENTITY ==
+
+INFORMACIÓN DE USUARIO
+----------------------
+
+Nombre de usuario                 SID                                         
+================================= ============================================
+desktop-vtqpqvl\gnosisworkerprobe S-1-5-21-1160728320-3593568380-93362170-1008
+
+
+INFORMACIÓN DE GRUPO
+--------------------
+
+Nombre de grupo                              Tipo           SID          Atributos                                                               
+============================================ ============== ============ ========================================================================
+Todos                                        Grupo conocido S-1-1-0      Grupo obligatorio, Habilitado de manera predeterminada, Grupo habilitado
+BUILTIN\Usuarios                             Alias          S-1-5-32-545 Grupo obligatorio, Habilitado de manera predeterminada, Grupo habilitado
+NT AUTHORITY\INTERACTIVE                     Grupo conocido S-1-5-4      Grupo obligatorio, Habilitado de manera predeterminada, Grupo habilitado
+INICIO DE SESIÓN EN LA CONSOLA               Grupo conocido S-1-2-1      Grupo obligatorio, Habilitado de manera predeterminada, Grupo habilitado
+NT AUTHORITY\Usuarios autentificados         Grupo conocido S-1-5-11     Grupo obligatorio, Habilitado de manera predeterminada, Grupo habilitado
+NT AUTHORITY\Esta compañía                   Grupo conocido S-1-5-15     Grupo obligatorio, Habilitado de manera predeterminada, Grupo habilitado
+NT AUTHORITY\Cuenta local                    Grupo conocido S-1-5-113    Grupo obligatorio, Habilitado de manera predeterminada, Grupo habilitado
+LOCAL                                        Grupo conocido S-1-2-0      Grupo obligatorio, Habilitado de manera predeterminada, Grupo habilitado
+NT AUTHORITY\Autenticación NTLM              Grupo conocido S-1-5-64-10  Grupo obligatorio, Habilitado de manera predeterminada, Grupo habilitado
+Etiqueta obligatoria\Nivel obligatorio medio Etiqueta       S-1-16-8192                                                                          
+
+
+INFORMACIÓN DE PRIVILEGIOS
+--------------------------
+
+Nombre de privilegio          Descripción                                  Estado       
+============================= ============================================ =============
+SeShutdownPrivilege           Apagar el sistema                            Deshabilitado
+SeChangeNotifyPrivilege       Omitir comprobación de recorrido             Habilitada   
+SeUndockPrivilege             Quitar equipo de la estación de acoplamiento Deshabilitado
+SeIncreaseWorkingSetPrivilege Aumentar el espacio de trabajo de un proceso Deshabilitado
+SeTimeZonePrivilege           Cambiar la zona horaria                      Deshabilitado
+
+
+== ACL MATRIX (effective access, run as the worker) ==
+worktree_write = ALLOWED
+worktree_create = ALLOWED
+worktree_delete = ALLOWED
+tcb_read = ALLOWED
+tcb_write = DENIED (UnauthorizedAccessException)
+runid_read = ALLOWED
+runid_write = DENIED (UnauthorizedAccessException)
+anchor_create = DENIED (UnauthorizedAccessException)
+anchor_delete = DENIED (UnauthorizedAccessException)
+anchor_rename = DENIED (UnauthorizedAccessException)
+anchor_change_dacl = DENIED
+anchor_take_owner = DENIED
+anchor_lower_label = DENIED
+== CROSS-PROCESS (worker to High Director pid 27488) ==
+OpenProcess(PROCESS_VM_WRITE) = DENIED err=5
+OpenProcess(PROCESS_DUP_HANDLE) = DENIED err=5
+OpenProcess(PROCESS_CREATE_THREAD) = DENIED err=5
+OpenProcess(PROCESS_CREATE_PROCESS) = DENIED err=5
+OpenProcess(PROCESS_VM_OPERATION) = DENIED err=5
+== CREDENTIAL ISOLATION (ACCESSIBLE or NOT ACCESSIBLE, no values) ==
+C:\Users\nicol\.claude = ABSENT
+C:\Users\nicol\.codex = ABSENT
+C:\Users\nicol\.gitconfig = ABSENT
+C:\Users\nicol\.ssh = ABSENT
+== GIT (Program Files, shared) ==
+git init/config/add/commit = PASS (commit 37f7c11)
+== PYTHON ==
+real venv python (operator profile) = NOT ACCESSIBLE
+copied python = NOT TESTED (copy skipped for speed/reversibility)
+== CLAUDE / CODEX (startup only, no login, no provider call) ==
+real claude = NOT ACCESSIBLE (CommandNotFoundException)
+codex = NOT TESTED (codex.ps1 under operator profile needs node/npm; copy impractical) - EXPECTED compat cost
+== DONE ==
+
+anchor after worker (expect only seed.txt): seed.txt
+tcb after worker (expect MARKER=ORIGINAL): MARKER="ORIGINAL"
+
+===== ROLLBACK =====
+user removed
+profile removed=True
+probe dir remove: Excepción al llamar a "Delete" con los argumentos "2": "Acceso denegado a la ruta de acceso '81171448eb9f2ee3821e3d447aa6b2fe3ddba1'."
+POST-FLIGHT: users(Gnosis*)=  services(*Gnosis*)=  worker-profile-exists=False  probe-dir-exists=True  HEAD=4e746f0
