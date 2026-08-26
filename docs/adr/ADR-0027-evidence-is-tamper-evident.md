@@ -337,3 +337,29 @@ tamper-evidence; and the recomputed-manifest attack caught by the anchor.
 Three mutants: MF48 (classifier ignores an ineligible topology), MF49
 (run_capture runs checks on an ineligible topology), MF50 (verify_bundle
 ignores the external anchor).
+
+### Evidence (second review)
+
+`.gnosis/evidence/20260826T020025Z/`, bound to `0629b8b`.
+
+| | |
+|---|---|
+| binding | BOUND — `head_sha 0629b8b…` |
+| boundary | CLEAN, 0 violations; 40 `.git` machinery events, **0 judged** |
+| covered inputs | 90,331 |
+| bundle manifest | `MANIFEST.sha256.json`, 17 files; `verify_bundle` → verified; **`bundle_digest e1370faa1e3dab3678d712396b087b8ee6d36719812164421d50bc73a9008754`** (this is the external anchor: `verify_bundle(bundle, expected_digest=<this>)` is the tamper-evidence check) |
+| `identity_digest` | `924327c9b17f96bc3d1de250690abffc74b83084dbf58d9e62efea939b4a0528` |
+| `content_digest` | `6f9e9d36b5c84f5ffd68e42ae22cd4b5969f90d2c0b6e445fccaca4e8feb646e` |
+| pytest | 1061 passed, 70 subtests, 1026 s |
+| mypy / ruff | clean / 19 |
+| `evidence_valid` / exit | true / 0 |
+
+Three artifacts beyond the gate transcripts:
+
+- `git-worktree-audit.txt` — OS-real: a real `git worktree add`, the
+  topology (all trust-relevant machinery outside the tree), and the
+  fail-closed result (MACHINERY_UNOBSERVABLE, exit 10, no checks run).
+- `mutation-check.f14-round16.txt` — 50 mutants, none survived, over
+  `0629b8b`, including MF48–MF50 (the topology gate and the external
+  anchor).
+- `probe-f14-boundary.txt` — the earlier reviews' attempts re-run.

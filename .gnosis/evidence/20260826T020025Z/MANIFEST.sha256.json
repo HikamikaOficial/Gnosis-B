@@ -1,0 +1,24 @@
+{
+  "bundle_digest": "e1370faa1e3dab3678d712396b087b8ee6d36719812164421d50bc73a9008754",
+  "files": {
+    "SUMMARY.json": "39e3f45c97a9f9cca1e0b252d3edd2592f5009667064fbf072c6d7d5fb4fb193",
+    "git-head.stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "git-head.stdout.txt": "a813f4993e7a0a64c8892cd07e4f1093ab34ea9adc6c9eac5b3de9c674cca068",
+    "git-machinery-audit.txt": "772fb654bea52769fc48ada71eeaf860cf916264509055d87aeb9b17f293a899",
+    "git-status.stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "git-status.stdout.txt": "c6d790b78cc45144a4333b29bf3189cbfc4ecc42001ae2d1b1fb79d23baa4fed",
+    "git-worktree-audit.txt": "83ce4a3828293e4670ff17a05f7988bf4efbf7731d830a6efcd17317ead097fc",
+    "input-identities.json": "f7dcf41089d8d45454643d58f037654ebbb976b7102064dc4cdfed15d6ac4be1",
+    "input-manifest.json": "22552fa7e93c85aa33d7dec17b446229992eda1bffb32686d1017c723d79abfd",
+    "mutation-check.f14-round16.txt": "ef0646e3a7a3078455bd6433f6e9a18559cc30ba7169f151fbfae8b62d19b8f9",
+    "mypy.stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "mypy.stdout.txt": "7791bcb3359573e6942029a3550f4ac5d7084d3d2dcc242ecbf7c0779d34d76d",
+    "probe-f14-boundary.txt": "340328ef432479321515bd4380ae028a47869c61f954ad46f6f8d99e70b6ab01",
+    "pytest.stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "pytest.stdout.txt": "9e5775f5d139acae9c90035d853de03ec9abc4732e1dd6522e78b9501bb5103a",
+    "ruff.stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ruff.stdout.txt": "99c8171cee9640f466311597fe4332cffdfd97020de36af97edf8a1b74ff3124"
+  },
+  "note": "SHA-256 of every file in this bundle. bundle_digest is one hash over the whole map. Re-derive it with verify_bundle(): any file added, removed or changed after capture is detected. The manifest cannot hash itself, so it is the one file not listed; a cryptographic signature over bundle_digest \u2014 which would also stop an editor from recomputing this manifest \u2014 needs key management that is out of scope and is a declared limitation, not a claim.",
+  "unlisted": "MANIFEST.sha256.json"
+}
