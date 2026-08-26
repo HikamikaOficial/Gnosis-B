@@ -627,3 +627,163 @@ detached from the main checkout. `CAPTURE-NOTE.md` states this in the bundle.
 5. **Evidence delivered as an artifact bundle** with the completed capture's
    SUMMARY, not a fresh full `run_capture` bundle, for the environment
    reason above. Confirm this is acceptable or require a warm-cache re-run.
+
+## Fourth review — BLOCKER C resolution: TRUST ANCHOR AUTHORITY SEPARATION NOT YET AVAILABLE
+
+The third-review independent verdict approved BLOCKER A, provisionally
+approved B, and left **BLOCKER C blocking**. Its instruction was explicit:
+the anchor separation must be of AUTHORITY, not pathname
+(`worker_write_authority ∩ anchor_write_authority = ∅`); if the current
+architecture cannot separate those authorities, **report the limitation and
+do not build a false separation.** This addendum records the outcome.
+
+### Threat model (as set by the review)
+
+- **T1 — accidental corruption.** A legitimate process corrupts evidence by
+  accident. **Defeated today** by the manifest + `verify_bundle` (any
+  post-capture change is detected).
+- **T2 — compromised/malicious worker** with normal authority over its
+  worktree/repository: rewrites the bundle, recomputes the manifest,
+  substitutes `bundle_digest`, rewrites the anchor record, hides it. **This
+  is F-17's minimum bar for tamper-evidence, and it is NOT defeated today.**
+- **T3 — Director/Kernel compromised** — out of scope unless the contract
+  says otherwise.
+- **T4 — full OS/user control** — out of scope without a cryptographic root.
+
+### Trust-boundary model, measured against the code
+
+For an anchor to defeat T2 there must be a boundary the worker cannot cross:
+the worker MAY produce the bundle and its digest, and MUST NOT be able to
+write/modify/delete the trusted anchor. **No such boundary exists in the
+current implementation, and Gnosis documents this itself.**
+
+- The worker is launched by `CLIRunner.run` →
+  `subprocess.Popen(argv, cwd=…, env=…)` (`runner/claude_cli_runner.py:97`)
+  with **no `user=`, no restricted/low-integrity token, no job object, no
+  sandbox, no ACL**. It runs as the **same OS user** as the Director/Kernel
+  (`kernel/engine.py:1038`), and F-17 captures require it to run arbitrary
+  shell (git, pytest), so it has full filesystem write as that user.
+- `--permission-mode plan` is "a permission-layer promise, not a sandbox"
+  (`adapters/cli_review.py:49`); the kernel's backstop is a DETECTIVE
+  before/after fingerprint, not prevention.
+- Gnosis's own machine-checked enforcement matrix
+  (`kernel/policy.py:766`, taxonomy `HARD / SANDBOX_APPROX / PROMPT_ONLY /
+  IGNORED` at `:661`) records worktree isolation and `reviewer_read_only` as
+  **`SANDBOX_APPROX`** ("cwd scope only; an absolute path escapes it";
+  "detection after the fact, not prevention… does NOT constrain writes to
+  the SOURCE checkout, a sibling worktree, or anywhere else the process can
+  reach"). The `HARD` filesystem entries (`file_lock/single_writer`,
+  `claims/no_stale_write_after_deposition`) are concurrency/ownership
+  serialization **within one trust domain**, not a boundary between the
+  worker and a privileged store. No entry claims OS-user separation, ACL,
+  container, or a mediating privileged service.
+- `RunLedger`'s own docstring: "Filesystem-level immutability is a hardening
+  step left for a later milestone" (`kernel/ledger.py:5`); it verifies only
+  against `GENESIS_HASH="0"*64` with unkeyed SHA-256 — resists partial edits
+  and races, not whole-file regeneration by the same user.
+
+### Why `source_repo.parent/.gnosis-anchors` is REJECTED (a false separation)
+
+The third-review-proposed sibling-of-repo ledger is a **convention**, not an
+authority boundary. A T2 worker running shell as the same OS user writes that
+sibling path and recomputes its unkeyed chain exactly as it can the in-repo
+file. `anchor_path != repository_path` is satisfied; `worker ∩ anchor = ∅`
+is NOT. Per the review, this is not built.
+
+### Attack matrix (review §12), current reality
+
+A/B/C (edit bundle ± manifest ± ADR) are caught **only if the anchor is held
+by a principal the editor is not** — which for T2 is false today: the same
+worker owns bundle, manifest, ADR, git history and every candidate ledger.
+D/E/F (worker modifies / deletes / forges the anchor) all **succeed** today,
+because the worker has write authority over every anchor location. G/H/I
+(missing / corrupt / broken-chain anchor → fail closed) are enforceable in
+code and would be honoured, but they protect against T1, not T2. J/K/L
+(anchor bound to a different HEAD/run; replay; concurrent runs) are only
+meaningful once an unforgeable anchor exists.
+
+### Finding
+
+**`TRUST ANCHOR AUTHORITY SEPARATION NOT YET AVAILABLE`.** Against T2, an
+enforced worker∖anchor separation is unreachable in the current single-OS-user
+architecture without introducing exactly what the review excludes:
+
+1. **A real OS boundary** — run the worker under a distinct OS user, or a
+   restricted / lower-mandatory-integrity token (Windows MIC), and set the
+   anchor store to a higher integrity level / an ACL the worker's SID cannot
+   write; or a job-object/sandbox/container; or a privileged mediating
+   service the worker cannot bypass. All are **new runner infrastructure**,
+   none exists today. This is the minimal non-crypto path and it is a
+   milestone of its own (and touches ADR-0007/0009's isolation model, which
+   the enforcement matrix already flags as `SANDBOX_APPROX`).
+2. **A cryptographic authenticity root** — a signature over `bundle_digest`
+   with a key the worker cannot read. This is the **AUTHENTICITY** rung,
+   explicitly deferred.
+
+The only lever available now — an operator recording the 64-char
+`bundle_digest` tail out-of-band — works **only because a human, not the
+worker, holds it**; it is not an enforced code boundary and cannot be
+automated within the worker's authority.
+
+### The honest current guarantee (scoped, not overclaimed)
+
+F-17 today provides: SELF-CONSISTENCY (manifest/`verify_bundle`, defeats T1)
+and TAMPER-EVIDENCE against a **non-adversarial or non-same-user** actor via
+the git-commit + recorded-digest anchor. It does **NOT** provide
+tamper-evidence against T2 (a malicious same-OS-user worker), because that
+requires an authority boundary the platform does not yet enforce. Nothing in
+the repo may claim T2 resistance until (1) or (2) above exists.
+
+### States (review §10) — recorded, not yet coded
+
+Keep `SELF_CONSISTENT` (have) distinct from `ANCHORED` (requires the
+authority-separated store) and `AUTHENTICATED` (requires crypto). `ANCHORED`
+is deliberately **not** introduced in code now: a state nothing can produce
+under an enforced boundary would be a false promise, exactly what §8 forbids.
+`verify_bundle(bundle, expected_digest=X)` stays a pure hash primitive; a
+future `verify_anchored_bundle(...)` obtains `X` from the authorized store —
+built only once that store's write authority is enforced.
+
+### §14 — the unknown-`.git` contractual decision (formalized, not re-audited)
+
+Independent of C, the review required one contractual decision before any
+future closure: **an UNKNOWN trust-sensitive `.git` surface must never be
+treated as inert bookkeeping.** Decision, recorded here as the contract to
+implement at closure (no code lands now — the review forbids re-expanding the
+git-machinery audit unless C surfaces a new interaction, and C did not):
+
+- **Declared scope.** The machinery guarantee is demonstrated for the git
+  implementation family it was audited on: **git ≥ 2.x with the `files` ref
+  backend and loose refs (measured on 2.55.0.windows.4)**. A different ref
+  backend (e.g. `reftable`) or a materially different version is
+  **out of the demonstrated scope** until re-audited.
+- **The rule.** Within the classifier's machinery-evaluation area (`.git`),
+  a path that is neither in the KNOWN-inert content-addressed/bookkeeping set
+  (objects, logs, ORIG_HEAD, FETCH_HEAD, `*.lock`, COMMIT_EDITMSG, index,
+  refs/heads, HEAD — each argued safe: content-addressed, or caught by the
+  binding) nor in the KNOWN-judged redirect/execute set (this ADR's tables)
+  is **UNKNOWN**, and `UNKNOWN != INERT`: it must **fail closed** (lose the
+  F-17 guarantee), not be silently counted. The rule must be minimal — it
+  must not reclassify a known content-addressed object write as unknown, and
+  it must not create absurd cross-version fragility for surfaces already
+  argued safe.
+- **Goal.** Prevent `new trust-sensitive git machinery → not recognized →
+  silently counted → CLEAN`.
+
+This closes the third-review open decision #3 as a **decision** (was: "unknown
+stays counted") — the contract is now "unknown fails closed within the
+declared git scope"; the implementation is deferred to the closure unit
+because it is a machinery change requiring a fresh capture the environment
+must be able to produce.
+
+### Verdict of this unit
+
+BLOCKER C is **not resolvable in code today without out-of-scope
+infrastructure**, and building a pathname-only anchor is refused. F-17
+therefore **stays OPEN**. The next unit is not "write the anchor file" but a
+prerequisite **authority milestone**: give the worker a genuinely lower
+filesystem authority than the anchor store (separate OS user / restricted
+token + ACL, or a mediating service), OR accept the cryptographic
+authenticity root. Only then can `ANCHORED` and `verify_anchored_bundle`
+exist without being a false promise. No production code changed in this
+unit; the finding, the threat model and the §14 contract are the deliverable.
