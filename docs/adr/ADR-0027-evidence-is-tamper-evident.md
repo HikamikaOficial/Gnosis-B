@@ -992,3 +992,125 @@ finding), `mutation-check.authority.txt` (8/8 caught, 18-test baseline),
 `authority-directed.txt` (18 passed), `CAPTURE-NOTE.md`. New code:
 `assert_integrity` in `authority.py`, the A/B/C tests, the AM8 mutant. No fresh
 full `run_capture` (environment). mypy clean (59 files), ruff at baseline.
+
+## Seventh review — AUTHORITY BOUNDARY REQUALIFICATION (research/design; no wiring)
+
+Before promoting same-user MIC to the production boundary, the review asked to
+compare a stronger boundary. Research + OS-real probes + comparison. No
+production wiring; the MIC lab is preserved as evidence and defense-in-depth.
+
+### Current design analysed (OS-real)
+
+`run_at_integrity` builds the worker token by **duplicating the Director's
+elevated token and lowering its integrity to Medium** — it does not strip
+privileges. Measured:
+- Worker and Director share **one user SID** (`S-1-5-21-…-1000`); the ONLY
+  difference is the integrity level (Worker Medium, Director High).
+- The **Medium worker token still holds all 24 admin privileges** (present but
+  disabled), including SeBackup, SeRestore, SeTakeOwnership, SeDebug — the
+  Director differs only in which are *enabled*.
+- Enforced-by-kernel and held against direct probes: enabling SeDebug /
+  SeRestore / SeTakeOwnership at Medium **fails (ERROR_NOT_ALL_ASSIGNED 1300)**;
+  `OpenProcess(High Director, PROCESS_VM_WRITE)` is **DENIED (5)**; every
+  file-write / relabel / take-ownership on the High anchor is denied; no handle
+  inheritance (`CreateProcessWithTokenW`).
+
+### Candidate A — same-user MIC: DEFENSE-IN-DEPTH, not a boundary
+
+Strengths: kernel-enforced no-write-up; no admin-provisioned account; worker
+keeps its full toolchain; my direct escalation probes were all denied.
+Weakness that decides it: it is **same-user**, and Microsoft does **not** treat
+the Medium→High integrity split as a security boundary (UAC / integrity
+bypasses are not serviced as vulnerabilities). The worker shares the user's SID
+and profile, so the T2 attack surface for elevation is large (auto-elevating
+COM, UAC bypasses, and — measured earlier — worker-writable trusted code the
+High Director later imports). The retained-but-gated admin privileges are a
+latent risk. Hardening A' = `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE)` to
+remove the privileges outright; still same-SID, so still no ACL separation.
+**Keep A/A' as defense-in-depth, not the primary boundary.**
+
+### Candidate B — dedicated non-admin worker user: the qualified boundary
+
+A separate non-admin local account gives the worker a **different SID**, so
+NTFS DACLs genuinely separate the two principals — and **user-account
+isolation IS a Microsoft-recognised security boundary**. A fresh standard-user
+token also has **minimal privileges natively** (no SeBackup/SeRestore/SeDebug/
+SeTakeOwnership even present). Anchor/RunIdentity/trusted-code DACLs deny the
+worker SID; the worker gets RW on its worktree and RX on the toolchain by
+explicit grant.
+**OS-real probe BLOCKED:** creating a local user was refused by this
+environment's auto-mode classifier (a system-state change needing operator
+authorization), so B's feasibility (toolchain read-access, Git/Python/Claude/
+Codex under a separate profile, credential provisioning, cleanup/recovery)
+could NOT be demonstrated here. B's SECURITY is established Windows behaviour;
+its COMPAT must be probed once user provisioning is authorised.
+
+### Candidate C — trusted service / service SID (publisher only)
+
+A minimal publisher as a Windows service or virtual service account gives the
+PUBLISHER a distinct service SID and a semantic named-pipe IPC (never an
+arbitrary-write oracle). Stronger publisher isolation, but more moving parts
+(service install/lifecycle, IPC protocol) and it does not by itself constrain
+the worker — best as an *addition* to B for the publisher principal, not a
+replacement.
+
+### Candidate D — AppContainer worker: impractical (reasoned)
+
+AppContainer denies filesystem/network by default and requires explicit
+capabilities; a full dev toolchain (Python, Git, the Claude/Codex CLIs,
+subprocess, networking, credentials) needs so many capabilities/brokered
+exceptions that the container stops being a meaningful boundary. Not probed
+OS-real; **rejected** for production on that basis (and `CreateProcessInSandbox`
+stays LAB/FUTURE while experimental).
+
+### Comparison (summary)
+
+| | A same-user MIC | B dedicated user | C service/SID (publisher) | D AppContainer |
+|---|---|---|---|---|
+| T2 boundary strength | mitigation only | **strong (SID ACL)** | strong (publisher) | strong but unusable |
+| MS-recognised boundary | no (integrity) | **yes (user acct)** | yes | yes |
+| filesystem isolation | label only, same SID | **ACL by SID** | ACL by service SID | capability-gated |
+| privilege surface | retains admin (gated) | **minimal native** | minimal | minimal |
+| toolchain compat | **full (Medium)** | grant-dependent (unproven) | full | poor |
+| complexity / TCB | low | medium | higher | high |
+| probe status here | **OS-real done** | blocked (classifier) | reasoned | reasoned |
+
+### Selected architecture
+
+**Dedicated non-admin WORKER user + a minimal TRUSTED PUBLISHER principal;
+NTFS ACL (by SID) as the PRIMARY boundary; MIC (worker Medium / anchor High
+NO_WRITE_UP) retained as DEFENSE-IN-DEPTH; explicit no-inherit handle policy
+(proven); minimal semantic IPC.** The publisher principal may be the elevated
+High Director user (simplest) or a service SID (Candidate C, stronger) — to be
+decided with the feasibility probe. This is the reviewer's hypothesis, and the
+evidence supports it: A is not a real boundary, B is the recognised one.
+
+### TCB (trust plane) — kept minimal
+
+trusted launcher, RunIdentity store/reader, AnchorStore, evidence verifier,
+publisher, and the minimal runtime they need — labelled/owned so the worker SID
+cannot write them. NOT the whole `src/` + `.venv`: a dedicated **trusted
+runtime** (a protected interpreter + the trust-plane package) is preferred over
+labelling everything. The worker plane (Claude, Codex, work repos, generated
+code, tests, dev tools) stays worker-writable and worker-owned.
+
+### Migration / wiring plan (NOT executed this round)
+
+1. Operator-authorised feasibility probe of B: provision a non-admin worker
+   user; grant worktree RW + toolchain RX; verify Git/Python/Claude/Codex,
+   credentials (per-user isolation), networking, cleanup/recovery.
+2. Lay the trust plane on a worker-non-writable root (ACL by SID; MIC as DiD).
+3. Launch the worker as the worker user (CreateProcessWithLogonW / a broker);
+   `assert_integrity`-style startup checks extended to SID/privilege.
+4. Build the High RunIdentity store + AnchorStore + publisher on the trust
+   plane; wire `publish_anchor`/`verify_anchored_bundle`.
+5. §14 unknown-`.git`; then a fresh FULL `run_capture`.
+
+### Residual risks / decisions for review
+
+- B's **feasibility is unproven here** (classifier blocked user creation) — the
+  compat/credentials matrix is the immediate gated step.
+- Provisioning a worker user + credential isolation for Claude/Codex/Git is an
+  operational change the operator must approve.
+- A/A' (same-user MIC) stays as defense-in-depth; the MIC lab is kept.
+- No wiring, no §14, no fresh capture this round (by instruction). F-17 OPEN.
