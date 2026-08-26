@@ -54,6 +54,9 @@ MUTANTS: list[Mutant] = [
     Mutant("AM7", "append stops requiring a record to extend the chain",
            [(AUTH, "        if record.seq != len(existing) or record.prev_record_digest != expected_prev:",
              "        if False:")]),
+    Mutant("AM8", "assert_integrity stops failing closed, so a worker at the wrong (High) level proceeds",
+           [(AUTH, "    actual = process_integrity()\n    if actual != expected:",
+             "    actual = process_integrity()\n    if False:")]),
 ]
 
 

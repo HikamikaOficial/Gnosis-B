@@ -206,6 +206,20 @@ else:  # pragma: no cover - exercised only off Windows
         raise AuthorityUnavailable("restricted launch is a Windows mechanism")
 
 
+def assert_integrity(expected: str) -> None:
+    """Fail closed unless the current process runs at `expected` integrity.
+
+    Verifiable introspection for the wiring: the worker calls
+    `assert_integrity("Medium")` at startup and the publisher
+    `assert_integrity("High")`, so a launch that silently ran the worker at
+    the wrong (higher) level is refused rather than proceeding as if
+    protected."""
+    actual = process_integrity()
+    if actual != expected:
+        raise AuthorityUnavailable(
+            f"process integrity is {actual}, expected {expected}; fail closed")
+
+
 def label_high_no_write_up(path: Path) -> None:
     """Label a directory HIGH integrity with NO_WRITE_UP, inherited by its
     contents, so a lower-integrity process cannot write into it. Verifies the

@@ -900,3 +900,95 @@ Contains `git-authority-audit.txt` (OS-real matrix), `mutation-check.authority.t
 `authority.py`, `tests/test_authority_boundary.py`,
 `scripts/mutation_check_authority.py`; engine/runner untouched (wiring is the
 closure step). mypy clean (59 files), ruff at baseline.
+
+## Sixth review — the three bypass blockers (handle inheritance, publisher code, RunIdentity)
+
+The review approved the MIC primitive within T2 and required three
+bypass properties be proven OS-real BEFORE wiring the runtime. Done.
+
+### BLOCKER A — privileged handle inheritance: satisfied (structural)
+
+A High handle the Director holds open must not reach the worker: an inherited
+handle carries already-granted access and would bypass MIC. Demonstrated
+OS-real (`git-authority-audit.txt` §2): the Director opened the anchor for
+WRITE with an **inheritable** handle, then launched the worker via
+`run_at_integrity`; the Medium worker's `WriteFile` through that handle failed
+with **ERROR_INVALID_HANDLE (6)** and the file stayed empty. The guarantee is
+**structural**: `CreateProcessWithTokenW` has no `bInheritHandles` parameter
+and does not inherit handles, so `WorkerInheritedPrivilegedHandles = ∅` by
+construction — there is no inheritance-enabling branch in `authority.py` to
+flip (the launch API cannot express it), and `run_at_integrity` sets no
+inheritable std handles. Test:
+`test_the_worker_does_not_inherit_a_privileged_handle`.
+
+### BLOCKER B — trusted publisher code integrity: mechanism proven, real gap found
+
+The High publisher must not execute worker-controlled code. Two facts,
+OS-real:
+- **Mechanism (works).** Trusted code labelled **High NO_WRITE_UP** is
+  READ/imported by a Medium worker but **cannot be overwritten** by it
+  (`overwrite → PermissionError`; `import` still returns the original) — MIC's
+  no-write-up blocks writes while allowing reads, so a High-labelled code root
+  is worker-executable but worker-immutable. Test:
+  `test_high_labelled_trusted_code_is_readable_but_not_writable_by_the_worker`.
+- **Finding (open).** The product's OWN trusted code is **currently
+  Medium-writable**: a Medium worker can append to
+  `src/gnosis/kernel/authority.py` right now (measured). So as things stand a
+  worker could poison the very module the High Director later imports. **The
+  closure wiring MUST label the trusted-code root — the `gnosis` package under
+  `src/` and the `.venv` interpreter — High NO_WRITE_UP** (readable, not
+  writable) before the boundary is complete. Until then B is not closed; this
+  is one reason F-17 stays OPEN.
+
+`assert_integrity(expected)` is added as the verifiable introspection the
+review asked for: the worker calls `assert_integrity("Medium")` and the
+publisher `assert_integrity("High")` at startup, failing closed if the process
+runs at the wrong level (a launch that silently ran the worker High is
+refused, not proceeded). Tests: `test_assert_integrity_fails_closed_on_the_wrong_level`,
+`test_a_medium_worker_asserts_medium_and_refuses_high`.
+
+### BLOCKER C — authoritative RunIdentity: design proven, wiring requirement stated
+
+`publish_anchor` takes `RunIdentity` as a **parameter** and never adopts
+identity from the bundle: the record's `task_id`/`run_id`/`repository_id`/
+`head_sha`/`bundle_path` come from the Director's identity, and the bundle is
+only cross-checked (its bound head must equal the Director's). Demonstrated:
+`test_publish_binds_the_directors_identity_not_the_bundles` (distinctive
+Director values land in the record) and the head-mismatch rejection. **Wiring
+requirement (open):** the Director must SOURCE `RunIdentity` from
+High-integrity state — its own run registration written before the worker
+runs, on the High side — not from any worker-written record. That store is the
+same High-labelled surface as the AnchorStore; building it is part of the
+closure wiring.
+
+### Tests, mutants
+
+`tests/test_authority_boundary.py` — **18 tests** (adds A: no handle
+inheritance; B: High code readable-not-writable; C: identity from the Director;
+assert_integrity fail-closed on the wrong level, from High and from a Medium
+child). `scripts/mutation_check_authority.py` — **8 mutants (AM1..AM8), 0
+survived** (AM8: assert_integrity stops failing closed). A/B/C's core
+guarantees are **structural** (no handle-inheritance branch; identity is a
+parameter never read from the bundle; code integrity is a label/wiring
+property), demonstrated by the OS-real tests; the mutable enforcement knobs —
+launch at Medium (AM1), label High (AM2), fail-closed on wrong integrity (AM8)
+— are mutation-covered.
+
+### Why F-17 stays OPEN (unchanged verdict, expanded)
+
+BLOCKER A satisfied; B's mechanism proven but the **real trusted-code root is
+still worker-writable** (must be High-labelled in the wiring); C's design
+proven but the **RunIdentity source must be wired to High state**. On top:
+wiring the Medium launch into the production engine/runner, §14 unknown-`.git`,
+and a **fresh FULL `run_capture`** (env-blocked). Per the review, no fresh full
+capture ⇒ **do not close F-17**.
+
+### Evidence (sixth review)
+
+`.gnosis/evidence/20260826T184603Z/`, `verify_bundle` → verified,
+**`bundle_digest 5b2b4c68c27efde207392a43fd1661aed578293155c44c22edb82b595bf5ca56`**.
+`git-authority-audit.txt` (attack matrix + A/B OS-real + the real-src B
+finding), `mutation-check.authority.txt` (8/8 caught, 18-test baseline),
+`authority-directed.txt` (18 passed), `CAPTURE-NOTE.md`. New code:
+`assert_integrity` in `authority.py`, the A/B/C tests, the AM8 mutant. No fresh
+full `run_capture` (environment). mypy clean (59 files), ruff at baseline.

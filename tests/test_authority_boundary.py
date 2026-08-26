@@ -28,6 +28,7 @@ from gnosis.kernel.authority import (
     AnchorStore,
     AuthorityUnavailable,
     RunIdentity,
+    assert_integrity,
     label_high_no_write_up,
     process_integrity,
     publish_anchor,
@@ -184,6 +185,23 @@ class TestThePublicationProtocol(unittest.TestCase):
             with self.assertRaises(AuthorityUnavailable):
                 publish_anchor(store, _identity("abc123"), b)
 
+    def test_publish_binds_the_directors_identity_not_the_bundles(self):
+        # BLOCKER C: the record's authoritative fields come from the Director's
+        # RunIdentity, never from anything the worker put in the bundle. The
+        # bundle is only cross-checked (head), never adopted as identity.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            b = _make_bundle(root, head_sha="deadbeef")
+            store = AnchorStore(root / "anchors")
+            ident = RunIdentity(task_id="F-17", run_id="DIRECTOR-RUN",
+                                repository_id="canonical-repo", head_sha="deadbeef",
+                                bundle_path=".gnosis/evidence/x")
+            rec = publish_anchor(store, ident, b)
+            self.assertEqual(rec.run_id, "DIRECTOR-RUN")
+            self.assertEqual(rec.repository_id, "canonical-repo")
+            self.assertEqual(rec.head_sha, "deadbeef")
+            self.assertEqual(rec.bundle_path, ".gnosis/evidence/x")
+
     def test_verify_fails_closed_on_a_broken_chain(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -269,6 +287,94 @@ class TestTheOsAuthorityBoundary(unittest.TestCase):
             # this test process is High (the publisher) -> ALLOWED
             (anchor / "published.txt").write_text("by director", encoding="utf-8")
             self.assertTrue((anchor / "published.txt").exists())
+
+    def test_the_worker_does_not_inherit_a_privileged_handle(self):
+        # BLOCKER A: a High parent opens the anchor WRITE with an INHERITABLE
+        # handle; run_at_integrity (CreateProcessWithTokenW) must not pass it to
+        # the Medium worker. WorkerInheritedPrivilegedHandles = empty.
+        import ctypes
+        import msvcrt
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            anchor = root / "anchor"; anchor.mkdir()
+            worktree = root / "worktree"; worktree.mkdir()
+            held = anchor / "held.txt"; held.write_text("", encoding="utf-8")
+            label_high_no_write_up(anchor)
+            fh = open(held, "w")  # noqa: SIM115 - handle kept open on purpose
+            try:
+                handle = msvcrt.get_osfhandle(fh.fileno())
+                ctypes.WinDLL("kernel32").SetHandleInformation(
+                    ctypes.c_void_p(handle), 1, 1)  # HANDLE_FLAG_INHERIT
+                result = worktree / "r.txt"
+                child = root / "c.py"
+                child.write_text(
+                    "import ctypes, sys\n"
+                    "h = int(sys.argv[2]); w = ctypes.c_ulong(0)\n"
+                    "ok = ctypes.WinDLL('kernel32', use_last_error=True).WriteFile("
+                    "ctypes.c_void_p(h), b'X', 1, ctypes.byref(w), None)\n"
+                    "open(sys.argv[1],'w').write('WROTE' if ok else 'NO_HANDLE')\n",
+                    encoding="utf-8")
+                cmd = f'"{sys.executable}" "{child}" "{result}" "{handle}"'
+                run_at_integrity(cmd, str(worktree))
+                self.assertEqual(result.read_text(encoding="utf-8"), "NO_HANDLE")
+            finally:
+                fh.close()
+            self.assertEqual(held.read_text(encoding="utf-8"), "")  # never written
+
+    def test_assert_integrity_fails_closed_on_the_wrong_level(self):
+        # the publisher (this High process) passes High and is refused Medium
+        assert_integrity("High")
+        with self.assertRaises(AuthorityUnavailable):
+            assert_integrity("Medium")
+
+    def test_a_medium_worker_asserts_medium_and_refuses_high(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worktree = root / "worktree"; worktree.mkdir()
+            result = worktree / "r.txt"
+            child = root / "c.py"
+            child.write_text(
+                f"import sys\nsys.path.insert(0, r'{SCRATCH_SRC}')\n"
+                "from gnosis.kernel.authority import assert_integrity, AuthorityUnavailable\n"
+                "out = []\n"
+                "try: assert_integrity('Medium'); out.append('medium=OK')\n"
+                "except AuthorityUnavailable: out.append('medium=RAISED')\n"
+                "try: assert_integrity('High'); out.append('high=OK')\n"
+                "except AuthorityUnavailable: out.append('high=RAISED')\n"
+                "open(sys.argv[1],'w').write(' '.join(out))\n",
+                encoding="utf-8")
+            run_at_integrity(f'"{sys.executable}" "{child}" "{result}"', str(worktree))
+            self.assertEqual(result.read_text(encoding="utf-8"), "medium=OK high=RAISED")
+
+    def test_high_labelled_trusted_code_is_readable_but_not_writable_by_the_worker(self):
+        # BLOCKER B (mechanism): the publisher's trusted code, if labelled High
+        # NO_WRITE_UP, is READ/executed by the Medium worker but cannot be
+        # modified by it — so the worker cannot poison code the High Director
+        # later runs. (The wiring must label the real trusted-code root; this
+        # proves the mechanism.)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trusted = root / "trusted"; trusted.mkdir()
+            worktree = root / "worktree"; worktree.mkdir()
+            (trusted / "trusted_mod.py").write_text('MARKER = "ORIGINAL"\n', encoding="utf-8")
+            label_high_no_write_up(trusted)
+            result = worktree / "r.txt"
+            child = root / "c.py"
+            child.write_text(
+                "import sys, os\n"
+                "t = os.path.join(sys.argv[2], 'trusted_mod.py'); out = []\n"
+                "try:\n"
+                "    open(t).read(); out.append('read=OK')\n"
+                "except Exception as e: out.append('read=DENIED')\n"
+                "try:\n"
+                "    open(t,'w').write('MARKER=\"POISONED\"'); out.append('write=OK')\n"
+                "except Exception as e: out.append('write=DENIED')\n"
+                "open(sys.argv[1],'w').write(' '.join(out))\n",
+                encoding="utf-8")
+            cmd = f'"{sys.executable}" "{child}" "{result}" "{trusted}"'
+            run_at_integrity(cmd, str(worktree))
+            self.assertEqual(result.read_text(encoding="utf-8"), "read=OK write=DENIED")
+            self.assertIn("ORIGINAL", (trusted / "trusted_mod.py").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
