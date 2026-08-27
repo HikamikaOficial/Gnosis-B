@@ -1238,3 +1238,51 @@ and on the carrying commit; re-derive with `verify_bundle(expected_digest=…)`.
 **Still to do before closing F-17 (unchanged):** production worker + publisher +
 trusted-RunIdentity wiring; §14 unknown-`.git`; full validation; a fresh FULL
 `run_capture`; authoritative anchor; a final independent review.
+
+## Tenth-review addendum — production wiring & closure design FROZEN (2026-08-27)
+
+`docs/F17_PRODUCTION_WIRING_AND_CLOSURE.md` is the closure design; the independent
+review returned **APPROVE_WITH_ONE_BLOCKING_DESIGN_FINDING**, and this addendum
+records the frozen result. **Docs only — no production code. F-17 stays OPEN.**
+
+Approved & frozen: dedicated non-admin Worker; RESTRICTED service-SID Publisher;
+NTFS ACL/SID primary T2 boundary; MIC as DiD; service High permitted (NOT the
+boundary); `assert_publisher_identity` replacing `require_high` semantically;
+`owner_worker_sid` from the OS-real token; a trusted `PUBLISHABLE` state; reuse of
+the existing epoch/generation; trusted RunIdentity; semantic named pipe; trusted
+AnchorStore; deployment identity; minimal trust plane; a clean local fixed-NTFS
+non-synced qualification workspace; process/service crash guaranteed; power-loss/
+storage best-effort/bounded; end-to-end composition qualification. F-14 CLOSED.
+
+BLOCKER resolved (unknown-`.git`): the allowlist was too broad (whole `refs/` /
+`objects/` categories contain trust-sensitive surfaces). Corrected to a **total,
+single-valued `classify(path)`** with three exhaustive classes — `KNOWN_TRUST_SENSITIVE`
+(judged/fail-closed), `KNOWN_CONTENT_OR_BOOKKEEPING` (counted only where the concrete
+semantics are qualified), `UNKNOWN` → `MACHINERY_UNQUALIFIED` fail closed — with
+**most-specific-wins precedence robust to rule ordering** (a trust-sensitive path can
+never match a benign rule; `objects/info/**` never inherits the payload class;
+`refs/replace/**` never the ref-bookkeeping class; index classified by the property
+it cannot alter, not the label "benign"), plus a backend/version precondition
+(reftable/other → NOT QUALIFIED). An 11-point unknown-`.git` test plan (incl. an
+ordering-mutant that must die) is specified. The third/fourth-review classifications
+(HEAD/refs/packed-refs/refs-replace/config/config.worktree/commondir/hooks/alternates/
+grafts/shallow/topology) are preserved, not re-audited.
+
+Corrections also frozen: the **launch credential contract** no longer claims "never
+in cleartext" (`CreateProcessWithLogonW` needs transient cleartext in launcher
+memory) — the guarantee is **no plaintext at rest/repo/source/JSON/persistent-env/
+command-line/logs/evidence**, transient-in-launcher-only, best-effort zeroization;
+a full **DPAPI lifecycle** (scope, decrypt principal, blob location+ACL with Worker
+denied, rotation, corrupt/rotated/decrypt-failure → all fail closed); the launcher
+**stop condition** reworded to "cannot launch without a *persistent/exposed* plaintext
+secret". **Deployment identity** is built from **observed** post-deployment system
+queries (not desired config), with **canonicalized** security descriptors before the
+digest. A **deployment-drift** matrix (A–H) and **composition extensions** (wrong/
+missing worker SID, credential decrypt/rotation failure, publisher missing/wrong-SID-
+type, precondition false, deployment mismatch, non-PUBLISHABLE, epoch mismatch,
+same-user `Popen` fallback attempted) are added — **all fail closed; there is NO
+fallback to same-user `subprocess.Popen`**. Durability contract unchanged.
+
+`publish_anchor`/`verify_anchored_bundle`/`AnchorStore` still have **no production
+caller** (greenfield). The next review decides whether to authorize
+`F-17 PRODUCTION WIRING IMPLEMENTATION`. Do NOT wire yet.

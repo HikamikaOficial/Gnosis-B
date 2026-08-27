@@ -32,10 +32,12 @@ publisher's IL; MIC is only DiD in this model. Therefore:
 > **service integrity != primary security boundary.**
 
 Decision: **keep the qualified configuration** (do not spend F-17 lowering a
-cosmetic IL). Optional, non-blocking hardening for a later round: a `SeChangeNotify`
--only restricted token is already minimal; if a future review wants Medium as extra
-DiD it can be set via a lowered token, but it is not required and is not a closure
-gate. T3/T4 remain out of scope.
+cosmetic IL). The T2 guarantee comes from **different SID + DACL + RESTRICTED service
+token + protected trust plane**; High is **documented as an observed characteristic
+of the service token, not the root of security**. `DEPLOYMENT.json` records the
+observed integrity as data, and closure treats it as observed, not as a gate.
+Optional later-round DiD (Medium via a lowered token) is neither required nor a
+closure gate. T3/T4 remain out of scope.
 
 ---
 
@@ -124,7 +126,17 @@ Evidence must prove **the actual trusted deployment**, not merely "source code
 somewhere in Git". A `DEPLOYMENT.json` is written under the trust root at
 provisioning by the trusted maintenance principal and bound into every anchor.
 
-Binds, at minimum:
+**Built from OBSERVED state, not desired config (hardening).** Every field is
+produced by a **real system query after deployment** — the running service's actual
+account/SID/SID-type, the actual on-disk file hashes, the actual security descriptors
+read back from the OS — never from the provisioning script's intended values. A
+deployment whose *observed* state drifts from what was intended is caught because the
+identity reflects reality. Before hashing, every **security descriptor is
+canonicalized** (parse SDDL → normalize ACE order/flags/SID form → re-serialize a
+canonical form) so the digest does not depend on incidental `icacls`/`sc` CLI output
+formatting, ACE ordering, or locale.
+
+Binds, at minimum (each value **observed**):
 
 | field | value |
 |---|---|
@@ -256,25 +268,50 @@ review.
 
 Today the only launch is a same-user `subprocess.Popen` (`claude_cli_runner.py:97`)
 with no OS-user switch. Production must launch the worker **as the dedicated worker
-SID** without any plaintext password in repo/source/JSON/persistent-env/logs/evidence.
+SID** via **`CreateProcessWithLogonW`** (the API the probe qualified — no handle
+inheritance).
 
-**Selected (minimal, stable):** a persistent worker account whose password is stored
-**DPAPI-protected** (`CryptProtectData`, LocalMachine or the maintenance principal's
-scope) in the trust state root, decrypted **in-memory only** at launch and passed to
-**`CreateProcessWithLogonW`** (the API the probe already qualified — no handle
-inheritance). The `SecureString`/unmanaged buffer is zeroed immediately after the
-call (as in the probe). The password value never lands in the repo, source, JSON,
-env, logs, or evidence; only the DPAPI blob (opaque, machine-bound) is at rest.
+**Credential contract (corrected).** `CreateProcessWithLogonW` requires the password
+to exist **in cleartext in memory during the Windows call**, so we do NOT claim
+"password never exists in cleartext". The guarantees are:
 
-Rationale / bound: compromising the worker password is approximately **T2** (the
-already-modeled adversary — it grants worker-level access, NOT Trust-Plane access,
-which is DACL/SID-gated), so this is not a new high-value secret; but it is handled
-with DPAPI + in-memory-only + zeroing rather than negligently. **No new
-secrets/PKI subsystem is introduced inside F-17.**
+- **NO PLAINTEXT AT REST** · **NO PLAINTEXT IN REPOSITORY** · **NO PLAINTEXT IN
+  SOURCE** · **NO PLAINTEXT IN JSON** · **NO PLAINTEXT IN PERSISTENT ENV** · **NO
+  PLAINTEXT IN COMMAND LINE** · **NO PLAINTEXT IN LOGS** · **NO PLAINTEXT IN
+  EVIDENCE**;
+- the password may exist **transiently inside trusted-launcher memory** only for the
+  duration of the logon primitive;
+- **zeroization = BEST EFFORT** (the launcher zeroes its `SecureString`/unmanaged
+  buffer after the call); we do NOT promise perfect physical removal of every memory
+  copy the OS/CLR may have made.
+
+Compromising the worker password is approximately **T2** (grants worker-level access,
+NOT Trust-Plane access, which is DACL/SID-gated). **No general secrets manager / PKI
+is introduced in F-17.**
+
+**DPAPI lifecycle.**
+- **scope**: `CRYPTPROTECT_LOCAL_MACHINE` bound to the machine, further restricted by
+  the blob file's NTFS ACL to the maintenance/launcher principal (below);
+- **who can decrypt**: only the trusted launcher/maintenance principal that holds
+  read access to the blob and runs on this machine; the Worker cannot (no blob read,
+  no decrypt authority);
+- **blob location**: the trust state root, e.g. `C:\ProgramData\Gnosis\Trust\secrets\worker.dpapi`;
+- **blob ACL**: `inheritance:r` + SYSTEM:F + maintenance/launcher principal:R; **Worker
+  = DENIED** (no ACE);
+- **rotation / reprovision**: the maintenance principal rotates the worker password
+  and re-writes the blob atomically; a `credential_version` is recorded (not the
+  secret) so a stale launch can be detected;
+- **corrupt blob** → decrypt fails → **FAIL CLOSED** (no launch);
+- **rotated password** (blob out of sync with the account) → logon fails →
+  **FAIL CLOSED**;
+- **decrypt failure** (any cause) → **FAIL CLOSED**.
+
+The Worker never obtains: blob decrypt authority, the plaintext password, or the
+trusted launcher's logon token.
 
 Rejected alternatives (documented): gMSA (needs a domain; this is a workstation);
-S4U logon (needs `SeTcbPrivilege` — heavier and more privileged than DPAPI+Logon);
-storing a plaintext or reversibly-encoded password anywhere (violates the constraint).
+S4U logon (needs `SeTcbPrivilege`); storing a plaintext or reversibly-encoded
+password in disk/config/argv/logs/persistent-env (violates the contract).
 
 ## 11. Publisher startup
 
@@ -390,23 +427,118 @@ paths OUTSIDE `.git/`). The boundary can therefore return CLEAN with an unclassi
 `.git` write present. That is precisely the "unknown is inert" bug the frozen
 decision forbids.
 
-Qualified scope: Git **files** backend, Git 2.55.x on Windows, loose refs, packed
-refs, and the already-classified machinery. The wiring adds two minimal gates:
+### Corrected classifier contract (BLOCKER fix)
 
-1. **Backend/version precondition at capture start** (alongside
-   `git_topology_eligible:56` / `git_resolution_faithful:129`): detect the backend
-   and version; if not the qualified files backend + 2.55.x range (e.g. `reftable`,
-   or a materially different backend) → **FAIL CLOSED** (`MACHINERY_UNQUALIFIED`, a
-   new non-zero exit joining 9/10/11 at `evidence_capture.py:147-149`), nothing runs.
-2. **Unknown-surface fail-closed** at `:806-810`: replace the blanket `machinery +=
-   1` with a classifier that COUNTS only an **allowlisted** set of known-benign
-   bookkeeping paths (index, `refs/`, `logs/`, `objects/` loose+pack, `ORIG_HEAD`,
-   `FETCH_HEAD`, `MERGE_*`, `packed-refs` already handled as redirect, etc.) and
-   routes anything **else** under `.git/` to a **violation** (fail closed), not a
-   count.
+The earlier draft's allowlist was too broad: whole categories like `refs/` and
+`objects/` are **NOT** benign — they contain trust-sensitive surfaces already
+demonstrated (`refs/replace/**`, `objects/info/alternates`, `objects/info/http-alternates`).
+A rule equivalent to `refs/** → benign` or `objects/** → benign` is **forbidden**,
+even if an earlier condition happens to intercept some cases today.
 
-Minimal: no re-audit of all of Git; reuse the existing gates and change only the
-catch-all branch + add the backend/version qualification.
+**Every observed `.git` surface must terminate in exactly one class:**
+
+| class | disposition |
+|---|---|
+| `KNOWN_TRUST_SENSITIVE` | **judged**; a mutation in the interval → violation / fail closed, per the existing F-17 contract |
+| `KNOWN_CONTENT_OR_BOOKKEEPING` | counted/allowed **only** where its concrete semantics are qualified (its inability to alter identity within the contract is stated) |
+| `UNKNOWN` | `MACHINERY_UNQUALIFIED` → **FAIL CLOSED** |
+
+`UNKNOWN != INERT`.
+
+### Classification precedence (robust to ordering)
+
+The classifier must not let a trust-sensitive surface be swallowed by a benign
+parent glob, **and must stay correct even if the branch order is changed**. So it is
+NOT `if dangerous first … else broad-safe-glob …` (where accidentally swapping the
+two branches would open a bypass). Instead: a **single `classify(path)` function**
+that maps a path to exactly one class by **explicit, most-specific-wins semantic
+rules**, with the benign class carrying **specific** entries, never a broad
+subtree, and everything unmatched falling to `UNKNOWN`. Required invariants (asserted
+by tests, §below):
+
+- `classify(path)` is **total and single-valued** (every path → exactly one class);
+- **no trust-sensitive path can match a benign rule** (e.g. `refs/replace/x` classifies
+  `KNOWN_TRUST_SENSITIVE`, never via any `refs/…` benign entry);
+- reordering the internal rule list does not change any classification (most-specific
+  wins, not first-match).
+
+### Surfaces whose existing classification is preserved (not re-audited)
+
+`KNOWN_TRUST_SENSITIVE` (judged / fail-closed on mutation), keeping the third/fourth
+-review conclusions intact: `HEAD`, ref content/resolution, `packed-refs`,
+`refs/replace/**`, `config`, `config.worktree`, `commondir`, `hooks/*` (non-`.sample`),
+`objects/info/alternates`, `objects/info/http-alternates`, `info/grafts`, `shallow`,
+and the topology redirects already covered by `git_topology_eligible:56` /
+`git_resolution_faithful:129` / `_is_git_resolution_redirect:212` /
+`_is_git_machinery_tamper:172`. The new model reuses those predicates as the
+`KNOWN_TRUST_SENSITIVE` rules — it must not invalidate their prior conclusions.
+
+### Object database — payload vs resolution machinery
+
+`objects/**` is **not** one class:
+- **object payload / loose+pack storage** (`objects/<2hex>/<38hex>`, `objects/pack/*.{pack,idx}`)
+  = `KNOWN_CONTENT_OR_BOOKKEEPING`, **documented reason**: object bytes are
+  content-addressed and covered by the F-14 byte/content binding — a substituted or
+  added object changes the tree/content digest the bundle is bound to, so it cannot
+  alter the anchored identity without being caught by the existing binding, not by
+  this classifier;
+- **object-resolution machinery** (`objects/info/alternates`, `objects/info/http-alternates`,
+  and any other `objects/info/**`) = `KNOWN_TRUST_SENSITIVE` (redirects resolution).
+  `objects/info/**` NEVER inherits the payload class.
+
+### Refs — split, never generic-benign
+
+- ref content/resolution (`refs/heads/**`, `refs/tags/**`, `refs/remotes/**`, loose ref files,
+  `packed-refs`) → affect resolution/identity → `KNOWN_TRUST_SENSITIVE` (mutation judged;
+  packed-refs already a redirect surface);
+- `refs/replace/**` → `KNOWN_TRUST_SENSITIVE` (the demonstrated substitution attack);
+- ref **lock files** (`*.lock`), **reflogs** (`logs/**`) → `KNOWN_CONTENT_OR_BOOKKEEPING`
+  only if their qualified semantics show they cannot alter the committed identity the
+  bundle binds (documented); otherwise `UNKNOWN`.
+- No rule says `refs/ = benign bookkeeping`.
+
+### Index
+
+`index` and `sharedindex.*`: the F-17 contract does **not** depend on the index (the
+bundle binds the committed tree/HEAD via `content_fingerprint`, not the staging
+index). They are classified `KNOWN_CONTENT_OR_BOOKKEEPING` with the **stated
+property**: a write to the index cannot change the committed tree/HEAD/object bytes
+that the anchor binds, so it cannot forge anchored identity. They are counted, not
+judged — because that property holds, not because "benign" is a label.
+
+### Backend / version precondition (unchanged from the draft, kept)
+
+At capture start, alongside `git_topology_eligible:56` / `git_resolution_faithful:129`:
+detect the backend + version; if not the qualified **files** backend + Git **2.55.x**
+range (e.g. `reftable`, or a materially different backend/version) →
+`MACHINERY_UNQUALIFIED` → **FAIL CLOSED** (a new non-zero exit joining 9/10/11 at
+`evidence_capture.py:147-149`), nothing runs.
+
+### Implementation locus
+
+Replace the blanket `machinery += 1` catch-all at `evidence_capture.py:806-810` with
+`classify(path)` dispatch: `KNOWN_TRUST_SENSITIVE` → the existing judged path;
+`KNOWN_CONTENT_OR_BOOKKEEPING` → counted; `UNKNOWN` → violation / `MACHINERY_UNQUALIFIED`.
+No re-audit of all of Git — only this classifier + the backend/version gate.
+
+### Unknown-`.git` test plan (implemented in the wiring round, not now)
+
+1. known benign bookkeeping write (index / a reflog) → CLEAN, **no false positive**;
+2. `refs/replace/*` mutation → **judged** (violation);
+3. `packed-refs` mutation → **judged**;
+4. `objects/info/alternates` (and http-alternates) mutation → **judged**;
+5. unknown top-level `.git/new-machinery` → **fail closed** (`MACHINERY_UNQUALIFIED`);
+6. unknown nested path `.git/foo/bar` not in any rule → **fail closed**;
+7. `reftable` backend → **NOT QUALIFIED** at the precondition;
+8. unsupported material Git version → **NOT QUALIFIED**;
+9. known ordinary object payload write (`objects/ab/cdef…`) → **no false positive**
+   (covered by byte binding);
+10. **broad-parent-cannot-swallow-child**: assert `classify("refs/replace/x")` and
+    `classify("objects/info/alternates")` are `KNOWN_TRUST_SENSITIVE` even though
+    `refs/…` / `objects/…` prefixes exist;
+11. **classifier-ordering mutant**: shuffle the internal rule order → all
+    classifications unchanged (a mutant that makes classification order-dependent or
+    lets a benign rule shadow a sensitive path must die).
 
 ---
 
@@ -477,6 +609,39 @@ trusted + correct worker SID + publishable state · trust package → exact
 git machinery → qualified · evidence → fresh capture · anchor → authoritative
 (`verify_anchored_bundle` against the store) → fresh-checkout verification of the
 bundle against its external anchor.
+
+### End-to-end attack matrix (closure) — must all FAIL CLOSED, in the composed system
+
+Base (worker = distinct non-admin SID against the live deployment): worker launches
+its own publisher; worker forges/writes RunIdentity; worker publishes a
+non-PUBLISHABLE run; worker publishes another SID's run; worker replaces the trust
+package/binary; worker squats the pipe; worker writes AnchorStore/watermark; unknown
+`.git` surface during capture; crash mid-publish; process/service attacks on the
+publisher.
+
+**Deployment-drift (identity must catch each):**
+
+| | drift | expected |
+|---|---|---|
+| A | one byte of the trust package changed | deployment mismatch (`deployment_digest` ≠ observed) |
+| B | service ImagePath changed | deployment mismatch / preflight reject |
+| C | SID type RESTRICTED → UNRESTRICTED | precondition reject (`assert_publisher_identity`) |
+| D | service-object DACL altered | deployment mismatch / preflight reject |
+| E | AnchorStore ACL altered | reject |
+| F | RunIdentity-store ACL altered | reject |
+| G | pipe security policy altered | reject |
+| H | a trust package different from the registered one runs | reject (observed hash ≠ recorded) |
+
+**Composition extensions (each FAIL CLOSED):** wrong Worker SID; missing Worker
+identity; Worker-launch credential decrypt failure; stale/rotated Worker credential;
+Publisher service missing; Publisher SID type incorrect; Publisher identity
+precondition false; `TrustPlaneDeploymentIdentity` mismatch; RunIdentity
+non-PUBLISHABLE; run epoch/generation mismatch; **same-user `Popen` fallback
+attempted**.
+
+> **There is NO fallback to an ordinary `subprocess.Popen` under the Director
+> identity.** A launcher that cannot launch the worker as the worker SID fails the
+> run closed; it never degrades to same-user execution.
 
 ---
 
@@ -575,9 +740,11 @@ digest as the external anchor.
 
 Halt and return for review (do NOT push past any of these):
 
-- the trusted launcher cannot launch the worker as the worker SID without a stored
-  plaintext secret or without `SeTcbPrivilege` beyond the DPAPI+Logon plan →
-  `WORKER LAUNCH CREDENTIAL NOT QUALIFIED`;
+- the trusted launcher cannot launch the worker as the worker SID **without a
+  persistent or exposed plaintext secret** — i.e. the only working solution needs the
+  password in disk plaintext / config / argv / logs / persistent env (transient
+  cleartext inside the launcher during the Windows logon call is expected and
+  acceptable, §10) → `WORKER LAUNCH CREDENTIAL NOT QUALIFIED`;
 - `assert_publisher_identity` cannot be made OS-real (the service token's SID/
   restricted state cannot be verified) → `PUBLISHER IDENTITY PRECONDITION NOT
   AVAILABLE`;
