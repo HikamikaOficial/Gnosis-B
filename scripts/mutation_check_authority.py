@@ -15,8 +15,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-AUTH = "src/gnosis/kernel/authority.py"
-SUITE = ["tests/test_authority_boundary.py"]
+# Post Stage-1 trust-plane split: the authoritative implementation lives in
+# gnosis.trust.{anchor,launch}; gnosis.kernel.authority is a re-export facade.
+ANCHOR = "src/gnosis/trust/anchor.py"
+LAUNCH = "src/gnosis/trust/launch.py"
+FACADE = "src/gnosis/kernel/authority.py"
+AUTH = ANCHOR  # backward-compat alias for the anchor-slice mutants below
+SUITE = ["tests/test_authority_boundary.py", "tests/test_trust_boundary.py"]
 
 
 @dataclass(frozen=True)
@@ -28,10 +33,10 @@ class Mutant:
 
 MUTANTS: list[Mutant] = [
     Mutant("AM1", "the worker is launched at HIGH, not Medium, so it can write the anchor",
-           [(AUTH, "token = lowered_primary_token(sid_string)",
+           [(LAUNCH, "token = lowered_primary_token(sid_string)",
              "token = lowered_primary_token(SID_HIGH)")]),
     Mutant("AM2", "the AnchorStore is labelled Medium, not High, so a Medium worker writes it",
-           [(AUTH, '"/setintegritylevel", "(OI)(CI)High"',
+           [(LAUNCH, '"/setintegritylevel", "(OI)(CI)High"',
              '"/setintegritylevel", "(OI)(CI)Medium"')]),
     Mutant("AM3", "publish stops binding the bundle to the run's head, so a cross-run/replay bundle anchors",
            [(AUTH, "    if bound is None or bound != identity.head_sha:",
@@ -55,8 +60,18 @@ MUTANTS: list[Mutant] = [
            [(AUTH, "        if record.seq != len(existing) or record.prev_record_digest != expected_prev:",
              "        if False:")]),
     Mutant("AM8", "assert_integrity stops failing closed, so a worker at the wrong (High) level proceeds",
-           [(AUTH, "    actual = process_integrity()\n    if actual != expected:",
+           [(LAUNCH, "    actual = process_integrity()\n    if actual != expected:",
              "    actual = process_integrity()\n    if False:")]),
+    # Stage-1 split-specific mutants.
+    Mutant("AM9", "the compatibility facade shadows the authoritative AnchorStore (two impls)",
+           [(FACADE, "__all__ = [",
+             "AnchorStore = object  # mutant: facade no longer the single impl\n__all__ = [")]),
+    Mutant("AM10", "the trust anchor package imports a forbidden worker module",
+           [(ANCHOR, "import json\n",
+             "import json\nimport gnosis.kernel.engine  # mutant: forbidden worker import\n")]),
+    Mutant("AM11", "the publisher-identity precondition gate is removed (any process may own the store)",
+           [(LAUNCH, 'if require_high and _IS_WINDOWS and process_integrity() != "High":',
+             'if False and require_high and _IS_WINDOWS and process_integrity() != "High":')]),
 ]
 
 

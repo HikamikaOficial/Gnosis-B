@@ -290,11 +290,18 @@ NOT Trust-Plane access, which is DACL/SID-gated). **No general secrets manager /
 is introduced in F-17.**
 
 **DPAPI lifecycle.**
-- **scope**: `CRYPTPROTECT_LOCAL_MACHINE` bound to the machine, further restricted by
-  the blob file's NTFS ACL to the maintenance/launcher principal (below);
-- **who can decrypt**: only the trusted launcher/maintenance principal that holds
-  read access to the blob and runs on this machine; the Worker cannot (no blob read,
-  no decrypt authority);
+- **scope**: `CRYPTPROTECT_LOCAL_MACHINE` = DPAPI protection **bound to the machine**.
+  This alone does **NOT** mean "only the launcher/maintenance can decrypt" — any
+  process on the machine that can **read** the blob could decrypt a LOCAL_MACHINE
+  blob. The boundary that keeps the Worker out is the **NTFS ACL / SID** on the blob
+  file, not DPAPI machine-scope. So `Worker cannot decrypt worker.dpapi` holds **only
+  under the composition**: *Worker cannot READ the blob (ACL)* **+** *the blob is DPAPI
+  machine-protected*. (DPAPI-NG / SID-or-SDDL cryptographic binding is a possible
+  future alternative if we later need decrypt-authority bound cryptographically to a
+  SID; NOT introduced now.)
+- **who can decrypt**: any principal that can both run on this machine AND read the
+  blob — restricted to the trusted launcher/maintenance principal **by the blob ACL**;
+  the Worker cannot, because the ACL denies it read (no blob read → no decrypt);
 - **blob location**: the trust state root, e.g. `C:\ProgramData\Gnosis\Trust\secrets\worker.dpapi`;
 - **blob ACL**: `inheritance:r` + SYSTEM:F + maintenance/launcher principal:R; **Worker
   = DENIED** (no ACE);
