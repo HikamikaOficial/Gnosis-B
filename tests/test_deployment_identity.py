@@ -445,6 +445,26 @@ class TestServiceObservation(unittest.TestCase):
     def test_the_service_sid_comes_from_windows(self):
         self.assertTrue(service_sid(READ_ONLY_SERVICE).startswith("S-1-5-80-"))
 
+    def test_required_privileges_are_parsed_from_a_real_multi_sz(self):
+        """The MULTI_SZ path needs a service that actually HAS privileges.
+
+        `READ_ONLY_SERVICE` reports none, so the parser's non-empty branch —
+        a pointer into the live answer buffer, walked NUL to double-NUL — would
+        otherwise never run. Several candidates are tried because which service
+        exists is a property of the machine, not of the code.
+        """
+        for candidate in ("EventLog", "Dnscache", "Schedule", "LanmanWorkstation"):
+            try:
+                privileges = observe_service(candidate).required_privileges
+            except DeploymentIdentityUnavailable:
+                continue
+            if not privileges:
+                continue
+            self.assertTrue(all(p.startswith("Se") for p in privileges), privileges)
+            self.assertEqual(list(privileges), sorted(privileges))  # a set, not an order
+            return
+        self.skipTest("no observable service on this machine declares required privileges")
+
     def test_a_missing_service_fails_closed(self):
         with self.assertRaises(DeploymentIdentityUnavailable):
             observe_service("GnosisNoSuchServiceStage2Probe")
