@@ -18,7 +18,9 @@ run's head.
 from __future__ import annotations
 
 import json
+import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -52,6 +54,22 @@ SUPPORTED_RUN_IDENTITY_SCHEMAS = frozenset({RUN_IDENTITY_SCHEMA})
 # OS enforces against and are exactly what a worker could influence.
 _SID_PATTERN = re.compile(r"^S-1-\d{1,10}(-\d{1,10}){1,15}$")
 _DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+# A DETERMINISTIC FAULT SEAM, for crash tests only (F-17 Stage 4).
+#
+# `append` is where the ledger write actually happens, so it is the only place
+# a test can interrupt that write from the inside. The seam is a plain
+# keyword-only callable that DEFAULTS TO None: there is no environment
+# variable, no configuration file, no IPC message and no worker-supplied value
+# that can set it. Only in-process code that already imports this module can
+# pass one — and such code is inside the TCB by definition, so the seam grants
+# it nothing it did not already have.
+FaultHook = Callable[..., None]
+
+
+def _fire(fault: FaultHook | None, point: str, **context: Any) -> None:
+    if fault is not None:
+        fault(point, **context)
 
 
 class AnchorNotDeploymentBound(AuthorityUnavailable):
@@ -141,6 +159,28 @@ class AnchorRecord:
         return self.schema == ANCHOR_SCHEMA_V2
 
 
+def record_line(record: AnchorRecord) -> str:
+    """The ONE on-disk serialisation of a record: canonical-key JSON plus the
+    line terminator. Both the ledger writer and the Stage-4 byte-level reader
+    go through it, so there is no second definition of what a ledger line is."""
+    return json.dumps(record.to_dict(), sort_keys=True) + "\n"
+
+
+def parse_record_line(line: str, *, where: str) -> AnchorRecord:
+    """Parse ONE ledger line, failing closed.
+
+    A line with an unknown or missing field is ambiguous, and an ambiguous
+    anchor is not an anchor: it is refused rather than admitted to the chain as
+    a partially-understood record. `where` names the location for the message.
+    """
+    try:
+        return AnchorRecord(**json.loads(line))
+    except AuthorityUnavailable:
+        raise
+    except (json.JSONDecodeError, TypeError, ValueError, UnicodeDecodeError) as exc:
+        raise AuthorityUnavailable(f"{where} is not a readable record: {exc}") from exc
+
+
 class AnchorStore:
     """An append-only, hash-chained anchor ledger inside a directory only the
     trusted publisher can write.
@@ -172,16 +212,7 @@ class AnchorStore:
                 self.ledger.read_text(encoding="utf-8").splitlines(), start=1):
             if not line.strip():
                 continue
-            try:
-                out.append(AnchorRecord(**json.loads(line)))
-            except AuthorityUnavailable:
-                raise
-            except (json.JSONDecodeError, TypeError, ValueError) as exc:
-                # A line with an unknown or missing field is ambiguous, and an
-                # ambiguous anchor is not an anchor. Fail closed rather than let
-                # a partially-understood record into the chain.
-                raise AuthorityUnavailable(
-                    f"anchor ledger line {number} is not a readable record: {exc}") from exc
+            out.append(parse_record_line(line, where=f"anchor ledger line {number}"))
         return out
 
     def verify_chain(self) -> bool:
@@ -192,17 +223,30 @@ class AnchorStore:
             prev = rec.digest()
         return True
 
-    def append(self, record: AnchorRecord) -> None:
+    def append(self, record: AnchorRecord, *, fault: FaultHook | None = None) -> None:
         """Append a record, re-verifying the whole chain first. Fails closed
-        on a chain that does not verify or a record that does not extend it."""
+        on a chain that does not verify or a record that does not extend it.
+
+        DURABLE (F-17 Stage 4). The line is written in BINARY mode — a
+        hash-chained append-only log is a byte sequence, not text the platform
+        may re-punctuate on the way to disk — and is flushed to the storage
+        stack (os.fsync, i.e. FlushFileBuffers on Windows) before the handle
+        closes. `fault` is the crash-test seam documented at the top of this
+        module; it is None in production and there is no input that can set it.
+        """
         if not self.verify_chain():
             raise AuthorityUnavailable("the anchor chain does not verify; refusing to extend")
         existing = self.records()
         expected_prev = existing[-1].digest() if existing else GENESIS_HASH
         if record.seq != len(existing) or record.prev_record_digest != expected_prev:
             raise AuthorityUnavailable("record does not extend the chain")
-        with self.ledger.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record.to_dict(), sort_keys=True) + "\n")
+        payload = record_line(record).encode("utf-8")
+        with self.ledger.open("ab") as fh:
+            _fire(fault, "F1", handle=fh, payload=payload)
+            fh.write(payload)
+            _fire(fault, "F2")
+            fh.flush()
+            os.fsync(fh.fileno())
 
     def lookup(self, run_id: str) -> AnchorRecord | None:
         found: AnchorRecord | None = None
@@ -314,10 +358,17 @@ def _bundle_content_digest(bundle_dir: Path) -> str:
     return value if isinstance(value, str) else ""
 
 
-def publish_anchor(store: AnchorStore, identity: RunIdentity, bundle_dir: Path,
-                   verify: Any = None) -> AnchorRecord:
-    """The publication protocol, run by the trusted publisher. It NEVER trusts
-    a worker-supplied digest, path or identity:
+def build_anchor_record(store: AnchorStore, identity: RunIdentity, bundle_dir: Path,
+                        verify: Any = None) -> AnchorRecord:
+    """Everything a publication decides BEFORE it writes anything: verify the
+    bundle, cross-check it against the Director's identity, and construct the
+    chained record. Extracted so the Stage-3 protocol (`publish_anchor`) and the
+    Stage-4 durable protocol (`trust.publication.durable_publish`) share ONE
+    definition of what an anchor record is and what must be true to build it —
+    the durability protocol differs in how the record is committed, never in
+    what it is allowed to say.
+
+    It NEVER trusts a worker-supplied digest, path or identity:
 
     1. the bundle path comes from the Director's `identity`, not the worker;
     2. `verify_bundle` RECOMPUTES the digest from the bundle bytes;
@@ -328,7 +379,7 @@ def publish_anchor(store: AnchorStore, identity: RunIdentity, bundle_dir: Path,
        a worker-supplied value written into the authoritative record. It is now
        cross-checked exactly like the head, and a mismatch refuses;
     5. the record binds the Director-held identity, names the deployment and
-       the exact run identity (V2), is chained, and is re-read after the write.
+       the exact run identity (V2), and is chained to the ledger's head.
     """
     if verify is None:
         from gnosis.kernel.evidence_capture import verify_bundle  # lazy: avoid import cycle
@@ -357,6 +408,21 @@ def publish_anchor(store: AnchorStore, identity: RunIdentity, bundle_dir: Path,
         deployment_digest=identity.deployment_digest,
         run_identity_digest=identity.digest(),
         schema=CURRENT_ANCHOR_SCHEMA)
+    return record
+
+
+def publish_anchor(store: AnchorStore, identity: RunIdentity, bundle_dir: Path,
+                   verify: Any = None) -> AnchorRecord:
+    """Build, append and re-read one anchor record.
+
+    This is the STAGE-3 protocol and it stays exactly what it was: a correct
+    append that re-reads what it wrote. What it does NOT have is a durable
+    commit point, so a crash between the append and the trusted state update
+    leaves an ambiguity nothing on disk can settle. For a crash-safe
+    publication use `trust.publication.durable_publish`, which is the Stage-4
+    protocol built on top of this same record construction.
+    """
+    record = build_anchor_record(store, identity, bundle_dir, verify)
     store.append(record)
     reread = store.lookup(identity.run_id)
     if reread is None or reread.bundle_digest != record.bundle_digest:

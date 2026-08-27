@@ -84,13 +84,20 @@ TRUST_ALLOWLIST: dict[str, str] = {
         "already the established pattern for a read-modify-write of durable JSON "
         "state. Without it two trusted writers can silently drop a transition and "
         "a monotonic state could regress; with it the compare-and-set is real."),
+    # Stage-4 addition, entering by explicit allowlist diff as required:
+    "gnosis.trust.publication": (
+        "authoritative durable-publication slice (F-17 Stage 4) — the committed "
+        "watermark, the single commit point, and crash recovery. Trusted because "
+        "a compromise of it would let an uncommitted anchor be declared "
+        "committed, or committed history be discarded as a crashed attempt."),
 }
 
 # Trust Plane entry points whose load-time closure is measured. A new trusted
 # module is added HERE and to TRUST_ALLOWLIST in the same reviewable diff — the
 # stale-entry test below refuses an allowlist grant that no entry point loads.
 TRUST_ENTRY_POINTS = ("gnosis.trust.anchor", "gnosis.trust.launch",
-                      "gnosis.trust.deployment", "gnosis.trust.run_identity")
+                      "gnosis.trust.deployment", "gnosis.trust.run_identity",
+                      "gnosis.trust.publication")
 
 # ---------------------------------------------------------------------------
 # Internal modules the Trust Plane imports LAZILY, inside a function body.

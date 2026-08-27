@@ -56,9 +56,17 @@ _OWNER_COMPARISON = (
 _DEPLOYMENT_COMPARISON = (
     '        (request.expected_deployment_digest, identity.deployment_digest, "deployment_digest"),'
 )
+# Stage 4 moved the single parse into `parse_record_line`, so this mutant now
+# anchors on the LOOP that calls it. The mutation itself is unchanged in intent:
+# an unreadable ledger line is skipped instead of failing closed.
 _LEDGER_FAIL_CLOSED = (
-    "                raise AuthorityUnavailable(\n"
-    '                    f"anchor ledger line {number} is not a readable record: {exc}") from exc'
+    '            out.append(parse_record_line(line, where=f"anchor ledger line {number}"))'
+)
+_LEDGER_SKIPPED = (
+    "            try:\n"
+    '                out.append(parse_record_line(line, where=f"line {number}"))\n'
+    "            except AuthorityUnavailable:\n"
+    "                continue"
 )
 _V2_DEPLOYMENT_REQUIRED = (
     '            _require_digest(self.deployment_digest, "a V2 anchor\'s deployment_digest")'
@@ -106,7 +114,7 @@ MUTANTS: list[Mutant] = [
     Mutant("RM16", "owner_worker_sid accepts a username instead of a canonical SID",
            [(ANCHOR, _SID_CHECK, "        if False:")]),
     Mutant("RM17", "an unreadable anchor ledger line is skipped instead of failing closed",
-           [(ANCHOR, _LEDGER_FAIL_CLOSED, "                continue")]),
+           [(ANCHOR, _LEDGER_FAIL_CLOSED, _LEDGER_SKIPPED)]),
 ]
 
 

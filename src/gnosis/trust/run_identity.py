@@ -182,6 +182,20 @@ class TrustedRunIdentityStore:
     def exists(self, run_id: str) -> bool:
         return self.path_for(run_id).is_file()
 
+    def run_ids(self) -> tuple[str, ...]:
+        """Every run this store holds a trusted record for.
+
+        Needed by Stage-4 recovery, which must be able to ask the question the
+        other direction — "does any run claim to be ANCHORED against a record
+        that is not committed?" — and that question cannot be answered from a
+        run_id the caller already knows. Only names the store itself could have
+        written are returned: a lock file, a crash-leftover `.tmp-*` and any
+        stray name that would not survive `is_storable_run_id` are skipped, so
+        a foreign file dropped into the directory cannot become a run.
+        """
+        return tuple(sorted(p.stem for p in self.root.glob("*.json")
+                            if p.is_file() and is_storable_run_id(p.stem)))
+
     def read(self, run_id: str) -> TrustedRunRecord:
         path = self.path_for(run_id)
         try:
