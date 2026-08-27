@@ -1286,3 +1286,145 @@ fallback to same-user `subprocess.Popen`**. Durability contract unchanged.
 `publish_anchor`/`verify_anchored_bundle`/`AnchorStore` still have **no production
 caller** (greenfield). The next review decides whether to authorize
 `F-17 PRODUCTION WIRING IMPLEMENTATION`. Do NOT wire yet.
+
+## Stage-2 addendum — TRUST-PLANE DEPLOYMENT IDENTITY implemented (2026-08-27)
+
+Stage 1 (trust-plane split) is **CLOSED** at `ad06b09` after independent review.
+Stage 2 was authorized with one objective: an identity of the trust plane built
+from the **actual observed deployment state**, so that
+
+    what is executed  ==  what is measured  ==  what is bound into evidence.
+
+**No production deployment.** Nothing is installed: no `GnosisTrustedPublisher`,
+no Worker account, no DPAPI secret, no production AnchorStore or RunIdentity
+store, no engine/runner change, no pipeline wiring, no unknown-`.git`
+enforcement. Stage 2 builds the primitive that will identify a deployment; the
+deployment itself remains Stage 5/6 work. **F-17 stays OPEN.**
+
+### What was built
+
+`src/gnosis/trust/deployment.py` — one module, three layers kept apart only
+where the separation buys something: a pure data model, a Win32 observation
+layer, and a pure canonicalizer that takes bytes and returns an identity.
+
+`TrustPlaneDeploymentIdentity` binds, every field OBSERVED: the trust package
+manifest (per-file size + SHA-256 + the package version/source commit/source
+tree read from the deployed `PACKAGE.json`), the runtime (executable path,
+size, **byte digest**, version, implementation, architecture, machine), the
+service (name, account, ImagePath, start type, **service SID**, **SID type**,
+required privileges, canonical service-object descriptor), the canonical
+descriptors and resolved paths of the trust root / RunIdentity store /
+AnchorStore, and the deployed pipe policy. `deployment_digest` is
+`hash_canonical(to_dict())` — the ONE canonical primitive of ADR-0004, not a
+second hashing implementation.
+
+### Observed is not desired — enforced structurally
+
+`DesiredDeploymentConfig` carries **locations and expectations only**. It is
+never read while building an identity: `observe_deployment` takes WHERE to look
+from it and nothing else, and `compare_with_desired` is the single function that
+reads an intention at all — it returns findings and cannot alter the identity.
+Properties proved: a different intention over the same machine yields the same
+digest; a changed machine under the same intention yields a different one; and
+a structural test asserts no sentinel expectation value can appear anywhere in
+the serialized identity. The `desired config -> serialize -> deployment_digest`
+shortcut is not merely avoided, it is unreachable.
+
+An **expected manifest can only refuse a deployment, never define one**: the
+observed manifest always comes from the bytes, and `verify_package_against_
+expected` runs afterwards, failing closed on a changed file, a missing file, and
+an unexpected extra artifact alike.
+
+### Decisions worth recording
+
+**ACE ORDER IS PRESERVED, not sorted.** Canonicalization normalizes
+REPRESENTATION (SIDs always `S-1-…`, masks and flags as integers, parsed from
+the BINARY descriptor through the Win32 accessors — never out of `icacls` or
+`sc sdshow` text, which is formatted and localized). It does not touch
+SEMANTICS: ACE order is significant in an ACL, so sorting would be the
+"canonicalization loses ACL semantics" stop condition. No ACE is dropped as
+redundant either — whether two ACEs are equivalent is a question about the
+Windows access check, which this deliberately does not re-implement. The cost
+is accepted and declared: two descriptors differing only in ACE order get
+different identities. That is a false DRIFT, which fails closed; never a false
+match.
+
+**`SE_SELF_RELATIVE` is excluded from the control bits** — it describes how a
+descriptor is stored, not what it means. The inheritance/protection bits
+(`DACL_PRESENT`, `PROTECTED`, `AUTO_INHERITED`, and the SACL equivalents) are
+kept because they change what the descriptor does.
+
+**Object ACE types (5–8) fail closed.** They place GUIDs where the simple
+layout expects the SID; reading them with the wrong layout would silently
+produce a wrong identity, so an unsupported form refuses instead.
+
+**A NULL DACL is recorded, not smoothed.** `dacl_present=False` (everyone gets
+full access) is a real and alarming observation, kept distinguishable from "an
+object with no ACEs".
+
+**Determinism.** Manifest entries are sorted by canonical relative path in
+code-point order; the path comes from the OS-RESOLVED name, so its case is the
+on-disk case rather than whatever the caller typed; no mtime, no creation time,
+no enumeration order, no locale enters the identity. **No file is excluded** —
+an excluded file is an unmeasured file, and an unmeasured file under the trust
+root is code that can run without the identity changing.
+
+**Redirection.** Every measured object is resolved with
+`GetFinalPathNameByHandleW` on an open handle, so a symlink, junction or reparse
+point anywhere in the chain resolves to the object whose bytes are really read.
+A trusted artifact that resolves OUTSIDE the trust root fails closed; a UNC
+resolution is refused outright. File bytes are hashed **through the very handle
+whose resolved path was taken**, so `expected path` and `executed bytes` cannot
+be two different objects. This covers the trust plane and its runtime only — it
+is not a general filesystem audit, and it is deliberately not F-14's
+`kernel.input_lock`, whose contract is different and whose ~936 lines would
+enter the TCB for nothing this stage needs.
+
+**Runtime identity is byte identity.** "Python 3.12" is not an identity: the
+suite copies this interpreter, appends one overlay byte, confirms the copy still
+runs and still reports the SAME version, and requires the runtime identity to
+differ. Version and architecture are obtained by ASKING that executable
+(`-I -S -c`), not by reporting the observing process's own.
+
+### `AnchorRecord` — deliberately NOT extended (STOP, per the stage contract)
+
+Stage 2 was permitted to add `deployment_digest` to `AnchorRecord` *if it could
+be done backward-compatibly and in isolation*. It cannot, so it was not done.
+For the field to carry a guarantee, `publish_anchor` must OBTAIN the digest —
+from the trusted `RunIdentity` (Stage 3) or from publisher self-observation
+(Stage 6). Adding an always-empty field now would be a decorative field that
+affects no guarantee, changes the digest of every record, and bumps the schema
+for nothing. The path when a stage owns it: bump `ANCHOR_SCHEMA` to
+`gnosis.anchor.v2`, add `deployment_digest` explicitly, and source it from the
+trusted plane — one explicit schema change, made where the value exists.
+
+### TOCTOU — the gap, stated plainly
+
+Hashing is **detection and binding**, not prevention. This module measures what
+it observed at the moment it observed it; nothing in it stops the Worker
+modifying a trusted file, the runtime, or an ACL between `observe` and
+`execute`. Closing that window is the ACL/SID boundary's job — the Worker must
+hold no write access to the trust root, the runtime, the state roots or the
+service object — and the final composition must demonstrate it. Stage 2 does not
+claim it and does not need it to be true for its own property to hold.
+
+### TCB and the frozen dynamic-loading rule
+
+`gnosis.trust.deployment` enters `TRUST_ALLOWLIST` by an explicit diff, as
+required, and the closed-world tests now measure every Trust Plane entry point
+rather than two hard-coded ones. Its load-time closure is
+`{gnosis, gnosis.kernel, gnosis.kernel.canonical, gnosis.trust,
+gnosis.trust.launch, gnosis.trust.deployment}` — no new allowlist entry beyond
+the module itself, and zero third-party code. `gnosis.trust.anchor`'s own
+closure is **unchanged**, so the publisher's runtime trusted closure did not
+grow in this stage; the Trust Plane as a whole did, by the size of the new
+module, and that is reported rather than absorbed.
+
+The Stage-2 review froze an architectural rule that had been Stage 1's standing
+residual risk: the Trust Plane may not introduce `importlib.import_module` with
+a computed name, dynamic `__import__`, `exec`, `eval`, `compile`, loading Python
+from worker-controlled paths, plugin discovery, or arbitrary module loading
+without an explicit review decision. It is now an enforced property
+(`test_the_trust_plane_loads_no_code_dynamically`) with a mutant (DM11), because
+code that arrives without an import statement is invisible to the closed-world
+import model.

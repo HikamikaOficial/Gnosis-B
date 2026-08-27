@@ -63,7 +63,19 @@ TRUST_ALLOWLIST: dict[str, str] = {
     "gnosis.trust": "the Trust Plane package itself",
     "gnosis.trust.anchor": "authoritative anchor slice (record, store, publication protocol)",
     "gnosis.trust.launch": "authoritative launch/identity slice (MIC primitives, publisher gate)",
+    # Stage-2 addition, entering by explicit allowlist diff as required:
+    "gnosis.trust.deployment": (
+        "authoritative deployment-identity slice (F-17 Stage 2) — observes what "
+        "is actually deployed and binds it into deployment_digest. Trusted "
+        "because a compromise of it would let a different deployment claim the "
+        "identity of the approved one."),
 }
+
+# Trust Plane entry points whose load-time closure is measured. A new trusted
+# module is added HERE and to TRUST_ALLOWLIST in the same reviewable diff — the
+# stale-entry test below refuses an allowlist grant that no entry point loads.
+TRUST_ENTRY_POINTS = ("gnosis.trust.anchor", "gnosis.trust.launch",
+                      "gnosis.trust.deployment")
 
 # ---------------------------------------------------------------------------
 # Internal modules the Trust Plane imports LAZILY, inside a function body.
@@ -154,10 +166,21 @@ def test_trust_launch_load_closure_is_closed_world() -> None:
         f"trust.launch loaded unqualified internal modules: {violations}")
 
 
+def test_every_trust_entry_point_load_closure_is_closed_world() -> None:
+    """The closed-world rule applies to EVERY Trust Plane entry point, so a new
+    trusted module cannot arrive with an unreviewed dependency graph behind it."""
+    for entry in TRUST_ENTRY_POINTS:
+        violations = unqualified_internal_modules(_load_closure(entry))
+        assert not violations, (
+            f"{entry} loaded unqualified internal modules: {violations}")
+
+
 def test_the_allowlist_grants_nothing_it_does_not_need() -> None:
     """An allowlist that outgrows the real closure is a standing permission for
     a future dependency nobody reviewed. Every entry must be genuinely loaded."""
-    reachable = _load_closure("gnosis.trust.anchor") | _load_closure("gnosis.trust.launch")
+    reachable: set[str] = set()
+    for entry in TRUST_ENTRY_POINTS:
+        reachable |= _load_closure(entry)
     stale = sorted(set(TRUST_ALLOWLIST) - reachable)
     assert not stale, f"TRUST_ALLOWLIST grants modules the Trust Plane never loads: {stale}"
 
@@ -254,6 +277,52 @@ def test_the_trust_plane_declares_every_internal_import_including_lazy_ones() ->
         f"the Trust Plane imports unqualified internal modules: {offenders}. A "
         "lazy (function-body) import is still a TCB dependency: allowlist it, "
         "declare it in DEFERRED_TCB_EXPANSION, or do not depend on it.")
+
+
+_FORBIDDEN_DYNAMIC_NAMES: frozenset[str] = frozenset({
+    "exec", "eval", "compile", "__import__",
+})
+_FORBIDDEN_DYNAMIC_ATTRS: frozenset[str] = frozenset({
+    "import_module", "spec_from_file_location", "module_from_spec",
+    "exec_module", "load_module", "SourceFileLoader", "ExtensionFileLoader",
+})
+
+
+def test_the_trust_plane_loads_no_code_dynamically() -> None:
+    """FROZEN ARCHITECTURAL RULE (Stage-2 review).
+
+    The closed-world import model is a STATIC control: it reasons about import
+    statements. Dynamic loading — `importlib.import_module` with a computed
+    name, `__import__`, `exec`/`eval`/`compile`, a loader pointed at a path,
+    plugin discovery — would let code enter the Trust Plane without any import
+    statement to check, silently enlarging the TCB. It was the standing
+    residual risk of Stage 1; here it becomes an enforced property.
+
+    Introducing any of these needs an explicit review decision, which means
+    changing this test on purpose — not slipping past it.
+    """
+    offenders: dict[str, list[str]] = {}
+    for source in sorted((SRC / "gnosis" / "trust").rglob("*.py")):
+        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+        found: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id in _FORBIDDEN_DYNAMIC_NAMES:
+                found.append(f"{node.id} (line {node.lineno})")
+            elif isinstance(node, ast.Attribute) and node.attr in _FORBIDDEN_DYNAMIC_ATTRS:
+                found.append(f".{node.attr} (line {node.lineno})")
+            elif isinstance(node, ast.Import):
+                found += [f"import {a.name} (line {node.lineno})" for a in node.names
+                          if a.name == "importlib" or a.name.startswith("importlib.")]
+            elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
+                    "importlib"):
+                found.append(f"from {node.module} (line {node.lineno})")
+        if found:
+            offenders[source.name] = sorted(found)
+    assert not offenders, (
+        "the Trust Plane reaches for dynamic code loading: "
+        f"{offenders}. Code that arrives without an import statement cannot be "
+        "checked by the closed-world model; enlarging the TCB that way is "
+        "forbidden without an explicit review decision.")
 
 
 def test_the_deferred_expansion_list_is_not_stale() -> None:
