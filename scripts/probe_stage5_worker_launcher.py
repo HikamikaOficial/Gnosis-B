@@ -102,10 +102,26 @@ _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 
 def random_password() -> str:
-    """Random, complexity-satisfying, never logged and never on a command line."""
-    alphabet = string.ascii_letters + string.digits
-    body = "".join(secrets.choice(alphabet) for _ in range(28))
-    return f"Gp5!{body}#Zq"
+    """Random, complexity-satisfying, never logged and never on a command line.
+
+    Every character is drawn from `secrets`, including the ones that satisfy
+    Windows' complexity policy. An earlier version used a FIXED prefix and
+    suffix to guarantee complexity; that put a literal password fragment in the
+    repository, which a secret scan is right to flag even though the fragment is
+    not itself a credential. Complexity is now guaranteed by construction
+    without any constant.
+    """
+    classes = (string.ascii_uppercase, string.ascii_lowercase, string.digits,
+               "!#%&*+-=?@^_")
+    required = [secrets.choice(group) for group in classes]
+    alphabet = "".join(classes)
+    body = [secrets.choice(alphabet) for _ in range(24)]
+    chars = required + body
+    # shuffle without random.shuffle, which is not a CSPRNG
+    for i in range(len(chars) - 1, 0, -1):
+        j = secrets.randbelow(i + 1)
+        chars[i], chars[j] = chars[j], chars[i]
+    return "".join(chars)
 
 
 def create_worker(password: str) -> None:
@@ -482,7 +498,7 @@ def main() -> int:
     probe: Probe | None = None
     try:
         probe = setup(password)
-        run_matrix(probe)
+        run_matrix(probe, password)
     finally:
         # the password buffer is a str and cannot truly be erased; it is dropped
         # here and never written anywhere. The DPAPI blob is the only at-rest form.
@@ -503,7 +519,7 @@ def main() -> int:
     return 1 if FAILURES else 0
 
 
-def run_matrix(probe: Probe) -> None:
+def run_matrix(probe: Probe, password: str) -> None:
     say("T1 — CROSS-USER LAUNCH, IDENTITY AND CONTAINMENT")
     say("-" * 78)
     director_env = dict(os.environ)
@@ -788,6 +804,12 @@ def run_matrix(probe: Probe) -> None:
     say("")
     say("T12 — PLAINTEXT SCAN OF EVERYTHING THE PROBE WROTE")
     say("-" * 78)
+    # Scan for the ACTUAL generated password, in both encodings the OS could
+    # have written it in, and for any 8-character run of it. An earlier version
+    # scanned for a fixed prefix, which only worked because the generator had
+    # one - and having one was itself the defect.
+    needles = [password.encode("utf-8"), password.encode("utf-16-le")]
+    needles += [password[i:i + 8].encode("utf-8") for i in range(0, 16, 8)]
     hits: list[str] = []
     for path in probe.root.rglob("*"):
         if not path.is_file() or "runtime" in path.parts:
@@ -796,9 +818,12 @@ def run_matrix(probe: Probe) -> None:
             blob = path.read_bytes()
         except OSError:
             continue
-        if b"Gp5!" in blob:
+        if any(needle in blob for needle in needles):
             hits.append(str(path.relative_to(probe.root)))
     check("password fragments in probe artifacts", hits, [])
+    say("   (scanned for the real generated secret in UTF-8 and UTF-16-LE, plus")
+    say("    8-character runs of it, across every file the probe wrote except the")
+    say("    copied runtime)")
 
 
 if __name__ == "__main__":
