@@ -1,0 +1,54 @@
+F-17 STAGE 5 — DIRECTOR CALLER CONTEXT (read-only)
+==============================================================================
+
+DIRECTOR (this process — the would-be launcher caller):
+  TokenUser SID  : S-1-5-21-1160728320-3593568380-93362170-1000
+  integrity      : High
+  elevated       : True
+  privileges held: 24
+
+PRIVILEGES THAT DECIDE WHICH LAUNCH PRIMITIVE IS EVEN REACHABLE:
+  SeImpersonatePrivilege           ENABLED              required by CreateProcessWithTokenW
+  SeAssignPrimaryTokenPrivilege    ABSENT               required by CreateProcessAsUserW
+  SeIncreaseQuotaPrivilege         present-disabled     also required by CreateProcessAsUserW
+  SeTcbPrivilege                   ABSENT               NOT required by any of the three; listed to show it is absent
+
+FULL PRIVILEGE SET (for the record):
+  SeBackupPrivilege                      ENABLED
+  SeChangeNotifyPrivilege                ENABLED
+  SeCreateGlobalPrivilege                ENABLED
+  SeCreatePagefilePrivilege              present-disabled
+  SeCreateSymbolicLinkPrivilege          present-disabled
+  SeDebugPrivilege                       ENABLED
+  SeDelegateSessionUserImpersonatePrivilege present-disabled
+  SeImpersonatePrivilege                 ENABLED
+  SeIncreaseBasePriorityPrivilege        present-disabled
+  SeIncreaseQuotaPrivilege               present-disabled
+  SeIncreaseWorkingSetPrivilege          present-disabled
+  SeLoadDriverPrivilege                  present-disabled
+  SeManageVolumePrivilege                present-disabled
+  SeProfileSingleProcessPrivilege        present-disabled
+  SeRemoteShutdownPrivilege              present-disabled
+  SeRestorePrivilege                     ENABLED
+  SeSecurityPrivilege                    present-disabled
+  SeShutdownPrivilege                    present-disabled
+  SeSystemEnvironmentPrivilege           present-disabled
+  SeSystemProfilePrivilege               present-disabled
+  SeSystemtimePrivilege                  present-disabled
+  SeTakeOwnershipPrivilege               present-disabled
+  SeTimeZonePrivilege                    present-disabled
+  SeUndockPrivilege                      present-disabled
+
+==============================================================================
+WHAT THIS MEANS FOR THE COMMAND-LINE GATE
+==============================================================================
+  CreateProcessWithLogonW   reachable=True   cap  1024  -> DISQUALIFIED by the measured payload
+  CreateProcessWithTokenW   reachable=True   cap 32767  -> needs SeImpersonatePrivilege
+  CreateProcessAsUserW      reachable=False   cap 32767  -> needs SeAssignPrimaryTokenPrivilege
+
+  Reachability is NOT authorization. Both 32767-capable primitives demand a
+  privilege the Stage-5 authorization did not grant, and the review is
+  explicit: 'No cambies silenciosamente a una API con privilegios mayores'
+  and STOP if 'only solution requires dangerous trusted privileges not
+  previously approved'. This audit reports reachability so the decision can
+  be made; it does not take the decision.

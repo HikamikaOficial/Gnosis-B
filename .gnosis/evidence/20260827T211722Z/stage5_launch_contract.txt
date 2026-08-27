@@ -1,0 +1,75 @@
+F-17 STAGE 5 — LAUNCH CONTRACT AUDIT (primitive-independent)
+==============================================================================
+
+1. ENVIRONMENT — what the Worker inherits TODAY
+------------------------------------------------------------------------------
+Two paths, and BOTH hand over the Director's whole environment:
+  env=None                       -> Popen inherits the Director environment
+  env=Credential.environment(..) -> `env = dict(base)` copies ALL of it,
+                                    then adds/clears specific names
+
+  Director environment variables            : 62
+  matching a credential-shaped NAME pattern : 9
+  (NAMES ONLY below — no value is read, printed or recorded anywhere)
+      CLAUDECODE
+      CLAUDE_CODE_CHILD_SESSION
+      CLAUDE_CODE_ENTRYPOINT
+      CLAUDE_CODE_EXECPATH
+      CLAUDE_CODE_MESSAGING_SOCKET
+      CLAUDE_CODE_MESSAGING_TOKEN
+      CLAUDE_CODE_SESSION_ID
+      CLAUDE_EFFORT
+      CLAUDE_PID
+
+  FINDING: there is no allowlist. Every one of those names, and every
+  other variable the Director holds, reaches the Worker today. Stage 5's
+  required contract ('Worker environment -> sentinel ABSENT') is NOT
+  satisfiable by the current runner and needs the explicit allowlist the
+  review specifies.
+
+2. STANDARD HANDLES — what the Worker gets TODAY
+------------------------------------------------------------------------------
+  stdin  : NOT SET by CLIRunner.run -> the child INHERITS the Director's
+           stdin handle. Read off the Popen call: no `stdin=` argument.
+  stdout : a FILE opened by the runner ('wb'), passed as a handle
+  stderr : a FILE opened by the runner ('wb'), passed as a handle
+
+  live probe, child with NO stdin= argument: isatty=True fileno=0 closed=False
+  A child that inherits an interactive stdin is a channel the Worker did
+  not have to be given. Stage 5 must supply a designed read-only endpoint.
+
+3. DESCENDANT CONTAINMENT — what exists TODAY
+------------------------------------------------------------------------------
+  Windows Job Object usage anywhere in src/ : NONE
+  CLIRunner timeout/cancel path             : proc.terminate() then
+                                              proc.kill() on the DIRECT
+                                              child only
+
+  live probe: does a grandchild survive the runner killing its child?
+  child cancelled                : True
+  grandchild marker before -> after : '9' -> '16'
+  GRANDCHILD STILL RUNNING          : True
+
+  FINDING D1: cancelling a run does NOT contain the process
+  tree. terminate()/kill() reach the DIRECT child only, so a
+  Worker's descendants outlive the run. Stage 5's containment
+  requirement is unmet by the current primitive.
+  probe cleanup: any surviving probe grandchild terminated by
+  command-line match on the marker file name
+
+  NOTE: the probe's own grandchild exits on its own within ~12s; it is a
+  bare `time.sleep` loop writing a marker, holding no resource.
+
+==============================================================================
+SUMMARY OF PRIMITIVE-INDEPENDENT FINDINGS
+==============================================================================
+  E1  the Worker would inherit the Director's ENTIRE environment; no
+      allowlist exists. Sentinel-absence is not achievable today.
+  H1  the Worker inherits the Director's stdin handle; no designed
+      read-only endpoint exists.
+  D1  no Job Object, and cancellation kills only the direct child, so
+      descendants outlive the run.
+  All three are Stage-5 REQUIREMENTS and all three are unimplemented.
+  None of them is blocked by the command-line gate; all of them are
+  blocked by it in practice, because they are properties OF the launcher
+  that the disqualified primitive was supposed to create.
