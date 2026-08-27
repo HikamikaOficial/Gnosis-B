@@ -118,6 +118,23 @@ imports `evidence_capture`/`git_evidence`/`input_lock`/`write_observer` (3444 li
 avoided via the injected `verify=`), nor the engine. Total gnosis TCB code ≈ 460
 lines + the dedicated runtime.
 
+> **That ≈460 is the TARGET for the DEPLOYED publisher, not the repo today.**
+> Stated here because a design target read as a present-tense measurement is
+> exactly the kind of TCB under-reporting this document exists to prevent.
+> Measured on the Stage-1 tree (`.gnosis/evidence/20260827T033547Z/stage1_hardening_tcb_size.txt`):
+>
+> | metric | LOC | what it is |
+> |---|---|---|
+> | static functional slice | **265** | `trust/anchor.py` + `kernel/canonical.py` — the publisher's own functions |
+> | runtime trusted closure, **load time** | **522** (511 without package markers) | adds `trust/launch.py`: `trust.anchor` imports `assert_publisher_identity`/`label_high_no_write_up` from it, so launch is TRUSTED code, not "conceptually unused" |
+> | runtime trusted closure, **publish time** | **3966** | adds `evidence_capture` + `git_evidence` + `input_lock` + `write_observer` (**+3444**), because `publish_anchor`/`verify_anchored_bundle` default to `verify=None` and then lazily import `verify_bundle` — which **recomputes the digest that gets anchored** |
+>
+> The publish-time number is the security-relevant one: every module in it can,
+> if compromised, determine what the publisher anchors. Reaching ≈460 requires
+> the `trust/bundle_verify.py` extraction **and** actually passing `verify=` at
+> the call sites — both Stage-6 work, neither done. Until then the effective
+> TCB is 3966 lines, and no document may report 265 as "the TCB".
+
 ---
 
 ## 5. Deployed-artifact identity (`TrustPlaneDeploymentIdentity`) — NEW, mandatory

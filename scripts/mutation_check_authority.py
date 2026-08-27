@@ -72,6 +72,22 @@ MUTANTS: list[Mutant] = [
     Mutant("AM11", "the publisher-identity precondition gate is removed (any process may own the store)",
            [(LAUNCH, 'if require_high and _IS_WINDOWS and process_integrity() != "High":',
              'if False and require_high and _IS_WINDOWS and process_integrity() != "High":')]),
+    # Closed-world TCB mutant (Stage-1 independent-review hardening). Unlike
+    # AM10, the module smuggled in here (kernel.input_lock) matches NONE of the
+    # worker-plane name substrings the previous BLACKLIST screened for, so the
+    # old model let it into the TCB silently. Only the closed-world allowlist
+    # catches it — this mutant is the regression guard for that inversion.
+    Mutant("AM12", "trust-plane imports an internal gnosis module absent from the qualified TCB allowlist",
+           [(ANCHOR, "import json\n",
+             "import json\nimport gnosis.kernel.input_lock  # mutant: unqualified internal dep\n")]),
+    # The bypass of the closed-world model itself: written inside a function
+    # body, the dependency never appears in the LOAD-TIME closure, so only the
+    # source-level scan can see it. It is a full TCB dependency the moment
+    # verify_anchored_bundle runs.
+    Mutant("AM13", "the TCB grows through a LAZY (function-body) internal import, invisible at load time",
+           [(ANCHOR, "    if not store.verify_chain():",
+             ("    import gnosis.kernel.run_store  # mutant: lazy unqualified internal dep\n"
+              "    if not store.verify_chain():"))]),
 ]
 
 

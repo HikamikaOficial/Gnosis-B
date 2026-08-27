@@ -1,0 +1,66 @@
+F-17 TCB SIZE - HONEST MEASUREMENT (Stage-1 independent-review correction)
+==============================================================================
+LOC = physical lines of the module file (comments/docstrings included:
+      they are part of what a reviewer of the TCB must read).
+
+A. STATIC FUNCTIONAL SLICE - the Publisher's own functions
+   (AnchorRecord/AnchorStore/RunIdentity/publish_anchor/verify_anchored_bundle
+    plus the one canonical-hash primitive they call)
+       53  gnosis.kernel.canonical
+      212  gnosis.trust.anchor
+      265  TOTAL (static functional slice)
+
+   This is the number previously reported as 'the TCB'. It is a useful
+   metric for 'how much publisher logic is there', but it is NOT the
+   security boundary: it omits code that is loaded and can affect it.
+
+B. RUNTIME TRUSTED CLOSURE - LOAD TIME (measured, clean subprocess)
+   every internal module in sys.modules after `import gnosis.trust.anchor`
+        3  gnosis
+        0  gnosis.kernel
+       53  gnosis.kernel.canonical
+        8  gnosis.trust
+      212  gnosis.trust.anchor
+      246  gnosis.trust.launch
+      522  TOTAL (load-time trusted closure)
+      511  ... of which non-package-marker code (anchor + launch + canonical)
+   third-party pulled in: NONE
+
+   trust.launch is in the closure because trust.anchor imports
+   assert_publisher_identity / label_high_no_write_up from it. It is
+   TRUSTED CODE, not 'conceptually unused' code.
+
+C. RUNTIME TRUSTED CLOSURE - PUBLISH TIME (measured)
+   publish_anchor/verify_anchored_bundle default to verify=None and then
+   LAZILY `from gnosis.kernel.evidence_capture import verify_bundle`.
+   verify_bundle RECOMPUTES the digest that gets anchored, so every module
+   below can determine what the Publisher publishes.
+        3  gnosis
+        0  gnosis.kernel
+       53  gnosis.kernel.canonical
+     1487  gnosis.kernel.evidence_capture
+      393  gnosis.kernel.git_evidence
+      936  gnosis.kernel.input_lock
+      628  gnosis.kernel.write_observer
+        8  gnosis.trust
+      212  gnosis.trust.anchor
+      246  gnosis.trust.launch
+     3966  TOTAL (publish-time trusted closure)
+
+   ADDED over load time by the lazy import:
+     1487  gnosis.kernel.evidence_capture
+      393  gnosis.kernel.git_evidence
+      936  gnosis.kernel.input_lock
+      628  gnosis.kernel.write_observer
+     3444  subtotal added
+   third-party pulled in: NONE
+
+SUMMARY
+  A  static functional slice .........................   265 LOC
+  B  runtime trusted closure, load time ..............   522 LOC  (511 excluding package markers)
+  C  runtime trusted closure, publish time ...........  3966 LOC
+
+  (C) is the security-relevant metric. It is NOT reduced in this
+  correction: doing so requires the trust/bundle_verify.py extraction and
+  the verify= injection wiring, which are Stage-6 work
+  (docs/F17_P2_PUBLISHER_DESIGN.md section 8). Recorded, not hidden.
