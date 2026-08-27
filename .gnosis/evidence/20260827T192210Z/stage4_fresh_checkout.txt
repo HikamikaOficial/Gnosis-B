@@ -1,0 +1,17 @@
+F-17 STAGE 4 - FRESH-CHECKOUT VERIFICATION
+======================================================================
+Run against a CLEAN extraction of the committed tree, so nothing
+untracked or locally modified can be carrying the result.
+
+commit : 8b58509ec3313d17db4d28b55f21c1d6739c87ef
+method : git archive HEAD | tar -x -C <clean dir>
+files  : 1004
+
+modules resolved from the fresh tree:
+  C:\Users\nicol\AppData\Local\Temp\claude\C--Users-nicol-Desktop-Claude-Code-Proyectos-GnosisAgentAi\0552c474-d289-45e3-94af-68d5ec1d0bdc\scratchpad\fresh4\src\gnosis\trust\publication.py
+  C:\Users\nicol\AppData\Local\Temp\claude\C--Users-nicol-Desktop-Claude-Code-Proyectos-GnosisAgentAi\0552c474-d289-45e3-94af-68d5ec1d0bdc\scratchpad\fresh4\src\gnosis\trust\anchor.py
+  C:\Users\nicol\AppData\Local\Temp\claude\C--Users-nicol-Desktop-Claude-Code-Proyectos-GnosisAgentAi\0552c474-d289-45e3-94af-68d5ec1d0bdc\scratchpad\fresh4\src\gnosis\kernel\atomic_io.py
+
+.................................................................................................................... [ 72%]
+.............................................                            [100%]
+161 passed, 28 subtests passed in 23.92s

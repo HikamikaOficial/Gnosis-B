@@ -1,0 +1,49 @@
+F-17 STAGE 4 - FULL-SUITE REGRESSION
+======================================================================
+Stage 4 changes the anchor ledger's write path, the atomic-write primitive
+and the publication protocol, so the regression was widened rather than
+kept directed.
+
+run   tree 8b58509 (Stage-4 implementation HEAD)
+      1290 passed, 101 subtests passed in 861.53s (0:14:21)   exit 0
+
+GREEN. Zero failures, zero errors.
+
+Continuity with the earlier stages, for the record:
+  tree e648784 (Stage 2)   1167 passed,  73 subtests   exit 0
+  tree 27e181d (Stage 2)   1168 passed,  74 subtests   exit 0
+  tree a6dd6aa (Stage 3)   1218 passed,  72 subtests   exit 0
+  tree 8b58509 (Stage 4)   1290 passed, 101 subtests   exit 0
+The test count rises with the new suite (+72 directed Stage-4 tests). The
+subtest count rises because the Stage-4 crash matrix and the in-process
+fault matrix are subtest loops (11 + 8 + 5 + 2 + 2). Every one that ran,
+passed.
+
+STATIC CHECKS on the same tree
+  mypy --strict over src            Success: no issues found in 65 source files
+  ruff on every new / changed file  All checks passed
+    src/gnosis/trust/publication.py
+    src/gnosis/trust/anchor.py
+    src/gnosis/trust/run_identity.py
+    src/gnosis/kernel/atomic_io.py
+    tests/test_durable_publication.py
+    tests/test_trust_boundary.py
+    scripts/mutation_check_publication.py
+    scripts/mutation_check_run_identity.py
+
+  ruff over the WHOLE repository reports 77 findings. Every one of them is
+  PRE-EXISTING and in a file Stage 4 did not touch (scripts/*, .claude/hooks,
+  frozen .gnosis/evidence snapshots, and src files outside the Trust Plane).
+  Not one is in a file this stage added or changed. Stated rather than
+  hidden behind a directed-only lint run.
+
+DIRECTED SUITE (the Stage-4 file alone)
+  tests/test_durable_publication.py   72 passed, 28 subtests   exit 0
+
+FRESH CHECKOUT of 8b58509 (git archive | tar -x into a clean directory)
+  5 trust suites                     161 passed, 28 subtests   exit 0
+
+F-14 STATUS, STATED CORRECTLY: the historical flaky event from the Stage-1
+evidence remains documented and adjudicated as an EVIDENCE NOTE. F-14 itself
+remains CLOSED. Nothing in Stage 4 reopens it; this green run is additional
+positive evidence, not a new closure and not a reopening.

@@ -1,0 +1,119 @@
+F-17 STAGE 4 - TRUST PLANE TCB CLOSURE
+======================================================================
+
+Closed-world model: for internal gnosis.* modules, DEFAULT = NOT ALLOWED.
+A module may appear in a Trust Plane closure only if TRUST_ALLOWLIST names
+it, with a stated architectural reason. Measured in CLEAN subprocesses so
+pytest's own imports cannot pollute the result.
+
+TRUST_ALLOWLIST (11 entries):
+  gnosis
+  gnosis.kernel
+  gnosis.kernel.atomic_io
+  gnosis.kernel.canonical
+  gnosis.kernel.file_lock
+  gnosis.trust
+  gnosis.trust.anchor
+  gnosis.trust.deployment
+  gnosis.trust.launch
+  gnosis.trust.publication  <-- STAGE 4 ADDITION
+  gnosis.trust.run_identity
+
+gnosis.trust.anchor
+  loaded internal (6):
+      gnosis
+      gnosis.kernel
+      gnosis.kernel.canonical
+      gnosis.trust
+      gnosis.trust.anchor
+      gnosis.trust.launch
+  third-party : NONE
+  unqualified : NONE
+
+gnosis.trust.launch
+  loaded internal (3):
+      gnosis
+      gnosis.trust
+      gnosis.trust.launch
+  third-party : NONE
+  unqualified : NONE
+
+gnosis.trust.deployment
+  loaded internal (6):
+      gnosis
+      gnosis.kernel
+      gnosis.kernel.canonical
+      gnosis.trust
+      gnosis.trust.deployment
+      gnosis.trust.launch
+  third-party : NONE
+  unqualified : NONE
+
+gnosis.trust.run_identity
+  loaded internal (9):
+      gnosis
+      gnosis.kernel
+      gnosis.kernel.atomic_io
+      gnosis.kernel.canonical
+      gnosis.kernel.file_lock
+      gnosis.trust
+      gnosis.trust.anchor
+      gnosis.trust.launch
+      gnosis.trust.run_identity
+  third-party : NONE
+  unqualified : NONE
+
+gnosis.trust.publication
+  loaded internal (10):
+      gnosis
+      gnosis.kernel
+      gnosis.kernel.atomic_io
+      gnosis.kernel.canonical
+      gnosis.kernel.file_lock
+      gnosis.trust
+      gnosis.trust.anchor
+      gnosis.trust.launch
+      gnosis.trust.publication
+      gnosis.trust.run_identity
+  third-party : NONE
+  unqualified : NONE
+
+union of load-time closures : 11 modules
+stale allowlist entries     : NONE
+
+KEY RESULT. gnosis.trust.deployment (1052 LOC) is NOT in the durable
+publisher's closure: trust.publication imports neither it nor anything
+that reaches it, so the publisher still does not inherit the deployment-
+observation module merely to compare a digest.
+
+DEFERRED_TCB_EXPANSION (lazy, function-body internal imports - still TCB):
+  gnosis.kernel.evidence_capture
+  (unchanged by Stage 4: the durable protocol reuses build_anchor_record,
+   which reaches verify_bundle through the same injection seam)
+
+TRUST PLANE SOURCE SIZE (LOC):
+  __init__.py                  8
+  anchor.py                  471
+  deployment.py             1052
+  launch.py                  246
+  publication.py             834
+  run_identity.py            394
+  TOTAL                     3005
+
+ALLOWLISTED KERNEL PRIMITIVES (LOC):
+  kernel/canonical.py         53
+  kernel/atomic_io.py         82
+  kernel/file_lock.py        111
+
+STAGE 4 TCB DELTA
+  TRUST_ALLOWLIST     +1   gnosis.trust.publication, by explicit diff
+  TRUST_ENTRY_POINTS  +1   gnosis.trust.publication (its closure is measured)
+  trust/publication.py     834 LOC, NEW trusted module
+  trust/anchor.py          405 -> 471 LOC (record_line, parse_record_line,
+                           build_anchor_record split out, durable append)
+  trust/run_identity.py    380 -> 394 LOC (run_ids listing for recovery)
+  kernel/atomic_io.py      37 -> 82 LOC (atomic_write_bytes + the shared
+                           replace-retry helper); already allowlisted
+  third-party in the TCB   NONE, unchanged
+  worker/engine/planner    NONE entered, unchanged
+  dynamic loading          NONE (importlib/exec/eval/compile still refused)
