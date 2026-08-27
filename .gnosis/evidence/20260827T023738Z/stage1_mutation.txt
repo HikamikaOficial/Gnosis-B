@@ -1,0 +1,52 @@
+MUTATION CHECK — F-17 OS authority boundary
+============================================================
+targeted suite: tests/test_authority_boundary.py tests/test_trust_boundary.py
+
+BASELINE (repair in place): exit=0  26 passed in 2.65s
+
+AM1: the worker is launched at HIGH, not Medium, so it can write the anchor
+  result: exit=1  1 failed, 12 passed in 1.12s
+  verdict: CAUGHT
+
+AM2: the AnchorStore is labelled Medium, not High, so a Medium worker writes it
+  result: exit=1  1 failed, 1 passed in 0.35s
+  verdict: CAUGHT
+
+AM3: publish stops binding the bundle to the run's head, so a cross-run/replay bundle anchors
+  result: exit=1  1 failed, 5 passed in 0.55s
+  verdict: CAUGHT
+
+AM4: publish stops checking self-consistency, so a broken bundle anchors
+  result: exit=1  1 failed, 9 passed in 0.77s
+  verdict: CAUGHT
+
+AM5: verify stops re-verifying the chain, so a broken chain still verifies
+  result: exit=1  1 failed, 10 passed in 0.76s
+  verdict: CAUGHT
+
+AM6: verify accepts a missing anchor record instead of failing closed
+  result: exit=1  1 failed, 11 passed in 0.91s
+  verdict: CAUGHT
+
+AM7: append stops requiring a record to extend the chain
+  result: exit=1  1 failed, 1 passed in 0.33s
+  verdict: CAUGHT
+
+AM8: assert_integrity stops failing closed, so a worker at the wrong (High) level proceeds
+  result: exit=1  1 failed, 12 passed in 1.15s
+  verdict: CAUGHT
+
+AM9: the compatibility facade shadows the authoritative AnchorStore (two impls)
+  result: exit=1  1 failed, 1 passed in 0.33s
+  verdict: CAUGHT
+
+AM10: the trust anchor package imports a forbidden worker module
+  result: exit=1  1 failed, 18 passed in 2.72s
+  verdict: CAUGHT
+
+AM11: the publisher-identity precondition gate is removed (any process may own the store)
+  result: exit=1  1 failed, 24 passed in 2.82s
+  verdict: CAUGHT
+
+RESTORED: exit=0  26 passed in 2.59s
+mutants: 11  survived/aborted: 0

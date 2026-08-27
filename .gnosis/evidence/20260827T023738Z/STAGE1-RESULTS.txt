@@ -1,0 +1,52 @@
+F-17 IMPLEMENTATION — STAGE 1 (TRUST-PLANE SPLIT) — RESULTS
+HEAD (implementation tree): 7d9d075
+Structural split only; behavior_before == behavior_after.
+
+MODULES CREATED
+  src/gnosis/trust/__init__.py    (8 lines)
+  src/gnosis/trust/anchor.py    (212 lines)  authoritative anchor slice
+  src/gnosis/trust/launch.py    (246 lines)  authoritative launch/identity slice
+  tests/test_trust_boundary.py             import-boundary / TCB guard
+MODULES MODIFIED
+  src/gnosis/kernel/authority.py   480 -> ~60 lines: re-export facade only
+  scripts/mutation_check_authority.py       repoint AM1-8 + add AM9/10/11
+  docs/F17_PRODUCTION_WIRING_AND_CLOSURE.md  DPAPI wording correction
+
+DIRECTED TESTS
+  tests/test_authority_boundary.py + tests/test_trust_boundary.py = 26 passed
+
+MUTATION (see stage1_mutation.txt)
+  baseline exit=0 (26 passed); 11 mutants, 0 survived; restored exit=0
+  AM1..AM8 CAUGHT (repointed to trust.{launch,anchor})
+  AM9  facade shadows authoritative AnchorStore        CAUGHT
+  AM10 trust package imports a forbidden worker module CAUGHT
+  AM11 publisher-identity precondition gate removed    CAUGHT
+
+TYPES / LINT
+  mypy: Success, no issues in 62 source files (whole src/gnosis)
+  ruff: clean on the new src/test files; the 6 ISC004 in the mutation
+        script are pre-existing baseline (present in the committed original)
+
+TCB DEPENDENCY (load-time closure of gnosis.trust.anchor; see stage1_tcb_closure.txt)
+  gnosis, gnosis.kernel, gnosis.kernel.canonical,
+  gnosis.trust, gnosis.trust.anchor, gnosis.trust.launch
+  -> zero forbidden worker-plane modules (engine/planner/scheduler/policy/
+     runner/adapters/claude/codex/plugin/director/evidence_capture);
+     evidence_capture stays a LAZY import inside publish_anchor only.
+
+require_high TREATMENT
+  AnchorStore.__init__ -> launch.assert_publisher_identity(require_high=...)
+  with identical semantics/message + label_high_no_write_up; the future
+  RESTRICTED service-SID gate has an explicit locus (assert_publisher_identity)
+  without weakening the current check. No bare require_high=False bypass.
+
+F-14 REGRESSION NOTE (recorded exactly, per closure spec section 21)
+  A broader run (tests/test_evidence_binding.py + test_git_evidence.py +
+  authority + trust) reported 229 passed / 1 failed in 273s. The one failure,
+  test_evidence_binding.py::TestEveryInputIsByteBound::
+  test_same_path_and_metadata_different_bytes_differ_in_identity, was a git
+  subprocess environment flaky ("git add .gitignore a.txt" -> exit 128 under
+  concurrent load), NOT a split regression: the module does not import
+  authority/trust, and the test PASSES deterministically in isolation
+  (1 passed in 4.71s). The full run is therefore NOT declared GREEN; the
+  Stage-1-relevant validations above are all green.
