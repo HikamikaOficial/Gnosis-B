@@ -1,0 +1,51 @@
+F-17 STAGE 5 - NEGATIVE CONTROL AND SECRET SCAN
+==========================================================================
+A launcher that launches everything is not a launcher. These are the
+refusals, and the proof that each is the intended one.
+
+1. REFUSALS PROVEN BY THE DIRECTED SUITE (tests/test_worker_launcher.py)
+--------------------------------------------------------------------------
+
+   ======================== 56 passed, 1 skipped in 2.99s ========================
+
+2. REFUSALS PROVEN OS-REAL (scripts/probe_stage5_worker_launcher.py)
+--------------------------------------------------------------------------
+   worker WRITE/DELETE/RENAME on the sealed LaunchSpec      DENIED
+   worker CREATE / WRITE_DAC / takeown on the launch root   DENIED
+   worker CREATE / WRITE_DAC / takeown on the tool root     DENIED
+   worker READ/WRITE/DELETE/RENAME on the DPAPI blob        DENIED
+   worker WRITE on the runtime and on the bootstrap         DENIED
+   bootstrap with a tampered spec                           exit 121
+   bootstrap with a wrong expected digest                   exit 121
+   launcher with a wrong expected SID           WorkerIdentityMismatch
+   missing / empty / corrupt / truncated DPAPI blob         refused
+   worker -> Director VM_WRITE, VM_OPERATION, CREATE_THREAD,
+     DUP_HANDLE, CREATE_PROCESS, ALL_ACCESS, OpenProcessToken  DENIED
+
+3. CONTROL - THE POSITIVE CASE IS NOT VACUOUS
+--------------------------------------------------------------------------
+   A gate that only ever refuses is indistinguishable from a broken
+   launcher, so the positive path runs in the SAME probe:
+     the authorized worker DID launch, exit code 0
+     observed TokenUser SID == expected worker SID
+     a 12264-character logical argv arrived EXACT through a 264-char transport
+     python / git / claude all ran under the worker (rc=0)
+
+4. SECRET SCAN
+--------------------------------------------------------------------------
+   files scanned : 10
+   findings      : 0   <- required 0
+
+   The probe generates a RANDOM password at run time, hands it to
+   NetUserAdd and LogonUser through struct/argument fields, DPAPI-protects
+   it, and drops it. It never reaches a command line, the repo, a log or
+   the evidence. There is NO literal credential anywhere in the Stage-5
+   source: an earlier version of the generator used a fixed prefix to
+   satisfy complexity, and that fragment IS what a scan should flag, so
+   the generator was changed to draw every character from `secrets`.
+
+   The probe's own T12 then scans every file it wrote for the ACTUAL
+   generated secret, in UTF-8 and UTF-16-LE and in 8-character runs, and
+   finds none.
+
+ALL NEGATIVE CONTROLS PASSED.

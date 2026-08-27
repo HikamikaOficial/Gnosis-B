@@ -1729,3 +1729,172 @@ implied.
 
 **Stage 4 result: PASS. Recommendation: DO NOT CLOSE F-17.** Stage 5 (worker
 launcher) NOT started. F-14 remains CLOSED.
+
+## Stage-5 addendum — TRUSTED DEDICATED-WORKER LAUNCHER (2026-08-28)
+
+Stage 4 closed at `2b865f2`. Stage 5's first attempt STOPPED at Gate 1 with
+`WORKER LAUNCH COMMAND-LINE CONTRACT NOT QUALIFIED` (`1133548`); the review
+upheld that stop as valid and authorized **candidate B — a trusted short
+bootstrap plus a sealed LaunchSpec**. This records the remediation.
+
+### The problem, restated precisely
+
+`CreateProcessWithLogonW` is the only primitive that creates the
+Director → Worker-SID boundary without the trust plane acquiring a privilege it
+was never granted, and its `lpCommandLine` is capped at **1024 characters**.
+Gnosis's real logical command is **~12128**. The two are irreconcilable, and the
+review forbade every convenient escape: no truncation, no arbitrary splitting, no
+silent adoption of a higher-privilege API, no change to Claude's semantics.
+
+### The answer: stop carrying the payload on the transport
+
+    transport command   a SHORT bootstrap invocation — a path and a digest.
+                        MEASURED: 264 characters, budget 512, cap 1024.
+    logical command     the EXACT executable and argv, read from a SEALED file by
+                        the bootstrap ALREADY running under the Worker SID, and
+                        created there with an ordinary primitive whose limit is
+                        ~32767.
+
+    PROPERTY:  logical argv before == logical argv after.
+
+Nothing about Claude's invocation changes: the argv is reconstructed **element by
+element**, never re-parsed from a rendered string. Proven as VECTORS across 14
+edge cases — spaces, quotes, backslashes, trailing backslashes, an empty
+argument, Unicode, tabs, shell metacharacters, and the real 12 kB payload — both
+in the directed suite and OS-real through the boundary. `%VAR%` and `$VAR` arrive
+as literals, which is the positive proof that no shell is involved.
+
+### The seal, and why the digest is not in the file
+
+The LaunchSpec is read by a process running as the WORKER. If it could be
+rewritten between the Director writing it and the bootstrap reading it, the
+Worker would be choosing its own argv — the confused deputy the whole boundary
+exists to prevent. Two independent controls, both required:
+
+    ACL      the Worker may READ the launch root and nothing else. No create,
+             write, delete, rename, WRITE_DAC or WRITE_OWNER. PREVENTION, and
+             the OS's job. Measured from inside the worker: all DENIED.
+    DIGEST   the transport command carries `launch_spec_digest`, derived by the
+             Director from the bytes it RE-READ off disk. The bootstrap
+             recomputes it and refuses on mismatch. DETECTION, and this code's job.
+
+The digest travels on the **command line, not inside the file**: a value stored
+beside the thing it protects proves self-consistency and nothing else (L-0059).
+A payload that parses to the right meaning but is not in canonical form is also
+refused — something re-serialised it after it was sealed, and that is not a
+launch anyone ordered.
+
+### No handle crosses the identity boundary
+
+`CreateProcessWithLogonW` creates the process through the Secondary Logon
+service, in a different logon session, and handle inheritance across that is not
+something to assume. So the output PATHS travel in the sealed spec and the
+bootstrap opens them ITSELF, as the Worker, with the Worker's own rights.
+`STARTF_USESTDHANDLES` is never set and the STARTUPINFO handle fields are never
+assigned — asserted through the AST, so the comment explaining the choice cannot
+be mistaken for the choice. The handle-leak question therefore has a
+**structural** answer — there is nothing to leak — rather than an audited one.
+
+### Creation order IS the security property
+
+    CREATE_SUSPENDED → OpenProcessToken → verify SID, integrity, non-admin, no
+    dangerous privilege → create the job (KILL_ON_JOB_CLOSE, no breakaway) →
+    AssignProcessToJobObject → IsProcessInJob → **only then** ResumeThread.
+
+Any failure: never resume, terminate, close every handle, raise. Unverified
+Worker code never begins execution. The VERDICT was extracted into a pure
+`verify_worker_token` so every refusal is a unit test rather than something only
+a real Windows account could reach; the ORDER is pinned by AST assertions; the
+OBSERVED values are proved by the OS-real probe. All three are reported for what
+they are.
+
+### E1, H1 and D1 — the three live defects Gate 1 found — are repaired
+
+    E1  ENVIRONMENT. The Worker's environment is now built from the WORKER's own
+        profile (`LoadUserProfileW` + `CreateEnvironmentBlock`) plus a two-name
+        allowlist. A sentinel planted in the Director's environment is ABSENT
+        from the Worker's; no CLAUDE_* name crosses; USERPROFILE/APPDATA/USERNAME
+        are the Worker's. Before: the Director's entire environment, 62
+        variables, 9 credential-shaped by name.
+        MEASURED, NOT ASSUMED: the first OS-real run showed USERPROFILE pointing
+        at the machine default, because `CreateEnvironmentBlock` against a bare
+        logon token returns the DEFAULT profile. The profile load was the fix.
+    H1  STDIN. DEVNULL, opened by the bootstrap; the Director's console is never
+        inherited. Proven OS-real by `GetConsoleMode` (False) and by a directed
+        test in which data written to the bootstrap's stdin does not reach the
+        logical command. Before: the child held fd 0 on a real console.
+        `isatty()` still reports True — NUL is a character device on Windows —
+        and that quirk is recorded rather than papered over.
+    D1  DESCENDANTS. A Job Object with KILL_ON_JOB_CLOSE and no breakaway;
+        timeout and cancellation terminate THE JOB, not the root PID. OS-real: a
+        grandchild's marker froze after termination and zero worker processes
+        remained. Before: `terminate()`/`kill()` reached the direct child only,
+        and a grandchild demonstrably outlived a cancelled run.
+
+### Seven mutants survived the first run, and five tests exist because of them
+
+WM3 (the runner's trusted-launch guard had no test at all), WM11 and WM12 (the
+admin and dangerous-privilege checks were reachable only through ctypes, so no
+fast test could defend them), WM14 (the containment gate had no order assertion),
+WM16 (the breakaway mutant SATISFIED the old flag assertion by ORing onto it —
+the check passed while containment was gone), WM23 (stdin inheritance had no
+behavioural test) and WM24 (the digest surfacing was unasserted). WM11/WM12 were
+repaired by EXTRACTING the token verdict into a pure function, which converted
+two structural assertions into behavioural unit tests. After repair: **25/25
+caught, 0 survivors.**
+
+### Guarantees this establishes, and what it does not
+
+    cross-user launch          GUARANTEED, OS-real, observed SID == expected SID
+    long argv                  GUARANTEED, 12264 characters through a 264-char
+                               transport, vector-exact
+    environment isolation      GUARANTEED, sentinel absent, worker profile
+    stdin isolation            GUARANTEED, DEVNULL, not a console
+    descendant containment     GUARANTEED for normal descendants under the
+                               configured job
+    handle isolation           STRUCTURAL — no handle is passed at all
+    DPAPI credential lifecycle GUARANTEED to fail closed on missing, empty,
+                               corrupt and truncated blobs
+    toolchain compatibility    GUARANTEED once the toolchain is RELOCATED into a
+                               worker-readable root — which it is not yet in
+                               production, and that is a Stage-8 requirement
+    NO SAME-USER FALLBACK      enforced, tested, and mutated
+
+`CRYPTPROTECT_LOCAL_MACHINE` is MACHINE binding, not launcher binding: anything
+on this machine that can read the blob can unprotect it, and the NTFS ACL is the
+authorization boundary. The Job Object contains descendants; it is not a security
+boundary against a Worker with other means. The plaintext password exists
+transiently in the launcher's memory and is zeroized best-effort — copies the OS
+made inside LogonUser and seclogon are outside this process's reach and are not
+claimed to be erased.
+
+### TCB
+
+`trust.launch_spec` (293), `trust.bootstrap` (121) and `trust.worker_launcher`
+(859) enter `TRUST_ALLOWLIST` and `TRUST_ENTRY_POINTS` by explicit diff; Trust
+Plane 3005 → 4295 LOC. `trust.launch` grew 246 → 263 because `token_integrity`
+was SPLIT OUT of `process_integrity` rather than copied. No third-party code, no
+worker/engine dependency, no dynamic loading; the dependency direction is
+`runner → trust` only.
+
+**The bootstrap's own closure is EIGHT modules**, which is the number that
+matters most because that code runs as the Worker. It reaches neither the
+deployment slice nor the anchor/publication slices. **Also in the TCB and
+reported rather than hidden: the 62 MB / 3434-file Python runtime the bootstrap
+executes on**, which must be Worker-RX and Worker-WRITE-DENIED. A smaller native
+bootstrap was deliberately not written, and the trade is listed as a residual
+risk and a review decision.
+
+### Evidence
+
+`.gnosis/evidence/20260827T223817Z/` — OS-real probe 59/59 checks passed with verified
+rollback; directed 56 passed; mutation 25/25; full suite 1346 passed / 98 subtests GREEN; mypy strict clean
+over 68 source files; ruff clean on every new and changed file.
+
+**Stage 5 remediation result: PASS. Recommendation: DO NOT CLOSE F-17.** Stage 6
+(publisher/pipeline wiring) NOT started. F-14 remains CLOSED.
+
+The bundle's EXTERNAL ANCHOR, recorded here outside the bundle it protects
+(L-0059):
+
+    bundle_digest  73b5b7423450db87b959b2a5ed985798c9ef7585a970cf7ba7113f5a87223a11
