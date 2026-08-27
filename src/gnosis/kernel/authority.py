@@ -19,6 +19,11 @@ from __future__ import annotations
 
 from gnosis.trust.anchor import (
     ANCHOR_SCHEMA,
+    ANCHOR_SCHEMA_V2,
+    CURRENT_ANCHOR_SCHEMA,
+    RUN_IDENTITY_SCHEMA,
+    SUPPORTED_ANCHOR_SCHEMAS,
+    AnchorNotDeploymentBound,
     AnchorRecord,
     AnchorStore,
     RunIdentity,
@@ -42,9 +47,14 @@ from gnosis.trust.launch import (
 
 __all__ = [
     "ANCHOR_SCHEMA",
+    "ANCHOR_SCHEMA_V2",
+    "CURRENT_ANCHOR_SCHEMA",
+    "RUN_IDENTITY_SCHEMA",
     "SID_HIGH",
     "SID_LOW",
     "SID_MEDIUM",
+    "SUPPORTED_ANCHOR_SCHEMAS",
+    "AnchorNotDeploymentBound",
     "AnchorRecord",
     "AnchorStore",
     "AuthorityUnavailable",

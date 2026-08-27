@@ -69,13 +69,28 @@ TRUST_ALLOWLIST: dict[str, str] = {
         "is actually deployed and binds it into deployment_digest. Trusted "
         "because a compromise of it would let a different deployment claim the "
         "identity of the approved one."),
+    # Stage-3 additions, each an explicit, reviewable enlargement of the TCB:
+    "gnosis.trust.run_identity": (
+        "authoritative trusted-run-identity slice (F-17 Stage 3) — the publication "
+        "lifecycle and the publish-authorization gate. Trusted because a "
+        "compromise of it would let a run be anchored that was never authorized."),
+    "gnosis.kernel.atomic_io": (
+        "the ONE corruption-resistant write primitive (write-tmp + os.replace, 37 "
+        "lines, stdlib only). The trusted run store must not observe a torn "
+        "record; re-implementing the write inside the Trust Plane would be a "
+        "second implementation of an existing primitive."),
+    "gnosis.kernel.file_lock": (
+        "the kernel's ONE cross-process advisory lock (111 lines, stdlib only), "
+        "already the established pattern for a read-modify-write of durable JSON "
+        "state. Without it two trusted writers can silently drop a transition and "
+        "a monotonic state could regress; with it the compare-and-set is real."),
 }
 
 # Trust Plane entry points whose load-time closure is measured. A new trusted
 # module is added HERE and to TRUST_ALLOWLIST in the same reviewable diff — the
 # stale-entry test below refuses an allowlist grant that no entry point loads.
 TRUST_ENTRY_POINTS = ("gnosis.trust.anchor", "gnosis.trust.launch",
-                      "gnosis.trust.deployment")
+                      "gnosis.trust.deployment", "gnosis.trust.run_identity")
 
 # ---------------------------------------------------------------------------
 # Internal modules the Trust Plane imports LAZILY, inside a function body.

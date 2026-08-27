@@ -1428,3 +1428,132 @@ without an explicit review decision. It is now an enforced property
 (`test_the_trust_plane_loads_no_code_dynamically`) with a mutant (DM11), because
 code that arrives without an import statement is invisible to the closed-world
 import model.
+
+## Stage-3 addendum — TRUSTED RUNIDENTITY + PUBLISH AUTHORIZATION (2026-08-27)
+
+Stage 2 is **CLOSED** at `c45c547`. Stage 3 implements the trusted contract that
+makes this true:
+
+    knowing a run_id is NOT enough to produce ANCHORED.
+
+A publisher may anchor run R only if trusted state shows R is exactly the run
+authorized for that worker SID, that generation, that deployment, that evidence
+identity and that lifecycle state. **No Windows production wiring**: no worker
+account, no DPAPI, no `CreateProcessWithLogonW`, no service, no named pipe, no
+provisioning, no engine/runner change, no unknown-`.git`, no Stage-4 durability.
+Contract, model, store and tests only. **F-17 stays OPEN.**
+
+### What was reused rather than invented
+
+Inspected first, as directed. `TaskClaim.epoch` (`claims.py`) is already a
+monotonic per-task fencing generation that survives every status change — it is
+the generation, and **no `publication_nonce` was invented**. `RunStore.create_run`
+already refuses a duplicate `run_id` via `mkdir(exist_ok=False)`; that locus is
+referenced, and the gap it leaves (delete the directory, recreate the id) is
+closed in the trust plane rather than by a second id scheme. `hash_canonical`
+(ADR-0004) is the only hashing implementation. `atomic_io` and `file_lock` are
+the kernel's existing write and mutual-exclusion primitives and are **reused, not
+re-implemented** — which is why both enter `TRUST_ALLOWLIST` by explicit diff.
+
+`RunIdentity` was **extended in place**, not duplicated: there is one run
+identity model, now carrying `tree_identity`, `owner_worker_sid`,
+`deployment_digest`, `epoch` and a schema.
+
+### Why publication state is a separate primitive
+
+`RunState` and `TaskState` were inspected and are NOT reused, and the reason is
+not vocabulary — it is **where they live**. `RunState` is persisted in
+`RunStore`'s `meta.json`, inside the run directory the worker owns and can
+write. A worker able to write `SUCCEEDED` into its own meta would be writing its
+own publication permission. The trusted gate must read state from a store the
+worker cannot write, so `PublicationState` is the minimum separate primitive and
+models ONLY "may this run's evidence be authoritatively published" —
+`NOT_PUBLISHABLE → PUBLISHABLE → ANCHORED`, monotonic, no edge back, no `RUNNING`
+or `FAILED` vocabulary that another machine already owns.
+
+`PUBLISHABLE` is reachable ONLY through a trusted transition. There is no route
+from a bundle, evidence, IPC, a worker-writable file, a return code or a
+self-reported status — `TrustedRunIdentityStore.mark_publishable` is the whole
+surface, and `PublicationRequest` has no field a worker could populate.
+`ANCHORED` may not be reached without naming the digest of a **confirmed**
+AnchorRecord.
+
+### Immutable identity vs monotonic state, kept structurally apart
+
+`RunIdentity` is frozen and complete at creation. The monotonic state lives in
+`TrustedRunRecord` **outside** it, and `transition()` **carries no identity at
+all** — so no lifecycle change has anything to rewrite an immutable field with.
+Every transition is a compare-and-set on `expected_identity_digest`: a stale
+updater, or a record that was deleted and recreated under the same `run_id`, is
+refused rather than silently overwritten. `create()` is idempotent for an
+identical identity and **refuses a different one under an existing run_id** —
+that is the ABA route by which old evidence could be presented as a new run's,
+and it is closed in the trust plane, where the worker cannot reach.
+
+`run_id` becomes a filename in the trusted store, so anything that could climb
+out of it (`..`, separators, a drive letter) is refused before it is joined to a
+path.
+
+### Anchor `gnosis.anchor.v2`
+
+V2 adds exactly two fields, each carrying a guarantee V1 could not:
+`deployment_digest` (WHICH trust plane produced this anchor) and
+`run_identity_digest` (WHICH exact authorized run — the whole immutable identity,
+owner SID and epoch included, in one value). `owner_worker_sid` and `epoch` are
+**not** repeated as separate fields: they are already bound, unambiguously, by
+`run_identity_digest`.
+
+Compatibility is explicit and one-directional: the production writer emits V2
+only; the reader recognises historical V1; a V1 record carrying V2 fields is
+refused, a V2 record missing them is refused, an unknown schema is refused, and
+**`to_dict` emits the V2 keys only for V2** so a historical V1 digest still
+re-derives byte for byte and historical chains keep verifying. There is no
+silent upgrade path in which V1 is read as V2 with a defaulted digest.
+
+`verify_anchored_bundle` gained optional `expected_deployment_digest` /
+`expected_run_identity_digest`. Supplying either asserts the F-17 binding; a V1
+record cannot satisfy it.
+
+### A surviving mutant, and what it exposed
+
+RM13 ("a V1 record satisfies a deployment-bound verification") **SURVIVED** the
+first mutation run. The schema guard read as load-bearing, but the refusal
+actually came from `None != <digest>` by coincidence — two genuinely different
+findings, *this evidence carries no binding at all* and *this evidence is bound
+to another trust plane*, were collapsed into one error. They call for different
+operator responses: the first is legacy evidence that can be re-anchored under
+the current trust plane, the second is a cross-deployment attempt. Repaired by
+making the distinction a TYPE — `AnchorNotDeploymentBound(AuthorityUnavailable)`
+— which is the project's own convention that conflicts are typed data, not
+prose. The mutant then died. Recorded because the finding is the interesting
+part: a check that cannot fail is not a check.
+
+### Also closed in this stage
+
+`publish_anchor` previously ADOPTED the bundle's content digest as the record's
+`tree_identity` — a worker-supplied value written into the authoritative record.
+It is now **cross-checked** against the Director-held `RunIdentity.tree_identity`
+exactly as the head already was, and a mismatch refuses. An anchor-ledger line
+that is not a readable record now fails closed instead of raising a bare
+`TypeError` out of the store.
+
+### TCB
+
+`trust.run_identity` (380), `kernel.atomic_io` (37) and `kernel.file_lock` (111)
+enter `TRUST_ALLOWLIST` by explicit diff; the closed-world tests cover every
+entry point and stay green, as does the frozen no-dynamic-loading rule.
+`trust.anchor`'s own closure grew 522 → 715 LOC through its own Stage-3
+additions; it still imports neither `trust.deployment` nor `trust.run_identity`,
+so the 1052-line deployment module is **still not** a transitive publisher
+dependency. Trust Plane total: 2295 LOC. When Stage 6 wires the gate the
+publisher will inherit `trust.run_identity` — knowingly, and the number is
+measured here in advance.
+
+### Provenance, stated precisely
+
+`deployment_digest` proves **exact observed deployment identity**. It does not,
+by itself, prove that the deployed bytes were built from the claimed Git commit:
+Stage 2's `package_version`/`source_commit`/`source_tree` are OBSERVED DEPLOYED
+PACKAGE CLAIMS. Binding and provenance stay separate concepts; the
+deployed-package ↔ committed-source-tree check belongs to the final composition,
+and no build-provenance system is implemented here.

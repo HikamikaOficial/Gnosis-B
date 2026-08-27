@@ -37,6 +37,24 @@ from gnosis.kernel.authority import (
 )
 from gnosis.kernel.canonical import GENESIS_HASH
 from gnosis.kernel.evidence_capture import write_bundle_manifest
+from gnosis.trust.anchor import ANCHOR_SCHEMA_V2, AnchorNotDeploymentBound
+
+# Stage-3 fixtures. The production writer emits V2 only, so every record built
+# here names a deployment and a run identity; a V1 record is exercised
+# deliberately, and only where V1 compatibility is the thing under test.
+SID = "S-1-5-21-1111111111-2222222222-3333333333-1001"
+DEPLOY = "d" * 64
+RUNID_DIGEST = "e" * 64
+
+
+def _record(run_id: str, seq: int, prev: str, *, bundle_digest: str = "d0",
+            head: str = "h", tree: str = "tr", task: str = "t",
+            repo: str = "repo", bundle: str = "b") -> AnchorRecord:
+    """A V2 anchor record with the Stage-3 binding fields filled in."""
+    return AnchorRecord(task, run_id, repo, head, tree, bundle, bundle_digest,
+                        seq, prev, deployment_digest=DEPLOY,
+                        run_identity_digest=RUNID_DIGEST,
+                        schema=ANCHOR_SCHEMA_V2)
 
 
 def _is_high() -> bool:
@@ -68,15 +86,19 @@ def _make_bundle(root: Path, head_sha: str, content_digest: str = "cd0") -> Path
     return b
 
 
-def _identity(head_sha: str, run_id: str = "run-1") -> RunIdentity:
+def _identity(head_sha: str, run_id: str = "run-1", *, tree: str = "cd0",
+              sid: str = SID, deployment: str = DEPLOY,
+              epoch: int = 0) -> RunIdentity:
     return RunIdentity(task_id="F-17", run_id=run_id, repository_id="repoX",
-                       head_sha=head_sha, bundle_path=".gnosis/evidence/x")
+                       head_sha=head_sha, tree_identity=tree,
+                       bundle_path=".gnosis/evidence/x", owner_worker_sid=sid,
+                       deployment_digest=deployment, epoch=epoch)
 
 
 class TestTheAnchorRecordChains(unittest.TestCase):
     def test_a_record_serialises_and_digests_stably(self):
-        r = AnchorRecord("t", "r", "repo", "head", "tree", "b", "dig", 0, GENESIS_HASH)
-        self.assertEqual(r.schema, ANCHOR_SCHEMA)
+        r = _record("r", 0, GENESIS_HASH, bundle_digest="dig", head="head", tree="tree")
+        self.assertEqual(r.schema, ANCHOR_SCHEMA_V2)
         self.assertEqual(len(r.digest()), 64)
         self.assertEqual(r.digest(), AnchorRecord(**r.to_dict()).digest())
 
@@ -91,10 +113,10 @@ class TestTheStoreIsAppendOnlyAndChained(unittest.TestCase):
             s = self._store(Path(tmp))
             seq, prev = s.next_seq_and_prev()
             self.assertEqual((seq, prev), (0, GENESIS_HASH))
-            r0 = AnchorRecord("t", "r0", "repo", "h0", "tr", "b0", "d0", 0, GENESIS_HASH)
+            r0 = _record("r0", 0, GENESIS_HASH, head="h0", bundle="b0")
             s.append(r0)
             seq, prev = s.next_seq_and_prev()
-            r1 = AnchorRecord("t", "r1", "repo", "h1", "tr", "b1", "d1", seq, prev)
+            r1 = _record("r1", seq, prev, bundle_digest="d1", head="h1", bundle="b1")
             s.append(r1)
             self.assertTrue(s.verify_chain())
             self.assertEqual(s.lookup("r1").bundle_digest, "d1")
@@ -102,7 +124,7 @@ class TestTheStoreIsAppendOnlyAndChained(unittest.TestCase):
     def test_a_record_that_does_not_extend_the_chain_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             s = self._store(Path(tmp))
-            bad = AnchorRecord("t", "r", "repo", "h", "tr", "b", "d", 5, "deadbeef")
+            bad = _record("r", 5, "deadbeef", bundle_digest="d")
             with self.assertRaises(AuthorityUnavailable):
                 s.append(bad)
 
@@ -110,9 +132,9 @@ class TestTheStoreIsAppendOnlyAndChained(unittest.TestCase):
         # A hash chain protects record N through record N+1's prev pointer.
         with tempfile.TemporaryDirectory() as tmp:
             s = self._store(Path(tmp))
-            s.append(AnchorRecord("t", "r0", "repo", "h", "tr", "b", "d0", 0, GENESIS_HASH))
+            s.append(_record("r0", 0, GENESIS_HASH))
             seq, prev = s.next_seq_and_prev()
-            s.append(AnchorRecord("t", "r1", "repo", "h", "tr", "b", "d1", seq, prev))
+            s.append(_record("r1", seq, prev, bundle_digest="d1"))
             self.assertTrue(s.verify_chain())
             lines = s.ledger.read_text(encoding="utf-8").splitlines()
             rec0 = json.loads(lines[0]); rec0["bundle_digest"] = "TAMPERED"
@@ -128,7 +150,7 @@ class TestTheStoreIsAppendOnlyAndChained(unittest.TestCase):
         # earlier records; the OS integrity label guards the head of the log.
         with tempfile.TemporaryDirectory() as tmp:
             s = self._store(Path(tmp))
-            s.append(AnchorRecord("t", "r0", "repo", "h", "tr", "b", "d0", 0, GENESIS_HASH))
+            s.append(_record("r0", 0, GENESIS_HASH))
             lines = s.ledger.read_text(encoding="utf-8").splitlines()
             rec0 = json.loads(lines[0]); rec0["bundle_digest"] = "TAMPERED"
             s.ledger.write_text(json.dumps(rec0, sort_keys=True) + "\n", encoding="utf-8")
@@ -195,7 +217,10 @@ class TestThePublicationProtocol(unittest.TestCase):
             store = AnchorStore(root / "anchors")
             ident = RunIdentity(task_id="F-17", run_id="DIRECTOR-RUN",
                                 repository_id="canonical-repo", head_sha="deadbeef",
-                                bundle_path=".gnosis/evidence/x")
+                                tree_identity="cd0",
+                                bundle_path=".gnosis/evidence/x",
+                                owner_worker_sid=SID, deployment_digest=DEPLOY,
+                                epoch=0)
             rec = publish_anchor(store, ident, b)
             self.assertEqual(rec.run_id, "DIRECTOR-RUN")
             self.assertEqual(rec.repository_id, "canonical-repo")
@@ -209,8 +234,9 @@ class TestThePublicationProtocol(unittest.TestCase):
             store = AnchorStore(root / "anchors")
             publish_anchor(store, _identity("abc123", "run-1"), b)
             # a second record so tampering the first breaks the chain
-            store.append(AnchorRecord("F-17", "run-2", "repoX", "h", "tr", "b",
-                                      "d", *store.next_seq_and_prev()))
+            seq, prev = store.next_seq_and_prev()
+            store.append(_record("run-2", seq, prev, bundle_digest="d", task="F-17",
+                                 repo="repoX"))
             lines = store.ledger.read_text(encoding="utf-8").splitlines()
             rec0 = json.loads(lines[0]); rec0["bundle_digest"] = "TAMPERED"
             lines[0] = json.dumps(rec0, sort_keys=True)
@@ -375,6 +401,110 @@ class TestTheOsAuthorityBoundary(unittest.TestCase):
             run_at_integrity(cmd, str(worktree))
             self.assertEqual(result.read_text(encoding="utf-8"), "read=OK write=DENIED")
             self.assertIn("ORIGINAL", (trusted / "trusted_mod.py").read_text(encoding="utf-8"))
+
+
+@HIGH_ONLY
+class TestTheAnchorIsBoundToItsDeploymentAndIdentity(unittest.TestCase):
+    """F-17 Stage 3: an anchor cannot be verified against a different trust-plane
+    deployment or a different run identity, and a V1 record — which carries no
+    binding at all — cannot be read as though it did."""
+
+    OTHER_DEPLOY = "f" * 64
+
+    def test_publish_writes_a_v2_record_naming_the_deployment_and_the_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            b = _make_bundle(root, head_sha="abc123")
+            store = AnchorStore(root / "anchors")
+            ident = _identity("abc123")
+            rec = publish_anchor(store, ident, b)
+            self.assertEqual(rec.schema, ANCHOR_SCHEMA_V2)
+            self.assertTrue(rec.is_deployment_bound)
+            self.assertEqual(rec.deployment_digest, DEPLOY)
+            self.assertEqual(rec.run_identity_digest, ident.digest())
+
+    def test_a_bound_verification_passes_for_the_right_deployment_and_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            b = _make_bundle(root, head_sha="abc123")
+            store = AnchorStore(root / "anchors")
+            ident = _identity("abc123")
+            publish_anchor(store, ident, b)
+            self.assertTrue(verify_anchored_bundle(
+                store, "run-1", b, expected_deployment_digest=DEPLOY,
+                expected_run_identity_digest=ident.digest()))
+
+    def test_a_record_made_under_one_deployment_is_refused_under_another(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            b = _make_bundle(root, head_sha="abc123")
+            store = AnchorStore(root / "anchors")
+            publish_anchor(store, _identity("abc123"), b)
+            # bound to a DIFFERENT deployment: a cross-deployment attempt, and
+            # NOT the same finding as "carries no binding at all".
+            with self.assertRaises(AuthorityUnavailable) as caught:
+                verify_anchored_bundle(store, "run-1", b,
+                                       expected_deployment_digest=self.OTHER_DEPLOY)
+            self.assertNotIsInstance(caught.exception, AnchorNotDeploymentBound)
+            # "but the bundle itself verifies" is not an argument: the unbound
+            # verification still passes, and that is exactly why the bound one
+            # has to exist.
+            self.assertTrue(verify_anchored_bundle(store, "run-1", b))
+
+    def test_a_record_made_for_one_run_identity_is_refused_under_another(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            b = _make_bundle(root, head_sha="abc123")
+            store = AnchorStore(root / "anchors")
+            publish_anchor(store, _identity("abc123"), b)
+            with self.assertRaises(AuthorityUnavailable):
+                verify_anchored_bundle(store, "run-1", b,
+                                       expected_run_identity_digest="0" * 64)
+
+    def test_a_v1_record_cannot_satisfy_a_bound_verification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            b = _make_bundle(root, head_sha="abc123")
+            store = AnchorStore(root / "anchors")
+            from gnosis.kernel.evidence_capture import verify_bundle
+            digest = verify_bundle(b).bundle_digest
+            store.append(AnchorRecord(
+                "F-17", "run-1", "repoX", "abc123", "cd0", ".gnosis/evidence/x",
+                digest, 0, GENESIS_HASH, schema=ANCHOR_SCHEMA))
+            # historical contract: still readable and verifiable
+            self.assertTrue(verify_anchored_bundle(store, "run-1", b))
+            # final F-17 contract: it carries no deployment binding, so it fails
+            # closed instead of being treated as matching — and says so as its
+            # own type, because "unbound legacy evidence" and "bound to another
+            # trust plane" call for different operator responses.
+            with self.assertRaises(AnchorNotDeploymentBound):
+                verify_anchored_bundle(store, "run-1", b,
+                                       expected_deployment_digest=DEPLOY)
+            with self.assertRaises(AnchorNotDeploymentBound):
+                verify_anchored_bundle(store, "run-1", b,
+                                       expected_run_identity_digest="0" * 64)
+
+    def test_publish_refuses_a_bundle_whose_tree_is_not_the_dispatched_one(self):
+        # Before Stage 3 the record ADOPTED the bundle's content digest, so a
+        # worker chose the tree identity that went into the authoritative record.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            b = _make_bundle(root, head_sha="abc123", content_digest="SOMETHING-ELSE")
+            store = AnchorStore(root / "anchors")
+            with self.assertRaises(AuthorityUnavailable):
+                publish_anchor(store, _identity("abc123", tree="cd0"), b)
+
+    def test_a_ledger_line_that_is_not_a_readable_record_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = AnchorStore(root / "anchors")
+            store.append(_record("run-1", 0, GENESIS_HASH))
+            for corrupt in ('{"schema": "gnosis.anchor.v9"}',
+                            '{"task_id": "t", "surprise": 1}',
+                            "{not json"):
+                store.ledger.write_text(corrupt + "\n", encoding="utf-8")
+                with self.assertRaises(AuthorityUnavailable, msg=corrupt):
+                    store.records()
 
 
 if __name__ == "__main__":
