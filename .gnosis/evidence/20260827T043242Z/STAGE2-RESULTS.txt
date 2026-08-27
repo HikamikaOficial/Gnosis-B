@@ -1,0 +1,325 @@
+F-17 IMPLEMENTATION — STAGE 2 (TRUST-PLANE DEPLOYMENT IDENTITY) — RESULTS
+Implementation tree: HEAD 27e181d   (Stage 1 closed at ad06b09)
+  e648784  the deployment-identity module, its suite, its mutants, the ADR
+  27e181d  + the MULTI_SZ required-privileges coverage test
+NO PRODUCTION DEPLOYMENT INSTALLED. F-17 stays OPEN. Stage 3 NOT started.
+
+WHAT STAGE 2 DELIBERATELY DID NOT DO
+  no GnosisTrustedPublisher service, no Worker account, no DPAPI secret, no
+  production AnchorStore, no production RunIdentity store, no engine/runner
+  change, no pipeline wiring, no unknown-.git enforcement, no AnchorRecord
+  schema change. Nothing was installed and nothing was left behind: the OS-real
+  tests observe only objects that already exist (a temp directory, this
+  interpreter, and an EXISTING read-only Windows service).
+
+1. MODULES CREATED / MODIFIED
+  src/gnosis/trust/deployment.py      (1052)  NEW authoritative deployment slice
+  tests/test_deployment_identity.py   (  56 tests) NEW
+  scripts/mutation_check_deployment.py         NEW (11 mutants)
+  tests/test_trust_boundary.py        MODIFIED: TRUST_ALLOWLIST +1, entry-point
+                                      set generalized, dynamic-loading rule
+  docs/adr/ADR-0027-...md             MODIFIED: Stage-2 addendum
+
+2. TrustPlaneDeploymentIdentity — SCHEMA  (gnosis.trust.deployment.v1)
+  package            TrustPackageManifest  (gnosis.trust.package.v1)
+                       schema, package_version, source_commit, source_tree,
+                       files[] = {path, size, digest}
+  runtime            RuntimeIdentity
+                       executable_path, executable_size, executable_digest,
+                       version, implementation, architecture, machine
+  service            ServiceIdentity
+                       name, account, image_path, start_type, service_sid,
+                       sid_type, required_privileges[], security_descriptor
+  trust_root         PathSecurityIdentity {path, security_descriptor}
+  runidentity_store  PathSecurityIdentity {path, security_descriptor}
+  anchorstore        PathSecurityIdentity {path, security_descriptor}
+  pipe_policy        PipePolicyIdentity
+                       schema_version, name, flags[], security_descriptor
+  SecurityDescriptorIdentity
+                       owner_sid, group_sid, control, dacl_present,
+                       aces[] = {ace_type, ace_flags, access_mask, sid},
+                       mandatory_label
+  Every field is an OBSERVATION. No decorative field was added: each one either
+  changes what runs, who may touch it, or which identity it is.
+
+3. DESIRED vs OBSERVED
+  DesiredDeploymentConfig carries LOCATIONS and EXPECTATIONS only:
+    trust_root, runtime_executable, runidentity_store, anchorstore,
+    service_name + expected_package_version / expected_service_account /
+    expected_sid_type / expected_manifest.
+  observe_deployment(config) reads WHERE to look and nothing else.
+  compare_with_desired(identity, config) is the ONLY function that reads an
+  intention; it returns findings and cannot alter the identity.
+  package_version / source_commit / source_tree are NOT parameters: they are
+  read from the DEPLOYED PACKAGE.json, whose bytes are themselves measured into
+  the manifest. The desired-config -> serialize -> deployment_digest shortcut is
+  unreachable, not merely avoided.
+  Proved: test_12 (different intention, same machine -> same digest), test_13
+  (same intention, changed machine -> different digest), and a STRUCTURAL test
+  asserting no sentinel expectation value appears anywhere in the serialized
+  identity.
+
+4. MANIFEST — determinism
+  sorted by canonical relative path in CODE-POINT order (not locale);
+  path taken from the OS-RESOLVED name, so its case is the on-disk case;
+  NO mtime, NO creation time, NO enumeration order, NO locale;
+  NO file excluded - an excluded file is an unmeasured file, and an unmeasured
+  file under the trust root is code that can run without the identity changing.
+  Measured: two roots written in opposite order, one with a newer mtime, produce
+  the SAME digest.
+
+5. ACTUAL-BYTE HASHING
+  Every artifact is opened ONCE; its resolved path is taken from that handle and
+  its SHA-256 is computed from the bytes read THROUGH THAT SAME HANDLE. A
+  manifest's claimed hash can never stand in for what is on disk:
+  verify_package_against_expected runs AFTER measurement and fails closed on a
+  changed file, a missing file and an unexpected extra artifact alike.
+
+6. RUNTIME IDENTITY
+  Bound by BYTES, not by "Python 3.12". version/implementation/architecture/
+  machine come from ASKING THAT executable (-I -S -c), never from the observing
+  process. Demonstrated OS-real: a copy of this interpreter with ONE overlay byte
+  appended still runs and still reports the SAME version, and produces a
+  DIFFERENT runtime identity. The copy is removed in a finally: block and its
+  absence asserted.
+
+7. WINDOWS SERVICE OBSERVATION
+  OpenSCManagerW / OpenServiceW / QueryServiceConfigW /
+  QueryServiceConfig2W(SERVICE_SID_INFO, REQUIRED_PRIVILEGES_INFO) /
+  QueryServiceObjectSecurity / LookupAccountNameW("NT SERVICE\<name>").
+  Explicit APIs, checked return codes, no shell-output parsing, no locale
+  dependence. The service SID is ASKED OF WINDOWS rather than derived from the
+  documented name hash - a SID this code computed itself would prove only that
+  the code can compute it. Required privileges are sorted (a SET, not an order).
+  Unknown start type or unknown SID type -> fail closed.
+  Tested against an EXISTING service (Winmgmt), READ-ONLY. Nothing installed.
+
+8. SECURITY-DESCRIPTOR CANONICALIZATION
+  Parsed from the BINARY descriptor through the Win32 accessors - never from
+  icacls or sc sdshow text.
+  NORMALIZED (representation): SIDs always S-1-..., masks and flags as integers,
+    SE_SELF_RELATIVE excluded (it describes storage, not meaning).
+  PRESERVED (semantics): ACE ORDER, every ACE, the inheritance/protection
+    control bits, the mandatory label.
+  ACE ORDER IS NOT SORTED. Order is significant in an ACL; sorting would be the
+  "canonicalization loses ACL semantics" stop condition. NO ACE is dropped as
+  redundant: whether two ACEs are equivalent is a question about the Windows
+  access check, which is deliberately NOT re-implemented.
+  DECLARED COST: two descriptors differing ONLY in ACE order get different
+  identities. That is a false DRIFT (which fails closed), never a false match.
+  Object ACE types (5-8) place GUIDs where the simple layout expects the SID ->
+  unsupported form FAILS CLOSED rather than being misread.
+  A NULL DACL (everyone gets full access) is recorded via dacl_present, never
+  smoothed into "this object has no ACEs".
+
+  CANONICAL DACL MATRIX
+    A same semantics, different formatting (BA vs S-1-5-32-544, FA vs 0x1f01ff)
+                                                      -> SAME identity      PASS
+    B different / additional / denied ACE              -> different          PASS
+    C different access mask                            -> different          PASS
+    D different SID                                    -> different          PASS
+    E RESTRICTED vs UNRESTRICTED service identity      -> different          PASS
+    F different mandatory label (HI vs ME)             -> different          PASS
+    + different owner                                  -> different          PASS
+    + ACE order preserved, not sorted                  -> different          PASS
+    + no ACE dropped as redundant                      -> different          PASS
+    + malformed descriptor / unparsable SDDL           -> FAIL CLOSED        PASS
+
+9. PATHS AND REDIRECTION
+  Every measured object is resolved with GetFinalPathNameByHandleW on an OPEN
+  HANDLE, so a symlink, junction or reparse point anywhere in the chain resolves
+  to the object whose bytes are really read. Demonstrated OS-real: a junction
+  resolves to its target, and a junction planted INSIDE the trust root pointing
+  at an outside directory makes observe_trust_package FAIL CLOSED. UNC
+  resolution is refused outright. Scope: the Trust Plane and its runtime only -
+  NOT a general filesystem audit, and deliberately not F-14's kernel.input_lock
+  (different contract; importing it would add ~936 lines to the TCB).
+
+10. DEPLOYMENT DIGEST
+  deployment_digest = hash_canonical(TrustPlaneDeploymentIdentity.to_dict())
+  - the ONE canonical primitive (ADR-0004). No competing hashing implementation
+  was introduced anywhere in this stage.
+
+11. ANCHORRECORD SCHEMA IMPACT — NONE (deliberate STOP)
+  Stage 2 was permitted to add deployment_digest to AnchorRecord IF it could be
+  done backward-compatibly and in isolation. It cannot, so it was not done: for
+  the field to carry a guarantee, publish_anchor must OBTAIN the digest, which
+  needs the trusted RunIdentity (Stage 3) or publisher self-observation
+  (Stage 6). An always-empty field would affect no guarantee, change the digest
+  of every record and bump the schema for nothing - a decorative field, which
+  the stage contract forbids. The path for the stage that owns it is recorded in
+  the ADR: bump ANCHOR_SCHEMA to gnosis.anchor.v2, add the field explicitly, and
+  source it from the trust plane.
+
+12. DEPLOYMENT-DRIFT MATRIX (13 required cases)
+   1 trust package byte changed        -> digest changed            PASS
+   2 runtime executable changed        -> changed                   PASS
+   3 ImagePath changed                 -> changed                   PASS
+   4 service account changed           -> changed                   PASS
+   5 Service SID changed               -> changed                   PASS
+   6 SID type changed                  -> changed                   PASS
+   7 service DACL changed              -> changed                   PASS
+   8 trust-root ACL changed            -> changed                   PASS
+   9 RunIdentity-store ACL changed     -> changed                   PASS
+  10 AnchorStore ACL changed           -> changed                   PASS
+  11 pipe policy / schema version      -> changed                   PASS
+  12 desired differs, observed same    -> identity UNCHANGED        PASS
+  13 observed differs, desired same    -> identity CHANGED          PASS
+  + required privilege changed         -> changed                   PASS
+  + mandatory label changed            -> changed                   PASS
+  + unchanged deployment               -> digest stable             PASS
+
+13. MISSING STATE -> FAIL CLOSED (no defaults invented)
+  service missing; service SID unresolvable; unrecognised SID type;
+  unrecognised start type; unreadable/absent binary; a runtime that cannot
+  answer the identity probe; unreadable or malformed security descriptor;
+  unsupported ACE form; missing/malformed/incomplete PACKAGE.json;
+  missing/malformed PIPE_POLICY.json; missing or empty trust root; an artifact
+  resolving outside the trust root; a UNC resolution.
+  All raise DeploymentIdentityUnavailable, a subclass of AuthorityUnavailable -
+  so every existing fail-closed handler already refuses to proceed, while the
+  distinct type keeps "the OS boundary is not on offer" separable from "the
+  deployment could not be measured".
+
+14. TCB CLOSURE DELTA (see stage2_tcb_closure.txt)
+  gnosis.trust.anchor  load-time closure  522 LOC  -> UNCHANGED from Stage 1.
+    The PUBLISHER's runtime trusted closure did NOT grow in Stage 2:
+    trust.anchor does not import trust.deployment.
+  gnosis.trust.deployment                1052 LOC  (NEW trusted module)
+  Trust Plane total (union of entry points) 1574 LOC
+  Third-party code in the Trust Plane: NONE (delta-measured per entry point).
+  Reported, not absorbed.
+
+15. TRUST_ALLOWLIST DELTA
+  +1  gnosis.trust.deployment  ("authoritative deployment-identity slice —
+      trusted because a compromise of it would let a different deployment claim
+      the identity of the approved one")
+  gnosis.kernel.authority remains deliberately EXCLUDED.
+  The closed-world tests now measure EVERY entry point (TRUST_ENTRY_POINTS)
+  instead of two hard-coded ones, so a new trusted module cannot arrive with an
+  unreviewed dependency graph behind it. DEFERRED_TCB_EXPANSION was NOT used.
+
+  FROZEN RULE ENFORCED (Stage-2 review): the Trust Plane may not use
+  importlib.import_module with a computed name, dynamic __import__, exec, eval,
+  compile, worker-controlled code paths or plugin discovery. This was Stage 1's
+  standing residual risk; it is now test_the_trust_plane_loads_no_code_dynamically
+  with mutant DM11.
+
+16. TESTS
+  tests/test_deployment_identity.py                    57 passed
+  tests/test_trust_boundary.py                         17 passed  (was 15)
+  tests/test_authority_boundary.py                     18 passed
+  tests/test_canonical.py                               6 passed
+  DIRECTED TOTAL                                       98 passed
+  FRESH CHECKOUT of 27e181d (git archive -> clean dir) 98 passed
+    (module verified to resolve from the fresh tree, not the working tree)
+  FULL SUITE (not required for an isolated stage; run anyway, twice)
+    tree e648784   1167 passed, 73 subtests   827.72s   exit 0
+    tree 27e181d   1168 passed, 74 subtests   855.86s   exit 0
+    BOTH GREEN - see stage2_full_suite.txt for what this does and does not
+    say about the still-open Stage-1 F-14 adjudication.
+
+  COVERAGE GAP FOUND AND CLOSED DURING VALIDATION
+    The service test used Winmgmt, which declares NO required privileges, so
+    the MULTI_SZ parser's non-empty branch (a pointer into the live
+    QueryServiceConfig2W answer buffer, walked NUL to double-NUL) was never
+    executed. Verified by hand against EventLog and Dnscache (three sorted
+    privileges each) and then made part of the suite in 27e181d.
+
+17. MUTATION (see stage2_mutation.txt)
+  baseline exit=0 (74 passed); 11 mutants; 0 survived; restored exit=0.
+  DM1  a deployed file omitted from the manifest                    CAUGHT
+  DM2  expected manifest no longer refuses differing bytes          CAUGHT
+  DM3  service ImagePath dropped from the identity                  CAUGHT
+  DM4  service SID dropped                                          CAUGHT
+  DM5  service SID TYPE dropped (RESTRICTED == UNRESTRICTED)        CAUGHT
+  DM6  a path's DACL dropped (re-ACLing the AnchorStore invisible)  CAUGHT
+  DM7  canonicalizer drops deny ACEs as "redundant"                 CAUGHT
+  DM8  a missing declaration field becomes a default                CAUGHT
+  DM9  deployment digest stops covering the runtime                 CAUGHT
+  DM10 observed state replaced by desired config                    CAUGHT
+  DM11 dynamic code loading enters the Trust Plane                  CAUGHT
+
+18. TYPES / LINT
+  mypy  src/gnosis: Success, no issues in 63 source files (62 -> 63: the new
+        trust module; strict mode, warn_unreachable).
+  ruff  src/gnosis/trust/deployment.py            All checks passed
+  ruff  tests/test_deployment_identity.py         All checks passed
+  ruff  tests/test_trust_boundary.py              All checks passed
+  ruff  scripts/mutation_check_deployment.py      All checks passed
+        (the pre-existing 6 ISC004 baseline is in mutation_check_authority.py
+         only; the NEW script carries none.)
+
+19. NEGATIVE CONTROL + SECRET SCAN (see stage2_negative_control.txt)
+  same bytes twice          -> same digest                 required True   OK
+  one byte changed          -> different digest            required True   OK
+  expected manifest stale   -> REFUSED, fail closed        required        OK
+  unapproved extra artifact -> changed AND refused         required        OK
+  canonicalizer is not a constant function                 required        OK
+  secret scan over the four new/changed files: 0 findings. Stage 2 introduces
+  no credential; the SDDL strings are access-control POLICY over well-known
+  Windows SIDs, not secrets. No DPAPI secret exists yet (that is Stage 5).
+
+20. TOCTOU — DECLARED GAP, NOT SOLVED
+  Hashing is DETECTION and BINDING; ACL/SID is PREVENTION. This module measures
+  what it observed at the moment it observed it. Nothing in it prevents the
+  Worker modifying a trusted file, the runtime, a state root or the service
+  object between `observe identity` and `execute`. Closing that window is the
+  ACL/SID boundary's job and the final composition must demonstrate it. Stage 2
+  neither claims it nor depends on it.
+
+21. RESIDUAL RISKS
+  a) ACE ORDER. Two security descriptors that differ ONLY in the order of their
+     ACEs get different identities. Accepted deliberately: order is semantic and
+     deciding equivalence would mean re-implementing the Windows access check.
+     The failure direction is a false DRIFT (fail closed), never a false match.
+  b) NON-CANONICAL DACL ORDER is recorded but not FLAGGED. A DACL whose ACEs are
+     not in Windows canonical order (explicit deny, explicit allow, inherited
+     deny, inherited allow) can grant unexpected access; the identity captures it
+     faithfully but nothing here judges it. That is a policy check, not an
+     identity one, and it belongs to whichever stage sets the ACLs.
+  c) THE PIPE POLICY IS READ FROM THE DEPLOYED POLICY FILE, not from a running
+     pipe - the pipe only exists while the service runs. Its bytes are inside the
+     manifest and its SDDL goes through the same binary canonicalization, but
+     "the pipe the service actually created matches this policy" is a Stage-6
+     assertion, not a Stage-2 one.
+  d) TOCTOU (see 20). Detection and binding, not prevention.
+  e) SERVICE OBSERVATION NEEDS ACCESS. OpenServiceW asks for
+     SERVICE_QUERY_CONFIG|READ_CONTROL; a principal without them cannot build an
+     identity. That fails closed, but it means the observer must be authorized -
+     which is correct for the trusted maintenance principal and needs stating.
+  f) THE RUNTIME PROBE EXECUTES THE RUNTIME. observe_runtime runs the trusted
+     interpreter (-I -S -c) to ask its version. That is the runtime the trust
+     plane is about to trust anyway, and its BYTES are hashed first, but it is an
+     execution during measurement and is named rather than hidden.
+  g) THE RUNTIME TWIN TEST writes a temporary file into .venv/Scripts (a covered
+     F-14 input) so the copy can find its pyvenv.cfg, and removes it in a
+     finally: block with its absence asserted. Harmless under sequential pytest;
+     it would matter if an F-14 capture ever ran concurrently with the suite.
+  h) WINDOWS-ONLY. Every OS entry point refuses off Windows with
+     DeploymentIdentityUnavailable. The demonstrated domain is Windows + local +
+     NTFS, unchanged from F-14's declared domain.
+  i) THE TRUST PLANE GREW to 1574 LOC. trust.anchor's closure did not move, so
+     the publisher's trusted closure is unchanged at 522 - but the moment Stage
+     3/6 binds deployment_digest into publication, the publisher inherits this
+     module and its size. That cost is being incurred knowingly, not discovered
+     later.
+
+22. DECISIONS REQUIRING INDEPENDENT REVIEW
+  1. ACE order preserved rather than canonicalized (8, 21a) - the central
+     canonicalization judgement of this stage.
+  2. SE_SELF_RELATIVE excluded from the control bits; the other inheritance and
+     protection bits kept.
+  3. Object ACE types (5-8) fail closed instead of being parsed.
+  4. AnchorRecord NOT extended (11) - the STOP call, and the proposed
+     gnosis.anchor.v2 path for the stage that owns it.
+  5. package_version / source_commit / source_tree read from the deployed
+     PACKAGE.json rather than taken as parameters - the mechanism that keeps
+     them observed rather than desired.
+  6. The pipe policy modelled as the deployed policy FILE (21c).
+  7. DeploymentIdentityUnavailable as a SUBCLASS of AuthorityUnavailable.
+  8. Required privileges sorted (treated as a set, not an order).
+  9. A minimal reparse/redirection check inside the trust plane instead of
+     reusing F-14's kernel.input_lock - a TCB-versus-DRY call decided for the
+     TCB, since importing it would add ~936 lines.
+ 10. The Trust Plane growing by 1052 LOC for this primitive (21i).

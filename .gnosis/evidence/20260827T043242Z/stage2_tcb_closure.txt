@@ -1,0 +1,65 @@
+F-17 STAGE 2 - TCB CLOSURE DELTA
+========================================================================
+
+TRUST_ALLOWLIST after the Stage-2 diff (closed world, DEFAULT = NOT ALLOWED):
+  gnosis
+      distribution root package; its __init__ holds no logic
+  gnosis.kernel
+      empty package marker, traversed only to reach kernel.canonical
+  gnosis.kernel.canonical
+      the ONE canonical-bytes hash primitive (ADR-0004). Re-implementing it inside the Trust Plane is the defect test_canonical_hash_is_not_duplicated forbids, so the dependency is the lesser evil and is deliberate.
+  gnosis.trust
+      the Trust Plane package itself
+  gnosis.trust.anchor
+      authoritative anchor slice (record, store, publication protocol)
+  gnosis.trust.deployment
+      authoritative deployment-identity slice (F-17 Stage 2) — observes what is actually deployed and binds it into deployment_digest. Trusted because a compromise of it would let a different deployment claim the identity of the approved one.
+  gnosis.trust.launch
+      authoritative launch/identity slice (MIC primitives, publisher gate)
+
+ALLOWLIST DELTA vs Stage 1: +1  ->  gnosis.trust.deployment
+  (gnosis.kernel.authority remains deliberately EXCLUDED)
+
+MEASURED LOAD-TIME CLOSURE PER TRUST ENTRY POINT
+  import gnosis.trust.anchor
+          3  gnosis
+          0  gnosis.kernel
+         53  gnosis.kernel.canonical
+          8  gnosis.trust
+        212  gnosis.trust.anchor
+        246  gnosis.trust.launch
+        522  TOTAL
+      violations: NONE
+
+  import gnosis.trust.launch
+          3  gnosis
+          8  gnosis.trust
+        246  gnosis.trust.launch
+        257  TOTAL
+      violations: NONE
+
+  import gnosis.trust.deployment
+          3  gnosis
+          0  gnosis.kernel
+         53  gnosis.kernel.canonical
+          8  gnosis.trust
+       1052  gnosis.trust.deployment
+        246  gnosis.trust.launch
+       1362  TOTAL
+      violations: NONE
+
+DELTA THAT MATTERS
+  gnosis.trust.anchor load-time closure : 522 LOC  (Stage 1: 522) -> UNCHANGED
+  The PUBLISHER's runtime trusted closure did NOT grow in Stage 2:
+  trust.anchor does not import trust.deployment. Binding the deployment
+  digest into publication is Stage 3/6 work, and it will grow then.
+
+  gnosis.trust.deployment                : 1052 LOC  (NEW trusted module)
+  Trust Plane total (union of entry points): 1574 LOC
+
+  Reported, not absorbed: the Trust Plane grew by the size of the new
+  module. It is trusted because a compromise of it would let a different
+  deployment claim the identity of the approved one.
+
+THIRD-PARTY CODE IN THE TRUST PLANE: none (measured as a delta against
+interpreter start for every entry point by tests/test_trust_boundary.py).

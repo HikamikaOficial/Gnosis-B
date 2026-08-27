@@ -1,0 +1,16 @@
+F-17 STAGE 2 - FRESH-CHECKOUT VERIFICATION
+======================================================================
+The tests are run against a CLEAN extraction of the committed tree, not
+the working directory, so nothing untracked or locally modified can be
+carrying the result.
+
+commit    : 27e181d784428cc2845df31d9658402fcecec4ec
+method    : git archive 27e181d | tar -x -C <clean dir>
+files     : 982
+
+module resolved from the fresh tree:
+  C:\Users\nicol\AppData\Local\Temp\claude\C--Users-nicol-Desktop-Claude-Code-Proyectos-GnosisAgentAi\be8aff37-47b3-469c-8957-65c5125790ae\scratchpad\fresh\src\gnosis\trust\deployment.py
+
+........................................................................ [ 73%]
+..........................                                               [100%]
+98 passed in 7.42s

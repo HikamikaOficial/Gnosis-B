@@ -1,0 +1,14 @@
+{
+  "bundle_digest": "9ba6a85e2062283fad0bc251245f981e7c03dd045a994652a290a34b8e356a32",
+  "files": {
+    "CAPTURE-NOTE.md": "570fa9b9ee4485258cbf747f3e3544d2b9a10f5a3912c5dbe8bfa8c508c4522c",
+    "STAGE2-RESULTS.txt": "3451378b72c69c0ccd10f4b4a01c404631fe07e5a54d46eb0ec9f26c308b70e2",
+    "stage2_fresh_checkout.txt": "7d016a05c7236eb1f7e877159fb6de5f83895cfa986834b20ec2a08a049310a6",
+    "stage2_full_suite.txt": "c73ad7d0d7b79588b68da1910ef53662d07148ad258077e16b508de6a4ed2c96",
+    "stage2_mutation.txt": "d7e06511eb5bcba307aa0e1ec9af3b46396f0b9a216e78543d5507500a67f278",
+    "stage2_negative_control.txt": "b42b175c27105fdc8c5babb895d1bef252b3c4c18398fca2d8438e9223ff2c43",
+    "stage2_tcb_closure.txt": "db7e6c9d772298f3804dc6b6af468341286af4ab86f4c50afdd7c715d9d27b5c"
+  },
+  "note": "SHA-256 of every file in this bundle. bundle_digest is one hash over the whole map. Re-derive it with verify_bundle(): any file added, removed or changed after capture is detected. The manifest cannot hash itself, so it is the one file not listed; a cryptographic signature over bundle_digest \u2014 which would also stop an editor from recomputing this manifest \u2014 needs key management that is out of scope and is a declared limitation, not a claim.",
+  "unlisted": "MANIFEST.sha256.json"
+}
