@@ -1,0 +1,22 @@
+F-17 STAGE 3 - FULL-SUITE REGRESSION
+======================================================================
+Stage 3 modifies the anchor and RunIdentity models, so the regression was
+widened rather than kept directed.
+
+run   tree a6dd6aa (Stage-3 implementation HEAD)
+      1218 passed, 72 subtests passed in 883.27s (0:14:43)   exit 0
+
+GREEN. Zero failures, zero errors.
+
+Continuity with the earlier stages, for the record:
+  tree e648784 (Stage 2)   1167 passed, 73 subtests   exit 0
+  tree 27e181d (Stage 2)   1168 passed, 74 subtests   exit 0
+  tree a6dd6aa (Stage 3)   1218 passed, 72 subtests   exit 0
+The test count rises with the new suites. The subtest count varies slightly
+between runs because some subtests are conditional on what the machine offers
+(available services, volumes); every one that ran, passed.
+
+F-14 STATUS, STATED CORRECTLY: the historical flaky event from the Stage-1
+evidence remains documented and adjudicated as an EVIDENCE NOTE. F-14 itself
+remains CLOSED. Nothing in Stage 2 or Stage 3 reopens it; these green runs are
+additional positive evidence, not a new closure and not a reopening.

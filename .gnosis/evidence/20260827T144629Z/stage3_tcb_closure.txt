@@ -1,0 +1,99 @@
+F-17 STAGE 3 - TCB CLOSURE DELTA
+==========================================================================
+
+TRUST_ALLOWLIST after the Stage-3 diff (closed world, DEFAULT = NOT ALLOWED):
+  gnosis
+      distribution root package; its __init__ holds no logic
+  gnosis.kernel
+      empty package marker, traversed only to reach kernel.canonical
+  gnosis.kernel.atomic_io
+      the ONE corruption-resistant write primitive (write-tmp + os.replace, 37 lines, stdlib only). The trusted run store must not observe a torn record; re-implementing the write inside the Trust Plane would be a second implementation of an existing primitive.
+  gnosis.kernel.canonical
+      the ONE canonical-bytes hash primitive (ADR-0004). Re-implementing it inside the Trust Plane is the defect test_canonical_hash_is_not_duplicated forbids, so the dependency is the lesser evil and is deliberate.
+  gnosis.kernel.file_lock
+      the kernel's ONE cross-process advisory lock (111 lines, stdlib only), already the established pattern for a read-modify-write of durable JSON state. Without it two trusted writers can silently drop a transition and a monotonic state could regress; with it the compare-and-set is real.
+  gnosis.trust
+      the Trust Plane package itself
+  gnosis.trust.anchor
+      authoritative anchor slice (record, store, publication protocol)
+  gnosis.trust.deployment
+      authoritative deployment-identity slice (F-17 Stage 2) — observes what is actually deployed and binds it into deployment_digest. Trusted because a compromise of it would let a different deployment claim the identity of the approved one.
+  gnosis.trust.launch
+      authoritative launch/identity slice (MIC primitives, publisher gate)
+  gnosis.trust.run_identity
+      authoritative trusted-run-identity slice (F-17 Stage 3) — the publication lifecycle and the publish-authorization gate. Trusted because a compromise of it would let a run be anchored that was never authorized.
+
+ALLOWLIST DELTA vs Stage 2:  +3
+  + gnosis.trust.run_identity  the new trusted slice
+  + gnosis.kernel.atomic_io    REUSED, not re-implemented (37 lines, stdlib)
+  + gnosis.kernel.file_lock    REUSED, not re-implemented (111 lines, stdlib)
+  gnosis.kernel.authority remains deliberately EXCLUDED.
+
+MEASURED LOAD-TIME CLOSURE PER TRUST ENTRY POINT
+  import gnosis.trust.anchor
+          3  gnosis
+          0  gnosis.kernel
+         53  gnosis.kernel.canonical
+          8  gnosis.trust
+        405  gnosis.trust.anchor
+        246  gnosis.trust.launch
+        715  TOTAL      violations: NONE
+
+  import gnosis.trust.launch
+          3  gnosis
+          8  gnosis.trust
+        246  gnosis.trust.launch
+        257  TOTAL      violations: NONE
+
+  import gnosis.trust.deployment
+          3  gnosis
+          0  gnosis.kernel
+         53  gnosis.kernel.canonical
+          8  gnosis.trust
+       1052  gnosis.trust.deployment
+        246  gnosis.trust.launch
+       1362  TOTAL      violations: NONE
+
+  import gnosis.trust.run_identity
+          3  gnosis
+          0  gnosis.kernel
+         37  gnosis.kernel.atomic_io
+         53  gnosis.kernel.canonical
+        111  gnosis.kernel.file_lock
+          8  gnosis.trust
+        405  gnosis.trust.anchor
+        246  gnosis.trust.launch
+        380  gnosis.trust.run_identity
+       1243  TOTAL      violations: NONE
+
+DELTA THAT MATTERS
+  gnosis.trust.anchor load-time closure : 715 LOC   (Stage 1/2: 522)
+  The anchor slice grew ONLY by its own Stage-3 additions (V2 schema,
+  identity validation, the tree cross-check). It still does NOT import
+  trust.deployment (1052 LOC) and does NOT import trust.run_identity, so
+  the deployment module is still not a transitive publisher dependency.
+
+  gnosis.trust.run_identity            : 380 LOC (NEW)
+  its closure                          : 1243 LOC
+
+  Trust Plane total (union of entry points): 2295 LOC
+          3  gnosis
+          0  gnosis.kernel
+         37  gnosis.kernel.atomic_io
+         53  gnosis.kernel.canonical
+        111  gnosis.kernel.file_lock
+          8  gnosis.trust
+        405  gnosis.trust.anchor
+       1052  gnosis.trust.deployment
+        246  gnosis.trust.launch
+        380  gnosis.trust.run_identity
+
+PUBLISHER CLOSURE, STATED PLAINLY
+  Stage 3 implements the gate as a REUSABLE primitive; it does not wire it
+  into publish_anchor (that is Stage 6). So the publisher's runtime trusted
+  closure today is still the trust.anchor closure above. When Stage 6 calls
+  authorize_publication, the publisher will inherit trust.run_identity and
+  its closure - knowingly, and it is measured here in advance.
+
+THIRD-PARTY CODE IN THE TRUST PLANE: none (delta-measured per entry point
+by tests/test_trust_boundary.py).

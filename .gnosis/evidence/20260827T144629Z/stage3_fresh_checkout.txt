@@ -1,0 +1,17 @@
+F-17 STAGE 3 - FRESH-CHECKOUT VERIFICATION
+======================================================================
+Run against a CLEAN extraction of the committed tree, so nothing
+untracked or locally modified can be carrying the result.
+
+commit : a6dd6aa9d748fb2a4053fab604fd5bbe5a5d6626
+method : git archive a6dd6aa | tar -x -C <clean dir>
+files  : 993
+
+modules resolved from the fresh tree:
+  C:\Users\nicol\AppData\Local\Temp\claude\C--Users-nicol-Desktop-Claude-Code-Proyectos-GnosisAgentAi\be8aff37-47b3-469c-8957-65c5125790ae\scratchpad\fresh3\src\gnosis\trust\run_identity.py
+  C:\Users\nicol\AppData\Local\Temp\claude\C--Users-nicol-Desktop-Claude-Code-Proyectos-GnosisAgentAi\be8aff37-47b3-469c-8957-65c5125790ae\scratchpad\fresh3\src\gnosis\trust\anchor.py
+
+........................................................................ [ 34%]
+........................................................................ [ 68%]
+.................................................................                                                              [100%]
+209 passed, 18 subtests passed in 14.38s

@@ -1,0 +1,52 @@
+F-17 STAGE 3 — NEGATIVE CONTROL
+==========================================================================
+A gate that authorizes everything is not a gate. These are the controls
+that show it actually refuses, and that the refusals are the intended ones.
+
+1. POSITIVE  a PUBLISHABLE run with matching trusted context
+   before mark_publishable : REFUSED
+   after  mark_publishable : AUTHORIZED   <- required AUTHORIZED
+
+2. NEGATIVE  one trusted expectation changed at a time
+   wrong worker SID   : REFUSED          <- required REFUSED
+   wrong deployment   : REFUSED          <- required REFUSED
+   older generation   : REFUSED          <- required REFUSED
+   newer generation   : REFUSED          <- required REFUSED
+   wrong HEAD         : REFUSED          <- required REFUSED
+   wrong tree         : REFUSED          <- required REFUSED
+   wrong repository   : REFUSED          <- required REFUSED
+   unknown run        : REFUSED          <- required REFUSED
+   unsafe run_id      : REFUSED          <- required REFUSED
+
+3. NEGATIVE  the lifecycle is monotonic
+   second publication : ALREADY_ANCHORED   <- required ALREADY_ANCHORED
+   regress to PUBLISHABLE     : REFUSED   <- required
+   regress to NOT_PUBLISHABLE : REFUSED   <- required
+
+4. NEGATIVE  a run_id is never rebound (delete-and-recreate / ABA)
+   different HEAD : REFUSED   <- required
+   different SID  : REFUSED   <- required
+   different epoch: REFUSED   <- required
+
+5. NEGATIVE  V1 cannot masquerade as a deployment-bound V2 record
+   V1 serialised keys        : ['bundle_digest', 'bundle_path', 'head_sha', 'prev_record_digest', 'repository_id', 'run_id', 'schema', 'seq', 'task_id', 'tree_identity']
+   V1 is_deployment_bound    : False   <- required False
+   V1 carrying V2 fields     : REFUSED   <- required
+   V2 without a binding      : REFUSED   <- required
+
+6. CONTROL  the identity digest is not a constant function
+   changing head       : differs = True   <- required True
+   changing tree       : differs = True   <- required True
+   changing sid        : differs = True   <- required True
+   changing deployment : differs = True   <- required True
+   changing epoch      : differs = True   <- required True
+
+F-17 STAGE 3 — SECRET SCAN
+==========================================================================
+   files scanned : 7
+   findings      : 0   <- required 0
+
+   Note: the SIDs in these files are SYNTHETIC fixture values in the
+   S-1-5-21-<domain>-<rid> shape. A SID is an identifier, not a secret, and
+   these do not name any real principal on this machine. Stage 3 introduces
+   no credential at all: DPAPI and the launch secret are Stage 5.
