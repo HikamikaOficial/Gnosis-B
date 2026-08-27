@@ -12,6 +12,7 @@ import json
 import subprocess
 import threading
 import time
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -65,7 +66,17 @@ class McpRunnerConfig:
 
 class CLIRunner:
     """Generic: run an argv, capture raw stdout/stderr to files, enforce a
-    hard timeout, support cooperative cancellation via CancellationToken."""
+    hard timeout, support cooperative cancellation via CancellationToken.
+
+    F-17 STAGE 5 — THE LAUNCH BOUNDARY. `launcher` is the explicit seam through
+    which a run crosses into the dedicated Worker identity. There is exactly one
+    decision point and NO automatic fallback: a caller that requires the trusted
+    launch says so with `require_trusted_launch=True`, and if the launcher is
+    absent, is a test fake, or fails, THE RUN FAILS. Catching a launch failure
+    and continuing with `subprocess.Popen` as the Director would report success
+    for a launch that crossed no identity at all, which is the one failure mode
+    that looks exactly like working software.
+    """
 
     def __init__(self, poll_interval_s: float = 0.2):
         self.poll_interval_s = poll_interval_s
@@ -81,11 +92,26 @@ class CLIRunner:
         heartbeat_fn: Callable[[int], None] | None = None,
         heartbeat_interval_s: float = 5.0,
         env: Mapping[str, str] | None = None,
+        launcher: Any = None,
+        require_trusted_launch: bool = False,
+        launch_id: str | None = None,
+        run_id: str | None = None,
     ) -> ExecutionResult:
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
         stderr_path.parent.mkdir(parents=True, exist_ok=True)
         started_at = datetime.now(UTC).isoformat()
         start_monotonic = time.monotonic()
+
+        if require_trusted_launch:
+            # Checked BEFORE anything is spawned, and deliberately NOT inside a
+            # try: there is nothing to recover to.
+            from gnosis.trust.worker_launcher import assert_no_same_user_fallback
+            assert_no_same_user_fallback(launcher)
+        if launcher is not None:
+            return self._run_trusted(
+                launcher, argv, cwd, stdout_path, stderr_path, timeout_s,
+                cancellation_token, started_at, start_monotonic,
+                launch_id=launch_id, run_id=run_id)
 
         with stdout_path.open("wb") as out_fh, stderr_path.open("wb") as err_fh:
             # `env=None` inherits, which is the right default and the
@@ -139,6 +165,46 @@ class CLIRunner:
             stderr_path=str(stderr_path), started_at=started_at, ended_at=ended_at,
         )
 
+    def _run_trusted(
+        self, launcher: Any, argv: Sequence[str], cwd: Path, stdout_path: Path,
+        stderr_path: Path, timeout_s: float,
+        cancellation_token: CancellationToken | None, started_at: str,
+        start_monotonic: float, *, launch_id: str | None, run_id: str | None,
+    ) -> ExecutionResult:
+        """Run the LOGICAL command through the trusted worker launcher.
+
+        No try/except wraps the launch. A failure propagates and the run fails;
+        there is deliberately no branch that reaches `subprocess.Popen` from
+        here, because a launch that silently became a same-user launch is
+        indistinguishable from a working one in every log it writes.
+        """
+        from gnosis.trust.launch_spec import LaunchSpec
+        from gnosis.trust.worker_launcher import summarise_launch
+
+        spec = LaunchSpec(
+            launch_id=launch_id or f"launch-{uuid.uuid4().hex[:16]}",
+            executable=str(argv[0]), argv=tuple(argv), cwd=str(cwd.resolve()),
+            stdout_path=str(stdout_path.resolve()),
+            stderr_path=str(stderr_path.resolve()), run_id=run_id)
+        launched = launcher.launch(spec)
+        try:
+            exit_code, timed_out, cancelled = launched.wait(
+                timeout_s, poll_interval_s=self.poll_interval_s,
+                is_cancelled=(cancellation_token.is_cancelled
+                              if cancellation_token is not None else None))
+        finally:
+            identity = launched.identity
+            launched.close()
+        return ExecutionResult(
+            # `command` is the LOGICAL argv, unchanged. The transport that
+            # carried it is recorded in `launch`, never merged into this.
+            command=tuple(argv), exit_code=exit_code, timed_out=timed_out,
+            cancelled=cancelled, duration_s=time.monotonic() - start_monotonic,
+            stdout_path=str(stdout_path), stderr_path=str(stderr_path),
+            started_at=started_at, ended_at=datetime.now(UTC).isoformat(),
+            launch=summarise_launch(identity),
+        )
+
 
 class ClaudeCodeCLIRunner:
     """Invokes the local Claude Code CLI in non-interactive print mode."""
@@ -187,6 +253,10 @@ class ClaudeCodeCLIRunner:
         cancellation_token: CancellationToken | None = None,
         heartbeat_fn: Callable[[int], None] | None = None,
         env: Mapping[str, str] | None = None,
+        launcher: Any = None,
+        require_trusted_launch: bool = False,
+        launch_id: str | None = None,
+        run_id: str | None = None,
     ) -> ExecutionResult:
         argv = self.build_argv(
             prompt, session_id=session_id, permission_mode=permission_mode,
@@ -195,7 +265,9 @@ class ClaudeCodeCLIRunner:
         result = self._cli_runner.run(
             argv, cwd=cwd, stdout_path=stdout_path, stderr_path=stderr_path,
             timeout_s=timeout_s, cancellation_token=cancellation_token,
-            heartbeat_fn=heartbeat_fn, env=env,
+            heartbeat_fn=heartbeat_fn, env=env, launcher=launcher,
+            require_trusted_launch=require_trusted_launch,
+            launch_id=launch_id, run_id=run_id,
         )
         # Parse on FAILURE too. A structured error payload (rate-limit
         # fields, error_type) only exists on the failing path, so gating
@@ -223,5 +295,5 @@ class ClaudeCodeCLIRunner:
             command=result.command, exit_code=result.exit_code, timed_out=result.timed_out,
             cancelled=result.cancelled, duration_s=result.duration_s, stdout_path=result.stdout_path,
             stderr_path=result.stderr_path, started_at=result.started_at, ended_at=result.ended_at,
-            parsed_json=parsed_json,
+            parsed_json=parsed_json, launch=result.launch,
         )

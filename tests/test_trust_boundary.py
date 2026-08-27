@@ -90,6 +90,21 @@ TRUST_ALLOWLIST: dict[str, str] = {
         "watermark, the single commit point, and crash recovery. Trusted because "
         "a compromise of it would let an uncommitted anchor be declared "
         "committed, or committed history be discarded as a crashed attempt."),
+    # Stage-5 additions, each an explicit, reviewable enlargement of the TCB:
+    "gnosis.trust.launch_spec": (
+        "the sealed LaunchSpec (F-17 Stage 5) — how a ~12 kB logical argv crosses "
+        "a 1024-character transport. Trusted because a compromise of it would let "
+        "the Worker choose the argv the Director's launch executes."),
+    "gnosis.trust.bootstrap": (
+        "the trusted bootstrap (F-17 Stage 5). Listed because its BYTES are "
+        "TCB — the Worker may read and execute it but not write it — even though "
+        "the process RUNS AS THE WORKER and is therefore never treated as a "
+        "trusted decision-maker; it only refuses instructions that fail the seal."),
+    "gnosis.trust.worker_launcher": (
+        "the trusted dedicated-worker launcher (F-17 Stage 5) — DPAPI credential, "
+        "CreateProcessWithLogonW, suspended-until-verified identity checks, job "
+        "containment and the environment allowlist. Trusted because a compromise "
+        "of it would let a run execute under an identity nobody authorized."),
 }
 
 # Trust Plane entry points whose load-time closure is measured. A new trusted
@@ -97,7 +112,8 @@ TRUST_ALLOWLIST: dict[str, str] = {
 # stale-entry test below refuses an allowlist grant that no entry point loads.
 TRUST_ENTRY_POINTS = ("gnosis.trust.anchor", "gnosis.trust.launch",
                       "gnosis.trust.deployment", "gnosis.trust.run_identity",
-                      "gnosis.trust.publication")
+                      "gnosis.trust.publication", "gnosis.trust.launch_spec",
+                      "gnosis.trust.worker_launcher", "gnosis.trust.bootstrap")
 
 # ---------------------------------------------------------------------------
 # Internal modules the Trust Plane imports LAZILY, inside a function body.

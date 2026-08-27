@@ -17,6 +17,14 @@ class ExecutionResult:
     started_at: str
     ended_at: str
     parsed_json: dict[str, Any] | None = None
+    # F-17 Stage 5. `command` KEEPS ITS HISTORICAL MEANING — the LOGICAL command
+    # Gnosis ordered — so replay and cassettes are unaffected by which transport
+    # carried it. The transport (a short bootstrap invocation) is deliberately
+    # NOT merged into it; what the trusted launcher observed is recorded
+    # separately here: launcher kind/version, launch_spec_digest,
+    # logical_command_digest and the OS-observed worker SID. None on the
+    # same-user path, which is what makes the difference visible in evidence.
+    launch: dict[str, Any] | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -28,4 +36,5 @@ class ExecutionResult:
             "cancelled": self.cancelled, "duration_s": self.duration_s, "stdout_path": self.stdout_path,
             "stderr_path": self.stderr_path, "started_at": self.started_at, "ended_at": self.ended_at,
             "parsed_json": self.parsed_json, "succeeded": self.succeeded,
+            "launch": self.launch,
         }

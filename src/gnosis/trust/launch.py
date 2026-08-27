@@ -121,12 +121,15 @@ if _IS_WINDOWS:
     def _fail(call: str) -> None:
         raise AuthorityUnavailable(f"{call} failed (winerr {ctypes.get_last_error()})")
 
-    def process_integrity() -> str:
-        """The integrity level of the current process, as a level name."""
-        token = W.HANDLE()
-        if not _a32.OpenProcessToken(_k32.GetCurrentProcess(), _TOKEN_QUERY,
-                                     ctypes.byref(token)):
-            _fail("OpenProcessToken")
+    def token_integrity(token: int) -> str:
+        """The integrity level of ANY token handle, as a level name.
+
+        Split out of `process_integrity` (F-17 Stage 5) because the trusted
+        launcher must read the integrity of the CHILD's token, not its own, and
+        a second copy of the mandatory-label decode is exactly the duplication
+        the Trust Plane refuses elsewhere. `process_integrity` is now this
+        function applied to the current process.
+        """
         size = W.DWORD()
         _a32.GetTokenInformation(token, _TokenIntegrityLevel, None, 0, ctypes.byref(size))
         buf = ctypes.create_string_buffer(size.value)
@@ -137,6 +140,17 @@ if _IS_WINDOWS:
         count = _a32.GetSidSubAuthorityCount(tml.Label.Sid)[0]
         rid = _a32.GetSidSubAuthority(tml.Label.Sid, count - 1)[0]
         return _INTEGRITY_NAMES.get(rid, f"0x{rid:04x}")
+
+    def process_integrity() -> str:
+        """The integrity level of the current process, as a level name."""
+        token = W.HANDLE()
+        if not _a32.OpenProcessToken(_k32.GetCurrentProcess(), _TOKEN_QUERY,
+                                     ctypes.byref(token)):
+            _fail("OpenProcessToken")
+        try:
+            return token_integrity(token.value or 0)
+        finally:
+            _k32.CloseHandle(token)
 
     def lowered_primary_token(sid_string: str) -> W.HANDLE:
         """Duplicate the current token to PRIMARY and lower its integrity to
@@ -184,6 +198,9 @@ if _IS_WINDOWS:
         return int(code.value)
 
 else:  # pragma: no cover - exercised only off Windows
+    def token_integrity(token: int) -> str:
+        raise AuthorityUnavailable("integrity levels are a Windows mechanism")
+
     def process_integrity() -> str:
         raise AuthorityUnavailable("integrity levels are a Windows mechanism")
 
