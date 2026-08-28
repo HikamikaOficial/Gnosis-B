@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -250,18 +251,43 @@ class TestPublishableIsAJudgementNotAnEvent(_SeamCase):
 
 
 class TestTheSeamIsNotReachableFromTheService(unittest.TestCase):
+    """The service must not be able to mark anything publishable, and the
+    cheapest guarantee is that the code to do so is not in its closure.
+
+    MEASURED IN A SUBPROCESS, and the reason is a defect this test used to
+    have. The first version popped `gnosis.trust.worker_launcher` and friends
+    out of `sys.modules` to get a clean measurement - and never put them back.
+    Anything that imported them afterwards got a NEW module object holding NEW
+    class objects, so a later file's `assertRaises(WorkerLaunchFailed)` stopped
+    catching the `WorkerLaunchFailed` being raised: same name, two classes.
+    Two files passed alone and failed together.
+
+    A test that corrupts the interpreter to take its measurement is measuring
+    something nobody runs. A fresh process is both honest and cheap.
+    """
+
+    FORBIDDEN = ("gnosis.trust.orchestration", "gnosis.trust.deployment",
+                 "gnosis.trust.worker_launcher", "gnosis.kernel.evidence_capture")
+
     def test_the_publisher_does_not_import_the_writers_seam(self):
-        # The service must not be able to mark anything publishable, and the
-        # cheapest guarantee is that the code to do so is not in its closure.
-        import importlib
-        for name in ("gnosis.trust.orchestration", "gnosis.trust.deployment",
-                     "gnosis.trust.worker_launcher"):
-            sys.modules.pop(name, None)
-        importlib.import_module("gnosis.trust.publisher_service")
-        for forbidden in ("gnosis.trust.orchestration", "gnosis.trust.deployment",
-                          "gnosis.trust.worker_launcher"):
-            self.assertNotIn(forbidden, sys.modules,
+        src = Path(__file__).resolve().parents[1] / "src"
+        program = (
+            "import sys, json;"
+            f"sys.path.insert(0, {str(src)!r});"
+            "import gnosis.trust.publisher_service;"
+            "print(json.dumps(sorted(m for m in sys.modules if m.startswith('gnosis'))))"
+        )
+        proc = subprocess.run([sys.executable, "-c", program],
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr[:400])
+        closure = set(json.loads(proc.stdout.strip().splitlines()[-1]))
+        for forbidden in self.FORBIDDEN:
+            self.assertNotIn(forbidden, closure,
                              f"{forbidden} reached the publisher's closure")
+        # And the measurement is not vacuous: the service itself IS in there.
+        self.assertIn("gnosis.trust.publisher_service", closure)
+        self.assertIn("gnosis.trust.bundle_verify", closure)
 
 
 if __name__ == "__main__":
