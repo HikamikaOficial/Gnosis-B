@@ -114,6 +114,27 @@ TRUST_ALLOWLIST: dict[str, str] = {
         "input_lock and write_observer into a running publication, and a "
         "publisher that can execute Git is a publisher that can be made to "
         "execute Git. `evidence_capture` now imports THIS, never the reverse."),
+    "gnosis.trust.publisher": (
+        "the publication authorization handler (F-17 Stage 6) — one verb, and "
+        "every authority-bearing fact derived from provisioned configuration or "
+        "the trusted run store rather than from the request. Trusted because a "
+        "compromise of it would turn a privileged writer into the Worker's "
+        "confused deputy."),
+    "gnosis.trust.pipe_server": (
+        "the Worker-facing IPC endpoint (F-17 Stage 6) — first-instance-only "
+        "creation, an explicit DACL that withholds the pipe's append bit, remote "
+        "clients rejected, bounded framing. Trusted because a compromise of it "
+        "would let the Worker BE the endpoint the trusted service answers on."),
+    "gnosis.trust.service_host": (
+        "the real SCM service contract in ctypes (F-17 Stage 6). Trusted because "
+        "the publisher's whole boundary is the restricted service SID the SCM "
+        "grants a process it launched as a service; without this contract there "
+        "is no such identity to hold."),
+    "gnosis.trust.publisher_service": (
+        "the composition root (F-17 Stage 6) — configuration, startup recovery "
+        "BEFORE the endpoint exists, then serve. Trusted because it decides the "
+        "order in which the other trusted pieces are allowed to become "
+        "reachable."),
 }
 
 # Trust Plane entry points whose load-time closure is measured. A new trusted
@@ -122,7 +143,11 @@ TRUST_ALLOWLIST: dict[str, str] = {
 TRUST_ENTRY_POINTS = ("gnosis.trust.anchor", "gnosis.trust.launch",
                       "gnosis.trust.deployment", "gnosis.trust.run_identity",
                       "gnosis.trust.publication", "gnosis.trust.launch_spec",
-                      "gnosis.trust.worker_launcher", "gnosis.trust.bootstrap")
+                      "gnosis.trust.worker_launcher", "gnosis.trust.bootstrap",
+                      # Stage 6. The composition root is measured as an entry
+                      # point because it is what the SCM actually starts, and
+                      # its closure is the publisher's real TCB.
+                      "gnosis.trust.publisher_service")
 
 # ---------------------------------------------------------------------------
 # Internal modules the Trust Plane imports LAZILY, inside a function body.
