@@ -48,6 +48,16 @@ the Worker READ on the blob, and DPAPI only ensures the bytes are useless off
 this machine. The password exists transiently in this process's memory for the
 duration of one logon call and is zeroized best-effort afterwards; perfect
 physical erasure is not promised.
+
+PRIVILEGES THIS LAUNCHER REQUIRES OF ITS CALLER: none beyond being able to
+call `CreateProcessWithLogonW`, which needs no special privilege.
+`SeImpersonatePrivilege` was rejected in Gate 1 (it would have been needed by
+`CreateProcessWithTokenW`); `SeBackupPrivilege` and `SeRestorePrivilege` were
+removed in the D3 hardening, when measuring proved `LOGON_WITH_PROFILE` with
+`lpEnvironment = NULL` already yields the Worker's own profile environment and
+`LoadUserProfileW` was therefore unnecessary. REACHABLE != AUTHORIZED
+DEPENDENCY: a privilege the Director happens to hold is not a licence to
+build on it.
 """
 from __future__ import annotations
 
@@ -57,7 +67,7 @@ import sys
 import time
 from collections.abc import Mapping, Sequence
 from ctypes import wintypes as W
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -84,10 +94,10 @@ DANGEROUS_PRIVILEGES: frozenset[str] = frozenset({
 BUILTIN_ADMINISTRATORS_SID = "S-1-5-32-544"
 
 # The ONLY Director-side variables that may reach the Worker. Everything else in
-# the Worker's environment comes from the Worker's OWN profile, built by
-# CreateEnvironmentBlock against the Worker's token. There is deliberately no
-# pattern match and no "copy everything except": an allowlist that is a deny-list
-# in disguise leaks whatever nobody thought to name (finding E1).
+# the Worker's environment comes from the Worker's OWN profile, built by Windows
+# itself under LOGON_WITH_PROFILE. There is deliberately no pattern match and no
+# "copy everything except": an allowlist that is a deny-list in disguise leaks
+# whatever nobody thought to name (finding E1).
 DEFAULT_ENVIRONMENT_ALLOWLIST: frozenset[str] = frozenset({
     "PYTHONUTF8",           # the project's own encoding contract (L-0001)
     "PYTHONIOENCODING",
@@ -176,16 +186,11 @@ if _IS_WINDOWS:
     _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
     _a32 = ctypes.WinDLL("advapi32", use_last_error=True)
     _crypt = ctypes.WinDLL("crypt32", use_last_error=True)
-    _userenv = ctypes.WinDLL("userenv", use_last_error=True)
 
     LOGON_WITH_PROFILE = 0x00000001
     CREATE_SUSPENDED = 0x00000004
-    CREATE_UNICODE_ENVIRONMENT = 0x00000400
     CREATE_NO_WINDOW = 0x08000000
     CREATE_BREAKAWAY_FROM_JOB = 0x01000000
-
-    LOGON32_LOGON_INTERACTIVE = 2
-    LOGON32_PROVIDER_DEFAULT = 0
 
     TOKEN_QUERY = 0x0008
     TokenUser = 1
@@ -253,9 +258,6 @@ if _IS_WINDOWS:
         ctypes.c_void_p, W.LPCWSTR, ctypes.POINTER(_STARTUPINFOW),
         ctypes.POINTER(_PROCESS_INFORMATION)]
     _a32.CreateProcessWithLogonW.restype = W.BOOL
-    _a32.LogonUserW.argtypes = [W.LPCWSTR, W.LPCWSTR, W.LPCWSTR, W.DWORD, W.DWORD,
-                                ctypes.POINTER(W.HANDLE)]
-    _a32.LogonUserW.restype = W.BOOL
     _a32.OpenProcessToken.argtypes = [W.HANDLE, W.DWORD, ctypes.POINTER(W.HANDLE)]
     _a32.OpenProcessToken.restype = W.BOOL
     _a32.GetTokenInformation.argtypes = [W.HANDLE, ctypes.c_int, ctypes.c_void_p,
@@ -296,24 +298,6 @@ if _IS_WINDOWS:
         ctypes.POINTER(_DATA_BLOB), ctypes.c_void_p, ctypes.POINTER(_DATA_BLOB),
         ctypes.c_void_p, ctypes.c_void_p, W.DWORD, ctypes.POINTER(_DATA_BLOB)]
     _crypt.CryptUnprotectData.restype = W.BOOL
-    _userenv.CreateEnvironmentBlock.argtypes = [ctypes.POINTER(ctypes.c_void_p),
-                                                W.HANDLE, W.BOOL]
-    _userenv.CreateEnvironmentBlock.restype = W.BOOL
-    _userenv.DestroyEnvironmentBlock.argtypes = [ctypes.c_void_p]
-    _userenv.DestroyEnvironmentBlock.restype = W.BOOL
-
-    PI_NOUI = 0x00000001
-
-    class _PROFILEINFOW(ctypes.Structure):
-        _fields_ = [("dwSize", W.DWORD), ("dwFlags", W.DWORD),
-                    ("lpUserName", W.LPWSTR), ("lpProfilePath", W.LPWSTR),
-                    ("lpDefaultPath", W.LPWSTR), ("lpServerName", W.LPWSTR),
-                    ("lpPolicyPath", W.LPWSTR), ("hProfile", W.HANDLE)]
-
-    _userenv.LoadUserProfileW.argtypes = [W.HANDLE, ctypes.POINTER(_PROFILEINFOW)]
-    _userenv.LoadUserProfileW.restype = W.BOOL
-    _userenv.UnloadUserProfile.argtypes = [W.HANDLE, W.HANDLE]
-    _userenv.UnloadUserProfile.restype = W.BOOL
 
 
 def _secret_text(buffer: ctypes.Array[ctypes.c_char]) -> str:
@@ -456,45 +440,27 @@ def _token_privileges(token: W.HANDLE) -> tuple[str, ...]:
 # ---------------------------------------------------------------------------
 # The environment block
 # ---------------------------------------------------------------------------
-def _environment_block_for_token(token: W.HANDLE) -> dict[str, str]:
-    """The Worker's OWN profile environment, from the OS.
-
-    `CreateEnvironmentBlock` is the documented way to obtain the environment a
-    user's profile defines. Building it from the Worker's token is what makes
-    USERPROFILE, APPDATA and the rest point at the WORKER, and is why the
-    Director's environment is never a starting point (finding E1).
-    """
-    block = ctypes.c_void_p()
-    if not _userenv.CreateEnvironmentBlock(ctypes.byref(block), token, False):
-        _winfail("CreateEnvironmentBlock")
-    try:
-        out: dict[str, str] = {}
-        address = block.value or 0
-        while True:
-            entry = ctypes.wstring_at(address)
-            if not entry:
-                break
-            address += (len(entry) + 1) * ctypes.sizeof(ctypes.c_wchar)
-            if "=" in entry[1:]:
-                name, _, value = entry[1:].partition("=")
-                out[entry[0] + name] = value
-        return out
-    finally:
-        _userenv.DestroyEnvironmentBlock(block)
-
-
 def build_worker_environment(
-        worker_env: Mapping[str, str], director_env: Mapping[str, str],
+        director_env: Mapping[str, str],
         allowlist: frozenset[str] = DEFAULT_ENVIRONMENT_ALLOWLIST,
         extra: Mapping[str, str] | None = None) -> dict[str, str]:
-    """The Worker's environment: its OWN profile, plus a named allowlist.
+    """The OVERLAY the Director contributes, and nothing else.
 
-    The Director's environment is NEVER the base. Only the variables named in
-    `allowlist` are carried across, and only if the Director actually has them.
-    An allowlist expressed as "everything except..." would leak whatever nobody
+    The Worker's real environment is not built here at all: it is built by
+    Windows from the WORKER's own profile, because `CreateProcessWithLogonW` is
+    called with `LOGON_WITH_PROFILE` and `lpEnvironment = NULL`. That was
+    MEASURED OS-real (options A/B/C in the D3 experiment) and it is what removed
+    the `LoadUserProfileW` call and with it the SeBackup/SeRestore dependency:
+    REACHABLE != AUTHORIZED DEPENDENCY.
+
+    What remains here is a small, named overlay of DETERMINISM variables. Only
+    names in `allowlist` cross, and only if the Director actually has a
+    non-empty value: an empty variable is unset for every consumer, so carrying
+    one over would be the ambient fallback wearing an allowlist's clothes. An
+    allowlist expressed as "everything except..." would leak whatever nobody
     thought to name; this one can only ever pass what it lists.
     """
-    env = dict(worker_env)
+    env: dict[str, str] = {}
     for name in sorted(allowlist):
         value = director_env.get(name)
         if value:
@@ -502,15 +468,6 @@ def build_worker_environment(
     for name, value in sorted((extra or {}).items()):
         env[name] = value
     return env
-
-
-def _encode_environment_block(env: Mapping[str, str]) -> ctypes.Array[ctypes.c_wchar]:
-    # Windows requires the block sorted case-insensitively, NUL-separated and
-    # double-NUL terminated.
-    parts = [f"{name}={value}" for name, value in
-             sorted(env.items(), key=lambda item: item[0].upper())]
-    raw = "\0".join(parts) + "\0\0"
-    return ctypes.create_unicode_buffer(raw, len(raw))
 
 
 # ---------------------------------------------------------------------------
@@ -674,6 +631,12 @@ class TrustedWindowsWorkerLauncher:
 
     def launch(self, spec: LaunchSpec) -> WorkerLaunchResult:
         _require_windows()
+        # THE SEALED ENVIRONMENT OVERLAY IS APPLIED BEFORE THE SEAL, or the
+        # digest would not cover it and the Worker could edit the one part of
+        # its environment the Director insisted on.
+        spec = replace(spec, environment=tuple(
+            sorted(build_worker_environment(
+                self._director_env, self.environment_allowlist).items())))
         digest = seal_launch_spec(self.launch_root, spec)
         spec_path = self.launch_root / f"{spec.launch_id}.json"
         command = build_transport_command(self.runtime, spec_path, digest)
@@ -687,10 +650,7 @@ class TrustedWindowsWorkerLauncher:
         blob = self.credential_blob_path.read_bytes()
         password = _unprotect_worker_secret(blob)
         try:
-            worker_env = self._worker_profile_environment(password)
-            env = build_worker_environment(
-                worker_env, self._director_env, self.environment_allowlist)
-            handles, pid = self._create_suspended(command, password, env, spec)
+            handles, pid = self._create_suspended(command, password, spec)
         finally:
             # BEST-EFFORT ZEROIZATION, and named as such: the buffer this
             # process owns is erased immediately after the last use. What the
@@ -707,53 +667,7 @@ class TrustedWindowsWorkerLauncher:
             raise
         return WorkerLaunchResult(identity=identity, _handles=handles)
 
-    def _worker_profile_environment(
-            self, password: ctypes.Array[ctypes.c_char]) -> dict[str, str]:
-        """Log the Worker on ONLY to read its profile environment.
-
-        The token is used for `CreateEnvironmentBlock` and closed immediately.
-        It is NEVER used to create a process: doing that would be
-        `CreateProcessWithTokenW`, which needs `SeImpersonatePrivilege` — a
-        privilege this stage was explicitly not granted, and which is not
-        acquired here to work around another API's limit.
-        """
-        token = W.HANDLE()
-        secret = _secret_text(password)
-        try:
-            ok = _a32.LogonUserW(self.account.username, self.account.domain or None,
-                                 secret, LOGON32_LOGON_INTERACTIVE,
-                                 LOGON32_PROVIDER_DEFAULT, ctypes.byref(token))
-        finally:
-            del secret
-        if not ok:
-            raise WorkerLaunchFailed(
-                "the worker credential was rejected by LogonUser (winerr "
-                f"{ctypes.get_last_error()}); the password is wrong, rotated, or "
-                "the account is unusable")
-        # THE PROFILE MUST BE LOADED FIRST. `CreateEnvironmentBlock` against a
-        # bare logon token returns the DEFAULT profile's environment, so
-        # USERPROFILE and APPDATA would point at the machine default rather than
-        # at the Worker — measured, not assumed: the first OS-real run of this
-        # probe reported exactly that and the two checks failed.
-        profile = _PROFILEINFOW()
-        profile.dwSize = ctypes.sizeof(profile)
-        profile.dwFlags = PI_NOUI
-        profile.lpUserName = self.account.username
-        loaded = bool(_userenv.LoadUserProfileW(token, ctypes.byref(profile)))
-        try:
-            if not loaded:
-                raise WorkerLaunchFailed(
-                    "the worker profile could not be loaded (winerr "
-                    f"{ctypes.get_last_error()}); refusing to launch with an "
-                    "environment that does not belong to the worker")
-            return _environment_block_for_token(token)
-        finally:
-            if loaded:
-                _userenv.UnloadUserProfile(token, profile.hProfile)
-            _k32.CloseHandle(token)
-
     def _create_suspended(self, command: str, password: ctypes.Array[ctypes.c_char],
-                          env: Mapping[str, str],
                           spec: LaunchSpec) -> tuple[_ProcessHandles, int]:
         startup = _STARTUPINFOW()
         startup.cb = ctypes.sizeof(startup)
@@ -762,15 +676,32 @@ class TrustedWindowsWorkerLauncher:
         # itself, as the Worker — so there is nothing to audit for leakage
         # because there is nothing to leak.
         info = _PROCESS_INFORMATION()
-        block = _encode_environment_block(env)
         buffer = ctypes.create_unicode_buffer(command, len(command) + 1)
         secret = _secret_text(password)
         try:
+            # lpEnvironment = NULL, WITH LOGON_WITH_PROFILE.
+            #
+            # MSDN says a NULL environment makes the child inherit the CALLER's
+            # environment, which would be the E1 leak all over again. MEASURED
+            # OS-REAL, that is not what happens when LOGON_WITH_PROFILE is set:
+            # the Secondary Logon service builds the environment from the
+            # WORKER's own profile. The D3 experiment ran all three candidates
+            # side by side on a real disposable account and recorded
+            # USERPROFILE, APPDATA and USERNAME as the Worker's, with the
+            # Director's planted sentinel ABSENT.
+            #
+            # That measurement is what removes `LoadUserProfileW` — and with it
+            # the SeBackupPrivilege + SeRestorePrivilege dependency — from the
+            # launcher. REACHABLE != AUTHORIZED DEPENDENCY.
+            #
+            # The determinism variables the Director still needs ride in the
+            # SEALED spec and are applied by the bootstrap, so the Worker cannot
+            # alter them and no credential can travel this way.
             ok = _a32.CreateProcessWithLogonW(
                 self.account.username, self.account.domain or None, secret,
                 LOGON_WITH_PROFILE, str(self.runtime), buffer,
-                CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
-                ctypes.byref(block), str(Path(spec.cwd)), ctypes.byref(startup),
+                CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                None, str(Path(spec.cwd)), ctypes.byref(startup),
                 ctypes.byref(info))
         finally:
             del secret

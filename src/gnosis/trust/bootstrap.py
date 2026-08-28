@@ -35,6 +35,7 @@ Worker cannot inject a module into this process by setting a variable.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -48,7 +49,7 @@ if _SRC_ROOT not in sys.path:
     sys.path.insert(0, _SRC_ROOT)
 
 from gnosis.trust.launch import AuthorityUnavailable
-from gnosis.trust.launch_spec import read_sealed_launch_spec
+from gnosis.trust.launch_spec import child_environment, read_sealed_launch_spec
 
 # Distinct, documented exit codes. The launcher must be able to tell "the seal
 # failed" from "the real command ran and exited 2", and a single generic
@@ -108,8 +109,16 @@ def main(argv: list[str]) -> int:
             # decided by the sealed spec, NEVER by a PATH search over argv[0].
             # `shell=False` is the default and is passed explicitly so reading
             # this line settles the question.
+            # THE CHILD'S ENVIRONMENT IS BUILT HERE, not by the launcher.
+            # This process was started with `lpEnvironment = NULL` under
+            # LOGON_WITH_PROFILE, so `os.environ` IS the Worker's own profile
+            # environment as Windows built it — measured OS-real to carry no
+            # Director state. The sealed overlay adds only the determinism
+            # variables the Director named, and the Worker cannot alter them
+            # because they are inside the digest.
             completed = subprocess.run(
                 list(spec.argv), executable=str(executable), cwd=str(cwd),
+                env=child_environment(spec, dict(os.environ)),
                 stdin=subprocess.DEVNULL, stdout=out, stderr=err,
                 shell=False, check=False)
     except OSError as exc:

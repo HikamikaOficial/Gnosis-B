@@ -39,10 +39,16 @@ The digest is on the COMMAND LINE, not in the file: a value stored beside the
 thing it protects proves self-consistency and nothing else (L-0059). Here the
 anchor is external to the payload by construction.
 
-NO SECRETS. A LaunchSpec carries an executable, an argv, a working directory and
-an identifier. It never carries a credential, a token, or an environment block —
-the environment is built by the trusted launcher directly into the process and
-never travels through a file the Worker can read.
+NO SECRETS. A LaunchSpec carries an executable, an argv, a working directory, an
+identifier, and a SMALL SEALED ENVIRONMENT OVERLAY. It never carries a credential
+or a token, and that is enforced rather than promised: the file is
+Worker-READABLE by design, so a credential-shaped NAME is refused outright and
+the overlay is bounded to a handful of determinism variables.
+
+The Worker's real environment is NOT in here. `CreateProcessWithLogonW` with
+LOGON_WITH_PROFILE and `lpEnvironment = NULL` builds it from the Worker's own
+profile — measured OS-real, and the reason the launcher no longer calls
+`LoadUserProfileW` and therefore no longer depends on SeBackup/SeRestore.
 """
 from __future__ import annotations
 
@@ -72,7 +78,19 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 
 _FIELDS = frozenset({"schema", "launch_id", "executable", "argv", "cwd",
-                     "stdout_path", "stderr_path", "run_id"})
+                     "stdout_path", "stderr_path", "environment", "run_id"})
+
+# The sealed environment overlay is for DETERMINISM, never for credentials. The
+# LaunchSpec is Worker-READABLE by design, so anything placed in it is readable
+# by the Worker — which is fine for `PYTHONUTF8=1` and fatal for a token. The
+# rule is enforced rather than documented: a name that looks like a credential is
+# refused outright, so "just this once" is not available to a future caller.
+_CREDENTIAL_SHAPED = re.compile(
+    r"(?i)(KEY|TOKEN|SECRET|PASS|PASSWD|CRED|AUTH|SESSION|COOKIE|OAUTH|BEARER"
+    r"|PRIVATE|SIGNATURE|LICENSE)")
+_SAFE_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+MAX_ENVIRONMENT_ENTRIES = 16
+MAX_ENVIRONMENT_VALUE = 1024
 
 
 class LaunchSpecInvalid(AuthorityUnavailable):
@@ -117,6 +135,17 @@ class LaunchSpec:
     # question has a structural answer rather than an audited one.
     stdout_path: str = ""    # absolute; opened by the bootstrap, truncating
     stderr_path: str = ""    # absolute; opened by the bootstrap, truncating
+    # THE SEALED ENVIRONMENT OVERLAY (F-17 Stage 5, D3 hardening). The launcher
+    # no longer builds the Worker's environment: `CreateProcessWithLogonW` with
+    # LOGON_WITH_PROFILE and `lpEnvironment = NULL` does it, from the Worker's
+    # own profile, which is what removed the LoadUserProfileW /
+    # SeBackup+SeRestore dependency. The few DETERMINISM variables Gnosis still
+    # needs therefore travel here, sealed, and the bootstrap applies them on top
+    # of the profile environment Windows gave it.
+    #
+    # NEVER A CREDENTIAL: the spec is Worker-readable, and a credential-shaped
+    # NAME is refused by construction below.
+    environment: tuple[tuple[str, str], ...] = ()
     run_id: str | None = None    # binding for Stage 6; never worker-supplied
     schema: str = LAUNCH_SPEC_SCHEMA
 
@@ -148,12 +177,42 @@ class LaunchSpec:
                 # one would be silently truncated by the OS, which is exactly
                 # the "no silent truncation" rule this stage is built around.
                 raise LaunchSpecInvalid(f"argv[{index}] contains a NUL byte")
+        self._validate_environment()
+
+    def _validate_environment(self) -> None:
+        if not isinstance(self.environment, tuple):
+            raise LaunchSpecInvalid("environment must be a tuple of (name, value)")
+        if len(self.environment) > MAX_ENVIRONMENT_ENTRIES:
+            raise LaunchSpecInvalid(
+                f"environment carries {len(self.environment)} entries, over the "
+                f"{MAX_ENVIRONMENT_ENTRIES} bound; this overlay is for a handful "
+                "of determinism variables, not for a whole environment")
+        seen: set[str] = set()
+        for entry in self.environment:
+            if not isinstance(entry, tuple) or len(entry) != 2:
+                raise LaunchSpecInvalid(f"environment entry {entry!r} is not a pair")
+            name, value = entry
+            if not isinstance(name, str) or not _SAFE_ENV_NAME.match(name):
+                raise LaunchSpecInvalid(f"environment name {name!r} is not a safe name")
+            if _CREDENTIAL_SHAPED.search(name):
+                raise LaunchSpecInvalid(
+                    f"environment name {name!r} looks like a credential; the "
+                    "LaunchSpec is Worker-readable and may never carry one")
+            if name in seen:
+                raise LaunchSpecInvalid(f"environment name {name!r} appears twice")
+            seen.add(name)
+            if not isinstance(value, str) or "\x00" in value:
+                raise LaunchSpecInvalid(f"environment value for {name!r} is invalid")
+            if len(value) > MAX_ENVIRONMENT_VALUE:
+                raise LaunchSpecInvalid(f"environment value for {name!r} is too long")
 
     def to_dict(self) -> dict[str, Any]:
         return {"schema": self.schema, "launch_id": self.launch_id,
                 "executable": self.executable, "argv": list(self.argv),
                 "cwd": self.cwd, "stdout_path": self.stdout_path,
-                "stderr_path": self.stderr_path, "run_id": self.run_id}
+                "stderr_path": self.stderr_path,
+                "environment": [list(pair) for pair in self.environment],
+                "run_id": self.run_id}
 
     def digest(self) -> str:
         """`launch_spec_digest` — the seal. One canonical primitive (ADR-0004);
@@ -191,10 +250,35 @@ class LaunchSpec:
         argv = data["argv"]
         if not isinstance(argv, list):
             raise LaunchSpecInvalid("argv must be a JSON array")
+        environment = data["environment"]
+        if not isinstance(environment, list):
+            raise LaunchSpecInvalid("environment must be a JSON array")
+        pairs: list[tuple[str, str]] = []
+        for entry in environment:
+            if not isinstance(entry, list) or len(entry) != 2:
+                raise LaunchSpecInvalid(f"environment entry {entry!r} is not a pair")
+            pairs.append((entry[0], entry[1]))
         return cls(launch_id=data["launch_id"], executable=data["executable"],
                    argv=tuple(argv), cwd=data["cwd"],
                    stdout_path=data["stdout_path"], stderr_path=data["stderr_path"],
+                   environment=tuple(pairs),
                    run_id=data.get("run_id"), schema=data["schema"])
+
+
+def child_environment(spec: LaunchSpec,
+                      own_environment: dict[str, str]) -> dict[str, str]:
+    """The logical command's environment: the WORKER's own, plus the seal.
+
+    `own_environment` is the environment the bootstrap itself was given, which
+    under `LOGON_WITH_PROFILE` with `lpEnvironment = NULL` is the WORKER's
+    profile environment, built by Windows — measured OS-real to contain no
+    Director state. The sealed overlay adds only the determinism variables the
+    Director named, and the Worker cannot alter them because the spec is sealed.
+    """
+    env = dict(own_environment)
+    for name, value in spec.environment:
+        env[name] = value
+    return env
 
 
 def _is_absolute_windows_path(value: str) -> bool:

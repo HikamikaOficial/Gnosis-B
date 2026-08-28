@@ -33,6 +33,7 @@ from gnosis.trust.launch_spec import (
     LaunchSpec,
     LaunchSpecInvalid,
     LaunchSpecUnsealed,
+    child_environment,
     launch_spec_path,
     read_sealed_launch_spec,
     seal_launch_spec,
@@ -341,34 +342,125 @@ class TestArgvFidelityThroughTheBootstrap(_TmpCase):
 
 
 class TestTheEnvironmentAllowlist(unittest.TestCase):
-    def test_the_director_environment_is_never_the_base(self):
-        """Finding E1, repaired. The Worker's environment starts from the
-        WORKER's profile; the Director contributes only named variables."""
-        worker = {"USERPROFILE": r"C:\Users\Worker", "APPDATA": r"C:\Users\Worker\AD"}
+    def test_the_director_environment_never_crosses_wholesale(self):
+        """Finding E1, repaired. The Director contributes ONLY named variables.
+        The Worker's real environment is built by Windows from the Worker's own
+        profile and never passes through here at all (D3 hardening)."""
         director = {"CLAUDE_CODE_MESSAGING_TOKEN": "secret",
                     "ANTHROPIC_API_KEY": "secret", "GNOSIS_SENTINEL": "secret",
                     "PYTHONUTF8": "1", "USERPROFILE": r"C:\Users\Director"}
-        env = build_worker_environment(worker, director)
-        self.assertEqual(env["USERPROFILE"], r"C:\Users\Worker")
-        self.assertEqual(env["PYTHONUTF8"], "1")
+        env = build_worker_environment(director)
+        self.assertEqual(env, {"PYTHONUTF8": "1"})
         for leaked in ("CLAUDE_CODE_MESSAGING_TOKEN", "ANTHROPIC_API_KEY",
-                       "GNOSIS_SENTINEL"):
+                       "GNOSIS_SENTINEL", "USERPROFILE"):
             self.assertNotIn(leaked, env)
 
     def test_only_names_in_the_allowlist_can_cross(self):
-        env = build_worker_environment({}, {"A": "1", "B": "2"},
+        env = build_worker_environment({"A": "1", "B": "2"},
                                        allowlist=frozenset({"A"}))
         self.assertEqual(env, {"A": "1"})
 
     def test_an_empty_director_value_does_not_cross(self):
         """An empty variable is unset for every consumer, so carrying one over
         would be the ambient fallback wearing an allowlist's clothes."""
-        env = build_worker_environment({}, {"PYTHONUTF8": ""})
+        env = build_worker_environment({"PYTHONUTF8": ""})
         self.assertNotIn("PYTHONUTF8", env)
+
+    def test_the_sealed_overlay_refuses_a_credential_shaped_name(self):
+        """The LaunchSpec is Worker-READABLE, so a credential in it is a
+        credential handed to the Worker. Refused by construction."""
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            for bad in ("ANTHROPIC_API_KEY", "CLAUDE_TOKEN", "MY_SECRET",
+                        "DB_PASSWORD", "OAUTH_BEARER", "SESSION_ID",
+                        "PRIVATE_THING", "SOME_CREDENTIAL"):
+                with self.assertRaises(LaunchSpecInvalid, msg=bad):
+                    _spec(Path(tmp), environment=((bad, "x"),))
+
+    def test_the_sealed_overlay_is_bounded_and_well_formed(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            _spec(root, environment=(("PYTHONUTF8", "1"),))      # must not raise
+            for bad in (
+                tuple((f"VAR{i}", "1") for i in range(17)),       # over the bound
+                (("bad name", "1"),),                            # unsafe name
+                (("VAR", "with\x00nul"),),                       # NUL in a value
+                (("VAR", "x" * 1025),),                          # over-long value
+                (("VAR", "1"), ("VAR", "2")),                    # duplicate name
+            ):
+                with self.assertRaises(LaunchSpecInvalid, msg=repr(bad)[:40]):
+                    _spec(root, environment=bad)
+
+    def test_the_child_environment_is_the_worker_profile_plus_the_seal(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            spec = _spec(Path(tmp), environment=(("PYTHONUTF8", "1"),))
+            own = {"USERPROFILE": r"C:\Users\Worker", "PYTHONUTF8": "0"}
+            env = child_environment(spec, own)
+            self.assertEqual(env["USERPROFILE"], r"C:\Users\Worker")
+            self.assertEqual(env["PYTHONUTF8"], "1", "the sealed value wins")
 
     def test_the_default_allowlist_carries_no_credential_shaped_name(self):
         for name in DEFAULT_ENVIRONMENT_ALLOWLIST:
             self.assertNotRegex(name, r"(?i)(KEY|TOKEN|SECRET|PASS|CRED|AUTH|SESSION)")
+
+
+class TestTheLauncherDependsOnNoExtraPrivilege(unittest.TestCase):
+    """D3, the blocking finding, ENFORCED rather than promised.
+
+    REACHABLE != AUTHORIZED DEPENDENCY. The launcher must not call the APIs that
+    would make `SeBackupPrivilege` / `SeRestorePrivilege` (`LoadUserProfileW`) or
+    `SeImpersonatePrivilege` (`CreateProcessWithTokenW`) a requirement — even
+    though an elevated Director happens to hold all three. A future edit that
+    reintroduces one has to delete this test to do it.
+    """
+
+    SOURCES = (REPO / "src" / "gnosis" / "trust" / "worker_launcher.py",
+               REPO / "src" / "gnosis" / "trust" / "bootstrap.py",
+               REPO / "src" / "gnosis" / "trust" / "launch_spec.py")
+
+    FORBIDDEN = ("LoadUserProfileW", "UnloadUserProfile", "LogonUserW",
+                 "CreateEnvironmentBlock", "CreateProcessWithTokenW",
+                 "CreateProcessAsUserW", "AdjustTokenPrivileges")
+
+    def test_no_privilege_requiring_api_is_called(self):
+        for source in self.SOURCES:
+            tree = ast.parse(source.read_text(encoding="utf-8"))
+            used = {node.attr for node in ast.walk(tree)
+                    if isinstance(node, ast.Attribute)}
+            used |= {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+            used |= {node.value for node in ast.walk(tree)
+                     if isinstance(node, ast.Constant) and isinstance(node.value, str)}
+            for name in self.FORBIDDEN:
+                self.assertNotIn(name, used,
+                                 f"{source.name} calls {name}, reintroducing a "
+                                 "privilege dependency this stage removed")
+
+    def test_the_userenv_library_is_not_loaded_at_all(self):
+        tree = ast.parse(self.SOURCES[0].read_text(encoding="utf-8"))
+        loaded = {node.value for node in ast.walk(tree)
+                  if isinstance(node, ast.Constant) and isinstance(node.value, str)}
+        self.assertNotIn("userenv", loaded,
+                         "userenv.dll is only needed for the profile APIs removed here")
+
+    def test_the_process_environment_is_passed_as_null(self):
+        """The measurement that removed the dependency: LOGON_WITH_PROFILE with
+        a NULL lpEnvironment already yields the WORKER's profile environment."""
+        text = self.SOURCES[0].read_text(encoding="utf-8")
+        self.assertIn("CREATE_SUSPENDED | CREATE_NO_WINDOW,", text)
+        self.assertNotIn("CREATE_UNICODE_ENVIRONMENT", text,
+                         "a unicode environment flag implies an environment block")
+
+    def test_the_sealed_overlay_is_applied_before_the_seal(self):
+        """If the overlay were added after sealing, the digest would not cover
+        it and the Worker could edit the one part of its environment the
+        Director insisted on."""
+        tree = ast.parse(self.SOURCES[0].read_text(encoding="utf-8"))
+        body = ""
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "launch":
+                body = ast.unparse(node)
+        self.assertIn("build_worker_environment", body)
+        self.assertLess(body.index("build_worker_environment"),
+                        body.index("seal_launch_spec"))
 
 
 class TestNoSameUserFallback(unittest.TestCase):
@@ -438,13 +530,34 @@ class TestTheBootstrapIsMinimalAndStatic(unittest.TestCase):
                                  f"bootstrap code literal reaches for {forbidden}")
 
     def test_it_reads_no_configuration_from_the_environment(self):
+        """FORWARDING the environment is not READING configuration from it.
+
+        The bootstrap passes `dict(os.environ)` — its own Worker-profile
+        environment — through to the logical command, which is the whole point
+        of the D3 design. What it must never do is take a DECISION from a
+        variable: no `os.environ[...]`, no `.get(...)`, no `getenv`. An earlier
+        version of this test forbade the name `environ` outright and failed the
+        moment the forwarding was added, which would have been the wrong lesson.
+        """
         tree = ast.parse(self.SOURCE.read_text(encoding="utf-8"))
         names = {node.attr for node in ast.walk(tree)
                  if isinstance(node, ast.Attribute)}
         names |= {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
-        for forbidden in ("environ", "getenv", "eval", "exec", "compile",
-                          "import_module", "__import__"):
+        for forbidden in ("getenv", "eval", "exec", "compile", "import_module",
+                          "__import__"):
             self.assertNotIn(forbidden, names, f"bootstrap reaches for {forbidden}")
+
+        def _is_environ(node: ast.AST) -> bool:
+            return isinstance(node, ast.Attribute) and node.attr == "environ"
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Subscript) and _is_environ(node.value):
+                self.fail("bootstrap indexes os.environ for configuration")
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in {"get", "setdefault", "pop"}
+                    and _is_environ(node.func.value)):
+                self.fail(f"bootstrap reads os.environ.{node.func.attr} "
+                          "for configuration")
 
     def test_its_module_closure_stays_small(self):
         """The bootstrap's TCB is its runtime plus its imports. It must not
@@ -602,7 +715,7 @@ class TestTheCreationSequenceAndFlags(unittest.TestCase):
                             f"{earlier} must run BEFORE ResumeThread")
 
     def test_the_child_is_created_suspended(self):
-        self.assertIn("CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT", self.text)
+        self.assertIn("CREATE_SUSPENDED | CREATE_NO_WINDOW", self.text)
 
     def test_logon_netcredentials_only_appears_nowhere(self):
         """It keeps the CALLER's token locally and would destroy the very

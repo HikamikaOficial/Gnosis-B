@@ -73,10 +73,14 @@ _JOB_TERMINATION = (
     "            _k32.WaitForSingleObject(self.process, 5000)"
 )
 _BUDGET = "        if len(command) > TRANSPORT_COMMAND_BUDGET:"
-_ENV_BASE = "    env = dict(worker_env)"
+# D3 changed the SHAPE of this leak. The launcher no longer builds the whole
+# environment, so "the Director's environment becomes the base" is now "the
+# allowlist is ignored and every Director variable crosses".
+_ENV_BASE = "    for name in sorted(allowlist):"
 _ISOLATED = '        [str(runtime), "-I", str(bootstrap_script_path()), str(spec_path), digest])'
 _BOOT_EXEC = (
     "                list(spec.argv), executable=str(executable), cwd=str(cwd),\n"
+    "                env=child_environment(spec, dict(os.environ)),\n"
     "                stdin=subprocess.DEVNULL, stdout=out, stderr=err,\n"
     "                shell=False, check=False)"
 )
@@ -140,7 +144,7 @@ MUTANTS: list[Mutant] = [
               "            _k32.WaitForSingleObject(self.process, 5000)"))],
            structural=True),
     Mutant("WM18", "the Director's environment becomes the worker's base",
-           [(LAUNCHER, _ENV_BASE, "    env = dict(director_env)")]),
+           [(LAUNCHER, _ENV_BASE, "    for name in sorted(director_env):")]),
     Mutant("WM19", "the transport budget is not enforced",
            [(LAUNCHER, _BUDGET, "        if False:")]),
     Mutant("WM20", "the bootstrap interpreter stops being isolated (-I dropped)",
@@ -149,12 +153,14 @@ MUTANTS: list[Mutant] = [
     Mutant("WM21", "the bootstrap PATH-searches argv[0] instead of the sealed image",
            [(BOOT, _BOOT_EXEC,
              ("                list(spec.argv), cwd=str(cwd),\n"
+              "                env=child_environment(spec, dict(os.environ)),\n"
               "                stdin=subprocess.DEVNULL, stdout=out, stderr=err,\n"
               "                shell=False, check=False)"))]),
     Mutant("WM22", "the bootstrap runs the logical command through a shell",
            [(BOOT, _BOOT_EXEC,
              ("                list(spec.argv), executable=str(executable), "
               "cwd=str(cwd),\n"
+              "                env=child_environment(spec, dict(os.environ)),\n"
               "                stdin=subprocess.DEVNULL, stdout=out, stderr=err,\n"
               "                shell=True, check=False)"))]),
     Mutant("WM23", "the bootstrap inherits the Director's stdin instead of DEVNULL",
@@ -162,7 +168,44 @@ MUTANTS: list[Mutant] = [
              "                stdout=out, stderr=err,")]),
     Mutant("WM24", "launch_spec_digest is not surfaced for Stage 6 binding",
            [(LAUNCHER, _DIGEST_SURFACED, '        launch_spec_digest="",')]),
-    Mutant("WM25", "LOGON_NETCREDENTIALS_ONLY replaces LOGON_WITH_PROFILE",
+    # D3 hardening. These reintroduce the privilege dependency the review
+    # rejected: a launcher that calls LoadUserProfileW needs SeBackup+SeRestore,
+    # and one that calls CreateProcessWithTokenW needs SeImpersonate. Both are
+    # REACHABLE on this machine, which is exactly why neither may be an
+    # AUTHORIZED DEPENDENCY.
+    Mutant("WM26", "the launcher reintroduces the LoadUserProfileW profile path",
+           [(LAUNCHER, "def _winfail(call: str) -> None:",
+             ("def _load_user_profile(token: object) -> None:\n"
+              "    _userenv.LoadUserProfileW(token, None)\n"
+              "\n"
+              "\ndef _winfail(call: str) -> None:"))]),
+    Mutant("WM27", "the launcher reintroduces LogonUserW",
+           [(LAUNCHER, "def _winfail(call: str) -> None:",
+             ("def _logon(user: str) -> None:\n"
+              "    _a32.LogonUserW(user, None, None, 2, 0, None)\n"
+              "\n"
+              "\ndef _winfail(call: str) -> None:"))]),
+    Mutant("WM28", "the launcher passes an explicit environment block again",
+           [(LAUNCHER,
+             ("                CREATE_SUSPENDED | CREATE_NO_WINDOW,\n"
+              "                None, str(Path(spec.cwd)), ctypes.byref(startup),"),
+             ("                CREATE_SUSPENDED | CREATE_NO_WINDOW "
+              "| CREATE_UNICODE_ENVIRONMENT,\n"
+              "                None, str(Path(spec.cwd)), ctypes.byref(startup),"))]),
+    Mutant("WM29", "the sealed overlay is applied AFTER the seal, so it is unsigned",
+           [(LAUNCHER,
+             ("        spec = replace(spec, environment=tuple(\n"
+              "            sorted(build_worker_environment(\n"
+              "                self._director_env, self.environment_allowlist).items())))\n"
+              "        digest = seal_launch_spec(self.launch_root, spec)"),
+             ("        digest = seal_launch_spec(self.launch_root, spec)\n"
+              "        spec = replace(spec, environment=tuple(\n"
+              "            sorted(build_worker_environment(\n"
+              "                self._director_env, "
+              "self.environment_allowlist).items())))"))]),
+    Mutant("WM30", "a credential-shaped name may ride in the Worker-readable spec",
+           [(SPEC, "            if _CREDENTIAL_SHAPED.search(name):", "            if False:")]),
+    Mutant("WM31", "LOGON_NETCREDENTIALS_ONLY replaces LOGON_WITH_PROFILE",
            [(LAUNCHER, "                LOGON_WITH_PROFILE, str(self.runtime), buffer,",
              ("                LOGON_NETCREDENTIALS_ONLY, str(self.runtime), "
               "buffer,"))], structural=True),

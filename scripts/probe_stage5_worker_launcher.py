@@ -325,6 +325,120 @@ with open(out_path, "w", encoding="utf-8") as fh:
 '''
 
 
+# ---------------------------------------------------------------------------
+# D3: launch from a caller that DOES NOT HOLD SeBackup/SeRestore.
+#
+# This runs as the DIRECTOR, in a disposable child process that permanently
+# removes those two privileges from its OWN token (SE_PRIVILEGE_REMOVED) and
+# then performs a real trusted launch. No machine policy is touched and no
+# other process is affected: the child exits immediately afterwards. If the
+# launch still succeeds, the launcher demonstrably does not depend on them.
+# ---------------------------------------------------------------------------
+PRIVILEGE_DROP_LAUNCH = r'''
+import ctypes, json, sys
+from ctypes import wintypes as W
+
+src, launch_root, tools, blob, work, runtime, sid, user, out_path = sys.argv[1:10]
+sys.path.insert(0, src)
+
+k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+a32 = ctypes.WinDLL("advapi32", use_last_error=True)
+TOKEN_ADJUST_PRIVILEGES = 0x0020
+TOKEN_QUERY = 0x0008
+SE_PRIVILEGE_REMOVED = 0x00000004
+TokenPrivileges = 3
+
+class LUID(ctypes.Structure):
+    _fields_ = [("LowPart", W.DWORD), ("HighPart", ctypes.c_long)]
+
+class LUID_AND_ATTRIBUTES(ctypes.Structure):
+    _fields_ = [("Luid", LUID), ("Attributes", W.DWORD)]
+
+class TOKEN_PRIVILEGES(ctypes.Structure):
+    _fields_ = [("PrivilegeCount", W.DWORD), ("Privileges", LUID_AND_ATTRIBUTES * 1)]
+
+a32.OpenProcessToken.argtypes = [W.HANDLE, W.DWORD, ctypes.POINTER(W.HANDLE)]
+a32.LookupPrivilegeValueW.argtypes = [W.LPCWSTR, W.LPCWSTR, ctypes.POINTER(LUID)]
+a32.AdjustTokenPrivileges.argtypes = [W.HANDLE, W.BOOL,
+                                      ctypes.POINTER(TOKEN_PRIVILEGES), W.DWORD,
+                                      ctypes.c_void_p, ctypes.c_void_p]
+a32.GetTokenInformation.argtypes = [W.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                    W.DWORD, ctypes.POINTER(W.DWORD)]
+a32.LookupPrivilegeNameW.argtypes = [W.LPCWSTR, ctypes.c_void_p, W.LPWSTR,
+                                     ctypes.POINTER(W.DWORD)]
+
+result = {}
+tok = W.HANDLE()
+a32.OpenProcessToken(k32.GetCurrentProcess(),
+                     TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, ctypes.byref(tok))
+
+def held():
+    size = W.DWORD(0)
+    a32.GetTokenInformation(tok, TokenPrivileges, None, 0, ctypes.byref(size))
+    buf = ctypes.create_string_buffer(size.value)
+    a32.GetTokenInformation(tok, TokenPrivileges, buf, size, ctypes.byref(size))
+    count = ctypes.cast(buf, ctypes.POINTER(W.DWORD)).contents.value
+    arr = ctypes.cast(ctypes.addressof(buf) + ctypes.sizeof(W.DWORD),
+                      ctypes.POINTER(LUID_AND_ATTRIBUTES * count)).contents
+    names = []
+    for e in arr:
+        need = W.DWORD(0)
+        a32.LookupPrivilegeNameW(None, ctypes.byref(e.Luid), None, ctypes.byref(need))
+        nb = ctypes.create_unicode_buffer(need.value + 1)
+        need = W.DWORD(need.value + 1)
+        if a32.LookupPrivilegeNameW(None, ctypes.byref(e.Luid), nb, ctypes.byref(need)):
+            names.append(nb.value)
+    return sorted(names)
+
+result["before"] = held()
+for name in ("SeBackupPrivilege", "SeRestorePrivilege"):
+    luid = LUID()
+    if a32.LookupPrivilegeValueW(None, name, ctypes.byref(luid)):
+        tp = TOKEN_PRIVILEGES()
+        tp.PrivilegeCount = 1
+        tp.Privileges[0].Luid = luid
+        tp.Privileges[0].Attributes = SE_PRIVILEGE_REMOVED
+        a32.AdjustTokenPrivileges(tok, False, ctypes.byref(tp), 0, None, None)
+result["after"] = held()
+result["backup_removed"] = "SeBackupPrivilege" not in result["after"]
+result["restore_removed"] = "SeRestorePrivilege" not in result["after"]
+
+from pathlib import Path
+from gnosis.trust.launch_spec import LaunchSpec
+from gnosis.trust.worker_launcher import TrustedWindowsWorkerLauncher, WorkerAccount
+
+launcher = TrustedWindowsWorkerLauncher(
+    account=WorkerAccount(username=user, domain=".", expected_sid=sid,
+                          expected_integrity="Medium"),
+    credential_blob_path=Path(blob), launch_root=Path(launch_root),
+    runtime=Path(runtime), director_env={})
+marker = Path(work) / "d3-priv.json"
+helper = Path(tools) / "worker_probe.py"
+spec = LaunchSpec(launch_id="d3priv", executable=runtime,
+                  argv=(runtime, "-I", str(helper), "identity", str(marker)),
+                  cwd=work, stdout_path=str(Path(work) / "d3priv.out"),
+                  stderr_path=str(Path(work) / "d3priv.err"))
+try:
+    res = launcher.launch(spec)
+    code, timed, cancelled = res.wait(180.0)
+    result["observed_sid"] = res.identity.observed_sid
+    result["integrity"] = res.identity.integrity
+    result["contained"] = res.identity.contained_in_job
+    res.close()
+    result["exit_code"] = code
+    result["launched"] = True
+    if marker.is_file():
+        data = json.loads(marker.read_text(encoding="utf-8"))
+        result["worker_USERPROFILE"] = data.get("USERPROFILE", "")
+        result["worker_sentinel"] = data.get("sentinel_present")
+except Exception as exc:
+    result["launched"] = False
+    result["error"] = type(exc).__name__ + ": " + str(exc)[:200]
+
+Path(out_path).write_text(json.dumps(result), encoding="utf-8")
+'''
+
+
 @dataclass
 class Probe:
     root: Path
@@ -800,6 +914,48 @@ def run_matrix(probe: Probe, password: str) -> None:
     except WorkerLaunchFailed as exc:
         verdict = type(exc).__name__
     check("a wrong expected SID refuses", verdict, "WorkerIdentityMismatch")
+
+    say("")
+    say("T13 — D3: THE LAUNCHER DOES NOT DEPEND ON SeBackup / SeRestore")
+    say("-" * 78)
+    say("   A disposable Director child removes both privileges from its OWN token")
+    say("   (SE_PRIVILEGE_REMOVED) and then performs a real trusted launch. No")
+    say("   machine policy is touched; the child exits immediately afterwards.")
+    script = probe.work / "d3_privilege_drop.py"
+    script.write_text(PRIVILEGE_DROP_LAUNCH, encoding="utf-8")
+    out = probe.work / "d3-privilege.json"
+    proc = subprocess.run(
+        [sys.executable, str(script), str(REPO / "src"), str(probe.launch),
+         str(probe.tools), str(probe.blob), str(probe.work), str(probe.runtime),
+         probe.worker_sid, WORKER_NAME, str(out)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        check=False)
+    if not out.is_file():
+        say(f"   privilege-drop child produced no result: {proc.stderr[:300]}")
+        FAILURES.append("T13 produced no data")
+    else:
+        d3 = json.loads(out.read_text(encoding="utf-8"))
+        say(f"   privileges before                                  : "
+            f"{len(d3.get('before') or [])} held")
+        say(f"   privileges after  removal                          : "
+            f"{len(d3.get('after') or [])} held")
+        check("SeBackupPrivilege removed from the caller", d3.get("backup_removed"),
+              True)
+        check("SeRestorePrivilege removed from the caller", d3.get("restore_removed"),
+              True)
+        check("the trusted launch STILL SUCCEEDS", d3.get("launched"), True)
+        if not d3.get("launched"):
+            say(f"   error: {d3.get('error')}")
+        else:
+            check("observed SID still the worker", d3.get("observed_sid"),
+                  probe.worker_sid)
+            check("integrity still Medium", d3.get("integrity"), "Medium")
+            check("still contained in the job", d3.get("contained"), True)
+            check("child exit code", d3.get("exit_code"), 0)
+            check("worker USERPROFILE still the worker's",
+                  WORKER_NAME.lower() in str(d3.get("worker_USERPROFILE", "")).lower(),
+                  True)
+            check("Director sentinel still absent", d3.get("worker_sentinel"), False)
 
     say("")
     say("T12 — PLAINTEXT SCAN OF EVERYTHING THE PROBE WROTE")
