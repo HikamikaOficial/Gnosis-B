@@ -130,6 +130,14 @@ TRUST_ALLOWLIST: dict[str, str] = {
         "the publisher's whole boundary is the restricted service SID the SCM "
         "grants a process it launched as a service; without this contract there "
         "is no such identity to hold."),
+    "gnosis.trust.orchestration": (
+        "the Director-side trusted seam (F-17 Stage 6) — it freezes a run's "
+        "immutable identity from OBSERVED values and owns the only path to "
+        "PUBLISHABLE. Trusted because a compromise of it would let a run be "
+        "created naming a worker that never ran, or be declared publishable "
+        "without any trusted party having looked at the evidence. Deliberately "
+        "NOT in the publisher's closure: it is the writer's seam, not the "
+        "service's."),
     "gnosis.trust.publisher_service": (
         "the composition root (F-17 Stage 6) — configuration, startup recovery "
         "BEFORE the endpoint exists, then serve. Trusted because it decides the "
@@ -147,7 +155,8 @@ TRUST_ENTRY_POINTS = ("gnosis.trust.anchor", "gnosis.trust.launch",
                       # Stage 6. The composition root is measured as an entry
                       # point because it is what the SCM actually starts, and
                       # its closure is the publisher's real TCB.
-                      "gnosis.trust.publisher_service")
+                      "gnosis.trust.publisher_service",
+                      "gnosis.trust.orchestration")
 
 # ---------------------------------------------------------------------------
 # Internal modules the Trust Plane imports LAZILY, inside a function body.
