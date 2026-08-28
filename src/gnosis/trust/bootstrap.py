@@ -51,6 +51,52 @@ if _SRC_ROOT not in sys.path:
 from gnosis.trust.launch import AuthorityUnavailable
 from gnosis.trust.launch_spec import child_environment, read_sealed_launch_spec
 
+
+def _os_facts() -> tuple[str, str]:
+    """(system_root, profile_root), ASKED OF THE OS — never read from the
+    environment.
+
+    This is the anchor the environment policy validates against, so it may not
+    come from a variable a previous Worker could have persisted.
+    `GetSystemDirectoryW` and `GetUserProfileDirectoryW` are both unprivileged:
+    the second takes THIS PROCESS'S OWN token, which every process may open,
+    and the profile is already loaded because the launcher used
+    LOGON_WITH_PROFILE. Neither is `LoadUserProfileW`, and neither needs
+    SeBackup or SeRestore.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    a32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    userenv = ctypes.WinDLL("userenv", use_last_error=True)
+
+    k32.GetSystemDirectoryW.argtypes = [wintypes.LPWSTR, wintypes.UINT]
+    buffer = ctypes.create_unicode_buffer(260)
+    if not k32.GetSystemDirectoryW(buffer, 260):
+        raise AuthorityUnavailable("GetSystemDirectoryW failed")
+    # ...\System32 -> ...  (the Windows directory)
+    system_root = str(Path(buffer.value).parent)
+
+    a32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD,
+                                     ctypes.POINTER(wintypes.HANDLE)]
+    userenv.GetUserProfileDirectoryW.argtypes = [
+        wintypes.HANDLE, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+    token = wintypes.HANDLE()
+    if not a32.OpenProcessToken(k32.GetCurrentProcess(), 0x0008,
+                                ctypes.byref(token)):
+        raise AuthorityUnavailable("OpenProcessToken(self) failed")
+    try:
+        size = wintypes.DWORD(0)
+        userenv.GetUserProfileDirectoryW(token, None, ctypes.byref(size))
+        profile = ctypes.create_unicode_buffer(size.value)
+        if not userenv.GetUserProfileDirectoryW(token, profile,
+                                                ctypes.byref(size)):
+            raise AuthorityUnavailable("GetUserProfileDirectoryW failed")
+        return system_root, profile.value
+    finally:
+        k32.CloseHandle(token)
+
 # Distinct, documented exit codes. The launcher must be able to tell "the seal
 # failed" from "the real command ran and exited 2", and a single generic
 # failure code would collapse exactly the distinction that matters. Chosen high
@@ -91,6 +137,23 @@ def main(argv: list[str]) -> int:
         return _fail(EXIT_TARGET_INVALID,
                      f"working directory {spec.cwd!r} is not a directory")
 
+    # THE LOGICAL COMMAND'S ENVIRONMENT IS BUILT BY A CLOSED ALLOWLIST.
+    #
+    # This process's own environment comes from the WORKER'S PROFILE, and under
+    # T2 the Worker is compromised: a previous run can persist NODE_OPTIONS,
+    # PYTHONPATH, GIT_CONFIG_GLOBAL, a proxy or a TLS override into
+    # HKCU\Environment, and Windows will faithfully rebuild them for this run.
+    # Forwarding os.environ would carry all of it into the logical command.
+    # `child_environment` therefore keeps a named allowlist and drops everything
+    # else — unknown variable == denied — and validates the profile-scoped paths
+    # against the root the OS just reported.
+    try:
+        system_root, profile_root = _os_facts()
+    except AuthorityUnavailable as exc:
+        return _fail(EXIT_TARGET_INVALID, f"could not establish OS facts: {exc}")
+    env = child_environment(spec, os.environ, profile_root=profile_root,
+                            system_root=system_root)
+
     # THE I/O ENDPOINTS ARE OPENED HERE, BY THIS PROCESS, AS THE WORKER.
     #
     # stdin is DEVNULL, never the Director's console. The logical command is a
@@ -109,16 +172,9 @@ def main(argv: list[str]) -> int:
             # decided by the sealed spec, NEVER by a PATH search over argv[0].
             # `shell=False` is the default and is passed explicitly so reading
             # this line settles the question.
-            # THE CHILD'S ENVIRONMENT IS BUILT HERE, not by the launcher.
-            # This process was started with `lpEnvironment = NULL` under
-            # LOGON_WITH_PROFILE, so `os.environ` IS the Worker's own profile
-            # environment as Windows built it — measured OS-real to carry no
-            # Director state. The sealed overlay adds only the determinism
-            # variables the Director named, and the Worker cannot alter them
-            # because they are inside the digest.
             completed = subprocess.run(
                 list(spec.argv), executable=str(executable), cwd=str(cwd),
-                env=child_environment(spec, dict(os.environ)),
+                env=env,
                 stdin=subprocess.DEVNULL, stdout=out, stderr=err,
                 shell=False, check=False)
     except OSError as exc:

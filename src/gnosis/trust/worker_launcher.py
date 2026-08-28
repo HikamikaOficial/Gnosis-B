@@ -72,7 +72,11 @@ from pathlib import Path
 from typing import Protocol
 
 from gnosis.trust.launch import AuthorityUnavailable, token_integrity
-from gnosis.trust.launch_spec import LaunchSpec, seal_launch_spec
+from gnosis.trust.launch_spec import (
+    OVERLAY_ALLOWED_NAMES,
+    LaunchSpec,
+    seal_launch_spec,
+)
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -461,7 +465,11 @@ def build_worker_environment(
     thought to name; this one can only ever pass what it lists.
     """
     env: dict[str, str] = {}
-    for name in sorted(allowlist):
+    # Intersected with the SPEC's closed overlay set, so a caller that widens
+    # its own allowlist cannot smuggle a name past the policy: the spec would
+    # refuse it anyway, and refusing here makes the rule visible at the place
+    # the decision is taken.
+    for name in sorted(allowlist & OVERLAY_ALLOWED_NAMES):
         value = director_env.get(name)
         if value:
             env[name] = value

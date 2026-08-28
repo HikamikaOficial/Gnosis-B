@@ -22,6 +22,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
 REPO = Path(__file__).resolve().parent.parent
 if str(REPO / "src") not in sys.path:
@@ -30,10 +31,12 @@ if str(REPO / "src") not in sys.path:
 from gnosis.trust.launch import AuthorityUnavailable
 from gnosis.trust.launch_spec import (
     MAX_LAUNCH_SPEC_BYTES,
+    OVERLAY_ALLOWED_NAMES,
     LaunchSpec,
     LaunchSpecInvalid,
     LaunchSpecUnsealed,
     child_environment,
+    credential_shaped,
     launch_spec_path,
     read_sealed_launch_spec,
     seal_launch_spec,
@@ -355,10 +358,12 @@ class TestTheEnvironmentAllowlist(unittest.TestCase):
                        "GNOSIS_SENTINEL", "USERPROFILE"):
             self.assertNotIn(leaked, env)
 
-    def test_only_names_in_the_allowlist_can_cross(self):
-        env = build_worker_environment({"A": "1", "B": "2"},
-                                       allowlist=frozenset({"A"}))
-        self.assertEqual(env, {"A": "1"})
+    def test_only_names_in_the_closed_overlay_set_can_cross(self):
+        """Even a caller that widens its OWN allowlist cannot smuggle a name
+        past the spec's closed overlay set."""
+        env = build_worker_environment({"A": "1", "PYTHONUTF8": "2"},
+                                       allowlist=frozenset({"A", "PYTHONUTF8"}))
+        self.assertEqual(env, {"PYTHONUTF8": "2"})
 
     def test_an_empty_director_value_does_not_cross(self):
         """An empty variable is unset for every consumer, so carrying one over
@@ -390,17 +395,162 @@ class TestTheEnvironmentAllowlist(unittest.TestCase):
                 with self.assertRaises(LaunchSpecInvalid, msg=repr(bad)[:40]):
                     _spec(root, environment=bad)
 
-    def test_the_child_environment_is_the_worker_profile_plus_the_seal(self):
+    def test_the_sealed_overlay_may_not_reintroduce_a_dangerous_variable(self):
+        """The closed set is the security model. A name the base policy drops
+        cannot come back in through the overlay."""
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            for bad in ("NODE_OPTIONS", "NODE_PATH", "PYTHONPATH", "PYTHONHOME",
+                        "PYTHONSTARTUP", "GIT_CONFIG_GLOBAL", "GIT_TEMPLATE_DIR",
+                        "SSL_CERT_FILE", "SSLKEYLOGFILE", "HTTPS_PROXY",
+                        "NO_PROXY", "USERPROFILE", "ANYTHING_ELSE"):
+                with self.assertRaises(LaunchSpecInvalid, msg=bad):
+                    _spec(Path(tmp), environment=((bad, "x"),))
+
+    def test_a_sealed_path_entry_must_be_absolute(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            _spec(Path(tmp), environment=(("PATH", r"C:\tools;C:\more"),))
+            for bad in (r"C:\ok;relative\bad", r"\\server\share", "notapath"):
+                with self.assertRaises(LaunchSpecInvalid, msg=bad):
+                    _spec(Path(tmp), environment=(("PATH", bad),))
+
+
+class TestTheClosedChildEnvironmentPolicy(unittest.TestCase):
+    """The FINAL blocking finding, repaired.
+
+    The bootstrap's own environment no longer comes from the Director — but it
+    comes from the WORKER'S PROFILE, and under T2 the Worker is compromised. A
+    previous run can persist variables into `HKCU\\Environment` that Windows
+    faithfully rebuilds for the next run. Forwarding `os.environ` would carry
+    all of it into the logical command.
+
+    The rule is UNKNOWN VARIABLE == DENIED.
+    """
+
+    ROOT = r"C:\Users\Worker"
+    SYS = r"C:\Windows"
+
+    POISON: ClassVar[dict[str, str]] = {
+        "NODE_OPTIONS": "--require C:/worker/evil.js",
+        "NODE_PATH": r"C:\worker\modules",
+        "PYTHONPATH": r"C:\worker\py",
+        "PYTHONHOME": r"C:\worker\py",
+        "PYTHONSTARTUP": r"C:\worker\startup.py",
+        "GIT_CONFIG": r"C:\worker\gitconfig",
+        "GIT_CONFIG_GLOBAL": r"C:\worker\gitconfig",
+        "GIT_CONFIG_SYSTEM": r"C:\worker\gitconfig",
+        "GIT_TEMPLATE_DIR": r"C:\worker\templates",
+        "SSL_CERT_FILE": r"C:\worker\ca.pem",
+        "SSL_CERT_DIR": r"C:\worker\ca",
+        "SSLKEYLOGFILE": r"C:\worker\keys.log",
+        "HTTP_PROXY": "http://127.0.0.1:9",
+        "HTTPS_PROXY": "http://127.0.0.1:9",
+        "ALL_PROXY": "http://127.0.0.1:9",
+        "NO_PROXY": "",
+        "CLAUDE_CODE_MESSAGING_TOKEN": "stolen",
+        "CLAUDE_CODE_SESSION_ID": "stolen",
+        "ANTHROPIC_API_KEY": "stolen",
+        "OPENAI_API_KEY": "stolen",
+        "CODEX_HOME": r"C:\worker\codex",
+        "GNOSIS_ARBITRARY_SENTINEL": "planted-by-a-previous-run",
+    }
+
+    def _build(self, **extra: str) -> dict[str, str]:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             spec = _spec(Path(tmp), environment=(("PYTHONUTF8", "1"),))
-            own = {"USERPROFILE": r"C:\Users\Worker", "PYTHONUTF8": "0"}
-            env = child_environment(spec, own)
-            self.assertEqual(env["USERPROFILE"], r"C:\Users\Worker")
-            self.assertEqual(env["PYTHONUTF8"], "1", "the sealed value wins")
+        own = {
+            "USERPROFILE": self.ROOT,
+            "APPDATA": self.ROOT + r"\AppData\Roaming",
+            "LOCALAPPDATA": self.ROOT + r"\AppData\Local",
+            "TEMP": self.ROOT + r"\AppData\Local\Temp",
+            "TMP": self.ROOT + r"\AppData\Local\Temp",
+            "USERNAME": "Worker",
+            "NUMBER_OF_PROCESSORS": "8",
+            "PATH": r"C:\worker\bin;C:\Windows\system32",
+            **self.POISON, **extra,
+        }
+        return child_environment(spec, own, profile_root=self.ROOT,
+                                 system_root=self.SYS)
+
+    def test_every_poisoned_variable_is_absent(self):
+        env = self._build()
+        for name in self.POISON:
+            self.assertNotIn(name, env, f"{name} survived the allowlist")
+
+    def test_the_result_is_exactly_the_policy(self):
+        env = self._build()
+        self.assertEqual(sorted(env), sorted([
+            "APPDATA", "COMSPEC", "LOCALAPPDATA", "NUMBER_OF_PROCESSORS", "PATH",
+            "PATHEXT", "PYTHONUTF8", "SystemDrive", "SystemRoot", "TEMP", "TMP",
+            "USERNAME", "USERPROFILE", "windir"]))
+
+    def test_path_is_built_not_inherited(self):
+        env = self._build()
+        self.assertNotIn(r"C:\worker\bin", env["PATH"])
+        self.assertIn(r"C:\Windows\system32", env["PATH"])
+
+    def test_a_sealed_path_is_prepended_to_the_system_path(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            spec = _spec(Path(tmp), environment=(("PATH", r"C:\trusted\tools"),))
+        env = child_environment(spec, {"PATH": r"C:\worker\bin"},
+                                profile_root=self.ROOT, system_root=self.SYS)
+        self.assertTrue(env["PATH"].startswith(r"C:\trusted\tools;"))
+        self.assertNotIn(r"C:\worker\bin", env["PATH"])
+
+    def test_os_facts_are_never_taken_from_the_environment(self):
+        env = self._build(SystemRoot=r"C:\worker\fakewindows",
+                          windir=r"C:\worker\fakewindows",
+                          COMSPEC=r"C:\worker\evil.exe",
+                          PATHEXT=".EVIL")
+        self.assertEqual(env["SystemRoot"], self.SYS)
+        self.assertEqual(env["windir"], self.SYS)
+        self.assertEqual(env["COMSPEC"], self.SYS + r"\system32\cmd.exe")
+        self.assertNotIn(".EVIL", env["PATHEXT"])
+
+    def test_a_profile_path_pointing_outside_the_profile_is_dropped(self):
+        """Redirection, not correction: a USERPROFILE the Worker moved is not
+        silently repaired into something plausible, it is simply not passed."""
+        for redirected in (r"C:\worker\elsewhere", r"C:\Users\Worker2",
+                           r"C:\Users", r"\\server\share", "relative"):
+            env = self._build(USERPROFILE=redirected)
+            self.assertNotIn("USERPROFILE", env, redirected)
+
+    def test_a_sibling_prefix_is_not_inside_the_profile(self):
+        """`C:\\Users\\Worker2` starts with `C:\\Users\\Worker` as a STRING and
+        is a different profile, so the comparison is component-wise."""
+        env = self._build(APPDATA=r"C:\Users\Worker2\AppData\Roaming")
+        self.assertNotIn("APPDATA", env)
+
+    def test_a_genuine_profile_path_survives(self):
+        env = self._build()
+        self.assertEqual(env["USERPROFILE"], self.ROOT)
+        self.assertEqual(env["APPDATA"], self.ROOT + r"\AppData\Roaming")
+
+    def test_case_and_separator_differences_do_not_defeat_the_check(self):
+        env = self._build(USERPROFILE=r"c:/users/worker/")
+        self.assertIn("USERPROFILE", env)
+
+    def test_the_sealed_overlay_still_applies_last(self):
+        env = self._build()
+        self.assertEqual(env["PYTHONUTF8"], "1")
 
     def test_the_default_allowlist_carries_no_credential_shaped_name(self):
         for name in DEFAULT_ENVIRONMENT_ALLOWLIST:
             self.assertNotRegex(name, r"(?i)(KEY|TOKEN|SECRET|PASS|CRED|AUTH|SESSION)")
+
+    def test_the_overlay_policy_itself_carries_no_credential_shaped_name(self):
+        """DEFENCE IN DEPTH THAT GUARDS THE POLICY, NOT EACH VALUE.
+
+        A per-value credential check would be unreachable — the closed set
+        rejects every unlisted name before any value is examined — and an
+        unreachable check is the RM13 defect this project has already paid for
+        once. A mutation run proved it: with the closed set in place, deleting
+        the per-value check changed nothing. So the guard was moved onto the SET,
+        where it is live: it fires the moment someone widens the policy.
+        """
+        self.assertEqual(credential_shaped(OVERLAY_ALLOWED_NAMES), [])
+        self.assertEqual(
+            credential_shaped(frozenset({"PYTHONUTF8", "CLAUDE_SESSION_TOKEN"})),
+            ["CLAUDE_SESSION_TOKEN"])
 
 
 class TestTheLauncherDependsOnNoExtraPrivilege(unittest.TestCase):

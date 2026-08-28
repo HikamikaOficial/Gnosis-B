@@ -53,7 +53,9 @@ profile — measured OS-real, and the reason the launcher no longer calls
 from __future__ import annotations
 
 import json
+import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -78,7 +80,8 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 
 _FIELDS = frozenset({"schema", "launch_id", "executable", "argv", "cwd",
-                     "stdout_path", "stderr_path", "environment", "run_id"})
+                     "stdout_path", "stderr_path", "environment",
+                     "environment_policy_version", "run_id"})
 
 # The sealed environment overlay is for DETERMINISM, never for credentials. The
 # LaunchSpec is Worker-READABLE by design, so anything placed in it is readable
@@ -91,6 +94,62 @@ _CREDENTIAL_SHAPED = re.compile(
 _SAFE_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 MAX_ENVIRONMENT_ENTRIES = 16
 MAX_ENVIRONMENT_VALUE = 1024
+
+# ---------------------------------------------------------------------------
+# THE LOGICAL CHILD'S ENVIRONMENT POLICY.
+#
+# Versioned because a change to WHICH NAMES may cross the boundary must not be
+# invisible to provenance. The version travels inside the LaunchSpec and is
+# therefore inside `launch_spec_digest`.
+# ---------------------------------------------------------------------------
+ENVIRONMENT_POLICY_VERSION = "gnosis.trust.worker_env.v1"
+
+# Taken from the Worker's environment ONLY IF the value lies inside the profile
+# root the OS reported. A previous run can persist any of these into
+# HKCU\Environment pointing anywhere it can write.
+PROFILE_SCOPED_NAMES: frozenset[str] = frozenset({
+    "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP",
+})
+
+# Inherited as-is. Every name here is NON-PATH, so redirection is not a risk;
+# path-valued machine variables (ProgramFiles, ProgramData, ...) are
+# deliberately ABSENT because HKCU\Environment can override them for this user
+# and the measured toolchain does not need them.
+PLAIN_INHERITED_NAMES: frozenset[str] = frozenset({
+    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "USERNAME", "USERDOMAIN",
+})
+
+DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD"
+
+# The ONLY names the sealed overlay may set. Closed, so the overlay can never
+# reintroduce a dangerous variable the base policy dropped: adding one here is
+# a deliberate, reviewable act rather than a value a caller can pass.
+OVERLAY_ALLOWED_NAMES: frozenset[str] = frozenset({
+    "PYTHONUTF8", "PYTHONIOENCODING", "PATH",
+})
+
+
+def credential_shaped(names: frozenset[str]) -> list[str]:
+    """The names in `names` that look like a credential.
+
+    THE CLOSED SET IS THE SECURITY MODEL; this is defence in depth, and it
+    guards the POLICY rather than each value. A per-value check would be
+    unreachable — the closed set rejects every unlisted name before any value
+    is examined — and an unreachable check is the RM13 defect the project has
+    already paid for once. Guarding the SET instead makes it live: it fails the
+    moment someone widens `OVERLAY_ALLOWED_NAMES` to admit a credential.
+    """
+    return sorted(name for name in names if _CREDENTIAL_SHAPED.search(name))
+
+
+# Enforced AT IMPORT. The LaunchSpec is Worker-readable, so a credential-shaped
+# name in the overlay policy would hand the Worker a credential; a module that
+# would do that must not load at all.
+if credential_shaped(OVERLAY_ALLOWED_NAMES):
+    raise AuthorityUnavailable(
+        "OVERLAY_ALLOWED_NAMES contains credential-shaped names "
+        f"{credential_shaped(OVERLAY_ALLOWED_NAMES)}; the LaunchSpec is "
+        "Worker-readable and may never carry a credential")
 
 
 class LaunchSpecInvalid(AuthorityUnavailable):
@@ -146,6 +205,10 @@ class LaunchSpec:
     # NEVER A CREDENTIAL: the spec is Worker-readable, and a credential-shaped
     # NAME is refused by construction below.
     environment: tuple[tuple[str, str], ...] = ()
+    # WHICH NAMES may cross the boundary is part of the launch INTENT, so a
+    # change to the policy must not be invisible to provenance. It rides in
+    # the spec and is therefore inside launch_spec_digest.
+    environment_policy_version: str = ENVIRONMENT_POLICY_VERSION
     run_id: str | None = None    # binding for Stage 6; never worker-supplied
     schema: str = LAUNCH_SPEC_SCHEMA
 
@@ -194,15 +257,30 @@ class LaunchSpec:
             name, value = entry
             if not isinstance(name, str) or not _SAFE_ENV_NAME.match(name):
                 raise LaunchSpecInvalid(f"environment name {name!r} is not a safe name")
-            if _CREDENTIAL_SHAPED.search(name):
+            if not isinstance(value, str) or "\0" in value:
+                raise LaunchSpecInvalid(f"environment value for {name!r} is invalid")
+            if name not in OVERLAY_ALLOWED_NAMES:
+                # THE CLOSED SET IS THE SECURITY MODEL. Unknown name == denied.
+                # It is what stops the overlay reintroducing a variable the base
+                # policy dropped — NODE_OPTIONS, PYTHONPATH, GIT_CONFIG_GLOBAL
+                # and every name nobody thought of.
                 raise LaunchSpecInvalid(
-                    f"environment name {name!r} looks like a credential; the "
-                    "LaunchSpec is Worker-readable and may never carry one")
+                    f"environment name {name!r} is not in the sealed overlay's "
+                    f"allowed set {sorted(OVERLAY_ALLOWED_NAMES)}; the overlay may "
+                    "not reintroduce a variable the base policy drops")
+            if name == "PATH":
+                # A sealed PATH is the ONLY way a directory reaches the logical
+                # command's search path, so every entry must be somewhere a
+                # reader can locate: absolute and drive-qualified, never
+                # relative, never UNC.
+                for element in (v for v in value.split(";") if v):
+                    if not _is_absolute_windows_path(element):
+                        raise LaunchSpecInvalid(
+                            f"sealed PATH entry {element!r} is not an absolute "
+                            "drive-qualified path")
             if name in seen:
                 raise LaunchSpecInvalid(f"environment name {name!r} appears twice")
             seen.add(name)
-            if not isinstance(value, str) or "\x00" in value:
-                raise LaunchSpecInvalid(f"environment value for {name!r} is invalid")
             if len(value) > MAX_ENVIRONMENT_VALUE:
                 raise LaunchSpecInvalid(f"environment value for {name!r} is too long")
 
@@ -212,6 +290,7 @@ class LaunchSpec:
                 "cwd": self.cwd, "stdout_path": self.stdout_path,
                 "stderr_path": self.stderr_path,
                 "environment": [list(pair) for pair in self.environment],
+                "environment_policy_version": self.environment_policy_version,
                 "run_id": self.run_id}
 
     def digest(self) -> str:
@@ -262,22 +341,102 @@ class LaunchSpec:
                    argv=tuple(argv), cwd=data["cwd"],
                    stdout_path=data["stdout_path"], stderr_path=data["stderr_path"],
                    environment=tuple(pairs),
+                   environment_policy_version=data["environment_policy_version"],
                    run_id=data.get("run_id"), schema=data["schema"])
 
 
-def child_environment(spec: LaunchSpec,
-                      own_environment: dict[str, str]) -> dict[str, str]:
-    """The logical command's environment: the WORKER's own, plus the seal.
+def _canonical(path: str) -> str:
+    """A comparable form. Deliberately does NOT resolve links: the caller wants
+    to know where a value points as written, and a resolve would follow a
+    junction the Worker planted straight past the check."""
+    return os.path.normcase(os.path.normpath(path)).rstrip("\\")
 
-    `own_environment` is the environment the bootstrap itself was given, which
-    under `LOGON_WITH_PROFILE` with `lpEnvironment = NULL` is the WORKER's
-    profile environment, built by Windows — measured OS-real to contain no
-    Director state. The sealed overlay adds only the determinism variables the
-    Director named, and the Worker cannot alter them because the spec is sealed.
+
+def _inside(root: str, value: str) -> bool:
+    """True if `value` is `root` or lies beneath it.
+
+    Compared component-wise, not by string prefix: `C:\\Users\\Bob2` starts with
+    `C:\\Users\\Bob` as a string and is a different profile.
     """
-    env = dict(own_environment)
-    for name, value in spec.environment:
-        env[name] = value
+    if not _is_absolute_windows_path(value):
+        return False
+    root_parts = _canonical(root).split("\\")
+    value_parts = _canonical(value).split("\\")
+    return value_parts[: len(root_parts)] == root_parts
+
+
+def deterministic_path(system_root: str, trusted_entries: str = "") -> str:
+    """PATH is BUILT, never inherited.
+
+    The Worker's profile PATH is attacker-controlled across runs: a previous
+    run can persist entries into `HKCU\\Environment` that point at anything it
+    can write. So PATH is constructed from the OS's own Windows directory, and
+    the only additions are the trusted tool directories the Director SEALED —
+    which the Worker cannot edit. No worktree, no profile bin directory, no
+    TEMP, no current directory.
+    """
+    root = system_root.rstrip("\\")
+    system = [f"{root}\\system32", root, f"{root}\\System32\\Wbem",
+              f"{root}\\System32\\WindowsPowerShell\\v1.0"]
+    extra = [entry for entry in trusted_entries.split(";") if entry]
+    return ";".join([*extra, *system])
+
+
+def child_environment(spec: LaunchSpec, own_environment: Mapping[str, str], *,
+                      profile_root: str, system_root: str) -> dict[str, str]:
+    """The logical command's environment, built by a CLOSED ALLOWLIST.
+
+    WHY THIS IS NOT A COPY. The bootstrap's own environment no longer comes
+    from the Director — that was finding E1, repaired — but it now comes from
+    the WORKER'S PROFILE, and under the T2 threat model the Worker is
+    compromised. A previous run can persist variables into `HKCU\\Environment`
+    that Windows will faithfully rebuild for the next run: `NODE_OPTIONS`
+    loading a script, `PYTHONPATH` shadowing a module, `GIT_CONFIG_GLOBAL`
+    redirecting configuration, a proxy or TLS override redirecting traffic.
+    Forwarding `os.environ` would carry all of it into the logical command and
+    quietly defeat the sealed launch.
+
+    So the rule is UNKNOWN VARIABLE == DENIED, not "denied if the name looks
+    dangerous". A deny-list can only ever exclude what somebody thought of; the
+    credential-shaped-name filter that also exists is defence in depth on top of
+    this, never a substitute for it.
+
+    Three sources, and nothing else:
+
+      OS FACTS       SystemRoot / SystemDrive / windir / COMSPEC / PATH /
+                     PATHEXT come from `system_root`, which the bootstrap asked
+                     the OS for. They are not read from the environment at all,
+                     so the Worker cannot redirect them.
+      PROFILE VALUES USERPROFILE / APPDATA / LOCALAPPDATA / TEMP / TMP are taken
+                     from the Worker's own environment AND REQUIRED TO LIE
+                     INSIDE the profile root the OS reported. A value pointing
+                     anywhere else is dropped, not corrected.
+      SEALED OVERLAY the determinism variables the Director named, applied last.
+                     Their names are constrained to a closed set at seal time,
+                     so the overlay can never reintroduce a dangerous variable
+                     the base policy dropped.
+    """
+    env: dict[str, str] = {}
+    root = system_root.rstrip("\\")
+    env["SystemRoot"] = root
+    env["windir"] = root
+    env["SystemDrive"] = root[:2]
+    env["COMSPEC"] = f"{root}\\system32\\cmd.exe"
+    env["PATHEXT"] = DEFAULT_PATHEXT
+
+    for name in sorted(PROFILE_SCOPED_NAMES):
+        value = own_environment.get(name)
+        if value and _inside(profile_root, value):
+            env[name] = value
+
+    for name in sorted(PLAIN_INHERITED_NAMES):
+        value = own_environment.get(name)
+        if value:
+            env[name] = value
+
+    overlay = dict(spec.environment)
+    env["PATH"] = deterministic_path(root, overlay.pop("PATH", ""))
+    env.update(overlay)
     return env
 
 

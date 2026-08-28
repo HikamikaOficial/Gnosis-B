@@ -76,11 +76,11 @@ _BUDGET = "        if len(command) > TRANSPORT_COMMAND_BUDGET:"
 # D3 changed the SHAPE of this leak. The launcher no longer builds the whole
 # environment, so "the Director's environment becomes the base" is now "the
 # allowlist is ignored and every Director variable crosses".
-_ENV_BASE = "    for name in sorted(allowlist):"
+_ENV_BASE = "    for name in sorted(allowlist & OVERLAY_ALLOWED_NAMES):"
 _ISOLATED = '        [str(runtime), "-I", str(bootstrap_script_path()), str(spec_path), digest])'
 _BOOT_EXEC = (
     "                list(spec.argv), executable=str(executable), cwd=str(cwd),\n"
-    "                env=child_environment(spec, dict(os.environ)),\n"
+    "                env=env,\n"
     "                stdin=subprocess.DEVNULL, stdout=out, stderr=err,\n"
     "                shell=False, check=False)"
 )
@@ -203,9 +203,38 @@ MUTANTS: list[Mutant] = [
               "            sorted(build_worker_environment(\n"
               "                self._director_env, "
               "self.environment_allowlist).items())))"))]),
-    Mutant("WM30", "a credential-shaped name may ride in the Worker-readable spec",
-           [(SPEC, "            if _CREDENTIAL_SHAPED.search(name):", "            if False:")]),
-    Mutant("WM31", "LOGON_NETCREDENTIALS_ONLY replaces LOGON_WITH_PROFILE",
+    Mutant("WM30", "a credential-shaped name is admitted into the overlay policy",
+           [(SPEC, '    "PYTHONUTF8", "PYTHONIOENCODING", "PATH",',
+             '    "PYTHONUTF8", "PYTHONIOENCODING", "PATH", "CLAUDE_SESSION_TOKEN",')]),
+    # Environment hardening. The bootstrap's own environment now comes from the
+    # WORKER'S PROFILE, which a previous run can poison persistently, so the
+    # logical child's environment must be a CLOSED ALLOWLIST rather than a copy.
+    Mutant("WM32", "the logical child gets a copy of the whole worker environment",
+           [(SPEC, "    env: dict[str, str] = {}\n    root = system_root.rstrip",
+             ("    env: dict[str, str] = dict(own_environment)\n"
+              "    root = system_root.rstrip"))]),
+    Mutant("WM33", "an unknown variable passes the base allowlist",
+           [(SPEC, "    for name in sorted(PLAIN_INHERITED_NAMES):",
+             "    for name in sorted(own_environment):")]),
+    Mutant("WM34", "PATH is taken from the worker profile instead of being built",
+           [(SPEC, '    env["PATH"] = deterministic_path(root, overlay.pop("PATH", ""))',
+             '    env["PATH"] = own_environment.get("PATH", "")')]),
+    Mutant("WM35", "a profile path pointing outside the worker root is accepted",
+           [(SPEC, "        if value and _inside(profile_root, value):",
+             "        if value:")]),
+    Mutant("WM36", "a sibling prefix counts as inside the profile root",
+           [(SPEC, "    return value_parts[: len(root_parts)] == root_parts",
+             "    return _canonical(value).startswith(_canonical(root))")]),
+    Mutant("WM37", "the sealed overlay may set any name again",
+           [(SPEC, "            if name not in OVERLAY_ALLOWED_NAMES:",
+             "            if False:")]),
+    Mutant("WM38", "the environment policy version is not bound to the launch",
+           [(SPEC, '                "environment_policy_version": self.environment_policy_version,',
+             "")]),
+    Mutant("WM39", "OS facts are taken from the worker environment",
+           [(SPEC, '    env["SystemRoot"] = root',
+             '    env["SystemRoot"] = own_environment.get("SystemRoot", root)')]),
+    Mutant("WM40", "LOGON_NETCREDENTIALS_ONLY replaces LOGON_WITH_PROFILE",
            [(LAUNCHER, "                LOGON_WITH_PROFILE, str(self.runtime), buffer,",
              ("                LOGON_NETCREDENTIALS_ONLY, str(self.runtime), "
               "buffer,"))], structural=True),

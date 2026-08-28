@@ -209,6 +209,44 @@ if mode == "identity":
     k32.IsProcessInJob(k32.GetCurrentProcess(), None, ctypes.byref(injob))
     result["in_a_job"] = bool(injob.value)
 
+elif mode == "poison":
+    # AS THE WORKER: persist adversarial variables into this user's own
+    # HKCU\Environment. Windows rebuilds that into the process environment on
+    # the NEXT LOGON_WITH_PROFILE launch, which is exactly the cross-run
+    # persistence the closed allowlist has to survive.
+    import winreg
+    names = json.loads(sys.argv[3])
+    written = []
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
+                        winreg.KEY_SET_VALUE) as key:
+        for name, value in names.items():
+            try:
+                winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+                written.append(name)
+            except Exception as exc:
+                written.append(name + ":ERROR:" + type(exc).__name__)
+    result["written"] = written
+
+elif mode == "readback":
+    # AS THE WORKER: what does HKCU\Environment actually hold now, and what
+    # does THIS PROCESS (the logical child) actually see?
+    import winreg
+    names = json.loads(sys.argv[3])
+    persisted = {}
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
+                        winreg.KEY_READ) as key:
+        for name in names:
+            try:
+                persisted[name] = winreg.QueryValueEx(key, name)[0]
+            except OSError:
+                persisted[name] = None
+    result["persisted"] = {k: (v is not None) for k, v in persisted.items()}
+    result["in_child_env"] = {k: (k in os.environ) for k in names}
+    result["child_env_names"] = sorted(os.environ)
+    result["PATH"] = os.environ.get("PATH", "")
+    result["USERPROFILE"] = os.environ.get("USERPROFILE", "")
+    result["APPDATA"] = os.environ.get("APPDATA", "")
+
 elif mode == "denied":
     targets = json.loads(sys.argv[3])
     acc = {}
@@ -914,6 +952,94 @@ def run_matrix(probe: Probe, password: str) -> None:
     except WorkerLaunchFailed as exc:
         verdict = type(exc).__name__
     check("a wrong expected SID refuses", verdict, "WorkerIdentityMismatch")
+
+    say("")
+    say("T14 — CROSS-RUN WORKER ENVIRONMENT POISONING")
+    say("-" * 78)
+    say("   Run A: the Worker persists adversarial variables into its OWN")
+    say("   HKCU\\Environment. The job is terminated. Run B launches again through")
+    say("   the real launcher, so Windows rebuilds the profile environment from")
+    say("   that same registry key.")
+    POISON = {
+        "NODE_OPTIONS": "--require C:/worker/evil.js",
+        "NODE_PATH": r"C:\worker\modules",
+        "PYTHONPATH": r"C:\worker\py",
+        "PYTHONHOME": r"C:\worker\py",
+        "PYTHONSTARTUP": r"C:\worker\startup.py",
+        "GIT_CONFIG": r"C:\worker\gitconfig",
+        "GIT_CONFIG_GLOBAL": r"C:\worker\gitconfig",
+        "GIT_CONFIG_SYSTEM": r"C:\worker\gitconfig",
+        "GIT_TEMPLATE_DIR": r"C:\worker\templates",
+        "SSL_CERT_FILE": r"C:\worker\ca.pem",
+        "SSL_CERT_DIR": r"C:\worker\ca",
+        "SSLKEYLOGFILE": r"C:\worker\keys.log",
+        "HTTP_PROXY": "http://127.0.0.1:9",
+        "HTTPS_PROXY": "http://127.0.0.1:9",
+        "ALL_PROXY": "http://127.0.0.1:9",
+        "CLAUDE_CODE_MESSAGING_TOKEN": "planted",
+        "CLAUDE_CODE_SESSION_ID": "planted",
+        "ANTHROPIC_API_KEY": "planted",
+        "OPENAI_API_KEY": "planted",
+        "CODEX_HOME": r"C:\worker\codex",
+        "GNOSIS_ARBITRARY_SENTINEL": "planted-by-run-A",
+        "PATH": r"C:\worker\bin",
+    }
+    _, code_a, poison_data, err_a = probe.run_worker(
+        "t14a", ["poison", json.dumps(POISON)])
+    check("run A persisted the variables", code_a, 0)
+    if not poison_data:
+        say(f"   run A produced no data: {err_a[:200]}")
+        FAILURES.append("T14 run A produced no data")
+    else:
+        say(f"   variables persisted into HKCU\\Environment: "
+            f"{len(poison_data.get('written') or [])}")
+
+    count_between = (
+        "(Get-CimInstance Win32_Process | Where-Object { $_.GetOwner().User -eq "
+        f"'{WORKER_NAME}' }}).Count")
+    alive = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", count_between],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        check=False)
+    check("worker processes alive between runs", (alive.stdout or "0").strip() or "0",
+          "0")
+
+    _, code_b, back, err_b = probe.run_worker(
+        "t14b", ["readback", json.dumps(sorted(POISON))])
+    check("run B launched", code_b, 0)
+    if not back:
+        say(f"   run B produced no data: {err_b[:200]}")
+        FAILURES.append("T14 run B produced no data")
+    else:
+        persisted = back.get("persisted") or {}
+        in_child = back.get("in_child_env") or {}
+        survived = sorted(n for n, present in persisted.items() if present)
+        say(f"   still present in HKCU\\Environment at run B : {len(survived)} of "
+            f"{len(POISON)}")
+        say("   (that is the proof the poisoning REALLY persisted across the run;")
+        say("    Windows rebuilds exactly this key into the profile environment)")
+        check("at least one poisoned variable persisted", len(survived) > 0, True)
+        # PATH is deliberately EXCLUDED from the name-absence check, and the
+        # distinction matters: PATH must EXIST in the child (it is built
+        # deterministically), so the property for it is not "the name is
+        # absent" but "the poisoned VALUE did not survive" — asserted
+        # separately below. An earlier version of this check lumped them
+        # together and reported a failure the code did not have.
+        leaked = sorted(n for n, present in in_child.items()
+                        if present and n != "PATH")
+        check("poisoned NAMES reaching the LOGICAL CHILD", leaked, [])
+        check("PATH exists in the child (it is built, not inherited)",
+              in_child.get("PATH"), True)
+        say(f"   logical child environment size            : "
+            f"{len(back.get('child_env_names') or [])} variables")
+        say(f"   logical child PATH                        : "
+            f"{str(back.get('PATH', ''))[:90]}")
+        check("worker PATH entry reached the child",
+              r"C:\worker\bin".lower() in str(back.get("PATH", "")).lower(), False)
+        check("child USERPROFILE still the worker's",
+              WORKER_NAME.lower() in str(back.get("USERPROFILE", "")).lower(), True)
+        check("child APPDATA still the worker's",
+              WORKER_NAME.lower() in str(back.get("APPDATA", "")).lower(), True)
 
     say("")
     say("T13 — D3: THE LAUNCHER DOES NOT DEPEND ON SeBackup / SeRestore")
