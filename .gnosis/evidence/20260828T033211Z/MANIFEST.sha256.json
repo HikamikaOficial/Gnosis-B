@@ -1,0 +1,13 @@
+{
+  "bundle_digest": "2e64ef1cc50657ee5650f6b537de56006c99bd0014e52a651d0d18c4f0da0348",
+  "files": {
+    "STAGE5-D3-RESULTS.txt": "869133f5a9c2ebb4d06427abd9c393ed5d63a6c673391b6243bf1ce118459c6b",
+    "stage5_d3_experiment.txt": "b720c3b65b9b55d0dbff8258d398f48d2421704e318030c32c7e671929779723",
+    "stage5_d3_fresh_checkout.txt": "44cf341175da1f0fbc1632296c65de68dc8337322df03c74272deb75abdc2890",
+    "stage5_d3_full_suite.txt": "cec605749371c1065e6dd23f82a1d47a8c67a7232952d24d744dbce6c3478e66",
+    "stage5_d3_mutation.txt": "f1afedbc55d48f74dbdbad9a078538803501539ce7170f5877a72e046824aa91",
+    "stage5_d3_osreal_probe.txt": "b4ed70c0c26fad54aa5c82fdf9875ed2a2b16fcb21a20531352e587542c1f5ce"
+  },
+  "note": "SHA-256 of every file in this bundle. bundle_digest is one hash over the whole map. Re-derive it with verify_bundle(): any file added, removed or changed after capture is detected. The manifest cannot hash itself, so it is the one file not listed; a cryptographic signature over bundle_digest \u2014 which would also stop an editor from recomputing this manifest \u2014 needs key management that is out of scope and is a declared limitation, not a claim.",
+  "unlisted": "MANIFEST.sha256.json"
+}

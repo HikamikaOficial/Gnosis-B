@@ -1898,3 +1898,99 @@ The bundle's EXTERNAL ANCHOR, recorded here outside the bundle it protects
 (L-0059):
 
     bundle_digest  73b5b7423450db87b959b2a5ed985798c9ef7585a970cf7ba7113f5a87223a11
+
+## Stage-5 D3 addendum — the launcher depends on no extra privilege (2026-08-28)
+
+The Stage-5 remediation was approved with ONE blocking finding. The launcher
+called `LogonUserW` + `LoadUserProfileW` to build the Worker's environment, which
+made `SeBackupPrivilege` and `SeRestorePrivilege` a permanent architectural
+requirement. Those privileges being present on this Director does not authorize
+depending on them:
+
+    REACHABLE != AUTHORIZED DEPENDENCY
+
+the identical rule that rejected `SeImpersonatePrivilege` at Gate 1.
+
+### Measured, not argued
+
+MSDN says a NULL `lpEnvironment` makes the child inherit the CALLER's
+environment — which would be finding E1 all over again. That reading was not
+assumed in either direction. Three candidates ran side by side against a real
+disposable account, with the Director's sentinel planted in its own environment:
+
+    option                                    starts  USERPROFILE  APPDATA  no sentinel
+    A  lpEnvironment = NULL, LOGON_WITH_PROFILE  yes     WORKER      WORKER    yes
+    B  minimal explicit block, no profile call   yes     EMPTY       EMPTY     yes
+    C  LogonUser + LoadUserProfile + block       yes     WORKER      WORKER    yes
+
+**Option A is correct AND free.** With `LOGON_WITH_PROFILE` set, the Secondary
+Logon service builds the environment from the WORKER's own profile and the
+documented caller-inheritance behaviour does not apply. The experiment also
+measured that the bootstrap can rebuild the profile environment from its OWN
+token with no privilege at all — a fallback that proved unnecessary and is kept
+in the record as the answer if that OS behaviour ever changes.
+
+### What the launcher no longer does
+
+`LogonUserW`, `LoadUserProfileW`, `UnloadUserProfile`, `CreateEnvironmentBlock`,
+`DestroyEnvironmentBlock`, `PROFILEINFOW`, `CREATE_UNICODE_ENVIRONMENT` and the
+`userenv.dll` load are all gone. The child's token is still inspected exactly as
+before, through the process handle plus `OpenProcessToken`, which needs no
+privilege.
+
+The determinism variables the Director still needs now ride in the **sealed**
+LaunchSpec and are applied by the bootstrap on top of the profile environment —
+so they are inside the digest and the Worker cannot alter them. Because the spec
+is Worker-READABLE, the overlay is bounded by construction: a credential-shaped
+NAME is refused, names must be safe, values are length-bounded, duplicates are
+refused, and it is capped at 16 entries. It is applied BEFORE the seal; applied
+after, the digest would not cover it.
+
+### The direct proof
+
+A disposable Director child removes both privileges from its OWN token
+(`SE_PRIVILEGE_REMOVED`; no machine policy touched, the child exits immediately)
+and performs a real trusted launch. 24 privileges before, 22 after, both
+confirmed removed — and **the launch still succeeds**, with the observed SID
+still the Worker, integrity Medium, contained in the job, exit code 0,
+USERPROFILE the Worker's and the Director's sentinel still absent.
+
+Enforced for the future by an AST test that refuses every privilege-requiring
+API in the launcher, the bootstrap and the spec, and refuses loading
+`userenv.dll` at all. Six new mutants reintroduce each dependency; all die.
+
+### A test of ours was wrong, and is on the record
+
+The bootstrap now reads `os.environ` in order to FORWARD its own profile
+environment. The existing assertion forbade the name outright and failed the
+moment the design landed. Forwarding an environment is not taking configuration
+from one; the test now forbids `os.environ[...]`, `.get(...)` and `getenv`, which
+is the property that was actually meant. The raw-text scan in the evidence had
+the same defect and was moved to the AST for the same reason: a check that cannot
+tell a prohibition from a use is not a check.
+
+### TCB terminology, frozen
+
+    project-source Trust Plane   ~4295 LOC
+    trusted Python runtime       ~62 MB / 3434 files
+
+Neither may be quoted without the other until the runtime is reduced or
+separately justified.
+
+### Deployment binding debt, recorded not solved
+
+The deployment identity must eventually bind the actual trusted bootstrap and
+runtime artifacts that can affect execution; `deployment_digest` does not cover
+them today. Stage 6/8 owns it.
+
+### Evidence
+
+`.gnosis/evidence/20260828T033211Z/` — OS-real probe 68/68 with verified
+rollback and the privilege-drop proof; directed 62 passed; mutation 30/30; full
+suite 1353 passed / 99 subtests GREEN; fresh checkout of `b729b92` 186 passed;
+mypy strict clean over 68 source files.
+
+    bundle_digest  2e64ef1cc50657ee5650f6b537de56006c99bd0014e52a651d0d18c4f0da0348
+
+**Stage 5 D3 hardening: PASS. Ready for independent Stage 5 closure review.**
+Stage 6 NOT started. F-14 remains CLOSED.

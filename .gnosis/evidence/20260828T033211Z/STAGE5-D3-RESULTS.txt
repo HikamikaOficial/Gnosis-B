@@ -1,0 +1,262 @@
+F-17 STAGE 5 — D3 HARDENING
+REMOVING THE SeBackup / SeRestore DEPENDENCY FROM THE TRUSTED LAUNCHER
+======================================================================================
+Stage 5 remediation reviewed at 5cf3127: APPROVE_WITH_ONE BLOCKING FINDING.
+D3 hardening implemented at b729b92. F-14 CLOSED. F-17 OPEN. Stage 6 NOT started.
+
+
+1. THE OLD D3 CALL PATH
+--------------------------------------------------------------------------------------
+    launch()
+      -> _worker_profile_environment(password)
+           LogonUserW(worker, password, LOGON32_LOGON_INTERACTIVE)   -> token
+           LoadUserProfileW(token, PROFILEINFOW)        <-- needs SeBackup+SeRestore
+           CreateEnvironmentBlock(token, bInherit=FALSE)
+           UnloadUserProfile(token)
+      -> build_worker_environment(worker_env, director_env, allowlist)
+      -> CreateProcessWithLogonW(..., lpEnvironment = the block,
+                                 CREATE_UNICODE_ENVIRONMENT)
+
+`LoadUserProfileW` is documented as requiring the caller to hold
+SeBackupPrivilege and SeRestorePrivilege. The Director happens to hold both.
+That is REACHABILITY, not authorization — the identical argument that was
+rejected for SeImpersonatePrivilege at Gate 1.
+
+
+2. THE CORRECTED CALL PATH
+--------------------------------------------------------------------------------------
+    launch()
+      -> spec = replace(spec, environment=<sealed determinism overlay>)
+      -> seal_launch_spec(...)                          # overlay is INSIDE the digest
+      -> CreateProcessWithLogonW(..., LOGON_WITH_PROFILE,
+                                 lpEnvironment = NULL,
+                                 CREATE_SUSPENDED | CREATE_NO_WINDOW)
+    bootstrap (as the Worker)
+      -> os.environ IS the Worker's profile environment, built by Windows
+      -> child_environment(spec, os.environ)            # profile + sealed overlay
+      -> CreateProcess(logical argv)
+
+No logon token is created by the launcher. No profile is loaded by the launcher.
+No environment block is built by the launcher.
+
+
+3. DOES LogonUserW REMAIN?   NO.
+4. DOES LoadUserProfileW REMAIN?  NO.
+--------------------------------------------------------------------------------------
+Removed from `trust.worker_launcher`, together with `UnloadUserProfile`,
+`CreateEnvironmentBlock`, `DestroyEnvironmentBlock`, the `PROFILEINFOW`
+structure, the `PI_NOUI` / `LOGON32_*` constants, `CREATE_UNICODE_ENVIRONMENT`,
+and the `userenv.dll` load itself. The child's token is inspected exactly as it
+already was — through the process handle `CreateProcessWithLogonW` returns, plus
+`OpenProcessToken` — which needs no privilege and was already qualified.
+
+ENFORCED, NOT PROMISED. An AST test refuses `LoadUserProfileW`,
+`UnloadUserProfile`, `LogonUserW`, `CreateEnvironmentBlock`,
+`CreateProcessWithTokenW`, `CreateProcessAsUserW` and `AdjustTokenPrivileges`
+anywhere in `worker_launcher.py`, `bootstrap.py` or `launch_spec.py`, and
+refuses loading `userenv` at all. Verified on the FRESH CHECKOUT of b729b92:
+
+    worker_launcher.py   privilege-requiring calls: NONE   userenv: False
+    bootstrap.py         privilege-requiring calls: NONE   userenv: False
+    launch_spec.py       privilege-requiring calls: NONE   userenv: False
+
+A raw TEXT scan reports some of those names as present, because the module
+docstring names them precisely in order to say they are not used. The scan is
+therefore done through the AST — a check that cannot tell a prohibition from a
+use is not a check.
+
+
+5. PROFILE-LOADING MECHANISM
+--------------------------------------------------------------------------------------
+`LOGON_WITH_PROFILE`, performed by the Secondary Logon service as part of
+`CreateProcessWithLogonW`. The launcher does not load, or unload, anything.
+
+
+6. ENVIRONMENT CONSTRUCTION — AND THE MEASUREMENT THAT DECIDED IT
+--------------------------------------------------------------------------------------
+MSDN says a NULL `lpEnvironment` makes the new process inherit the CALLER's
+environment, which would be finding E1 all over again. That reading was NOT
+assumed either way: three candidates were run side by side against a real
+disposable account (`scripts/experiment_stage5_d3_profile.py`), with the
+Director's sentinel planted in its own environment.
+
+    option                                    starts  USERPROFILE  APPDATA  no sentinel
+    A  lpEnvironment = NULL, LOGON_WITH_PROFILE  True    WORKER      WORKER    True
+    B  minimal explicit block, no profile call   True    EMPTY       EMPTY     True
+    C  LogonUser + LoadUserProfile + block       True    WORKER      WORKER    True
+
+    A: USERPROFILE = C:\Users\GnosisWkrS5Probe, APPDATA under it, USERNAME the
+       Worker, 34 variables, Director sentinel ABSENT.
+    B: the profile variables are simply not present; the bootstrap starts but the
+       toolchain would have no profile to work in.
+    C: correct, at the cost of the two privileges.
+
+Option A is correct AND free: with `LOGON_WITH_PROFILE` set, seclogon builds the
+environment from the WORKER's profile and the documented caller-inheritance
+behaviour does not apply. The experiment also measured that the bootstrap can
+recover the profile environment from its OWN token (`CreateEnvironmentBlock` and
+`GetUserProfileDirectoryW` both succeeded, 30 variables, correct USERPROFILE)
+with no privilege at all — a fallback that turned out to be unnecessary and is
+recorded because it is the answer if seclogon's behaviour ever changes.
+
+THE SEALED OVERLAY. The determinism variables the Director still needs
+(PYTHONUTF8, PYTHONIOENCODING) travel in the LaunchSpec and are applied by the
+bootstrap ON TOP of the profile environment. Because the spec is Worker-READABLE,
+the overlay is constrained by construction: a credential-shaped NAME is refused,
+names must match a safe pattern, values are length-bounded, duplicates are
+refused, and the whole overlay is capped at 16 entries. It is applied BEFORE the
+seal — applied after, the digest would not cover it and the Worker could edit the
+one part of its environment the Director insisted on. Both properties are tested.
+
+
+7. DIRECTOR SENTINEL RESULT
+--------------------------------------------------------------------------------------
+`GNOSIS_STAGE5_SECRET_SENTINEL` planted in the Director's environment:
+    ABSENT from the worker environment, in the full probe AND in the
+    privilege-dropped launch. No CLAUDE_* name crosses. No Director-only name
+    crosses.
+
+
+8. WORKER USERPROFILE RESULT
+--------------------------------------------------------------------------------------
+    USERPROFILE  C:\Users\GnosisWkrS5Probe
+    APPDATA      C:\Users\GnosisWkrS5Probe\AppData\Roaming
+    USERNAME     GnosisWkrS5Probe
+Correct in the full probe and again under the privilege-dropped launch.
+
+
+9. BOOTSTRAP HARDENING AGAINST THE WORKER-PROFILE ENVIRONMENT
+--------------------------------------------------------------------------------------
+The bootstrap's startup environment is now the WORKER's profile, which the
+Worker can influence (HKCU\Environment). That is in scope, and the hardening is:
+
+    absolute trusted runtime path      from the launcher, never a PATH search
+    absolute trusted bootstrap path    derived from the module's own location
+    `-I` isolated mode                 PYTHONPATH, PYTHONHOME and every other
+                                       PYTHON* variable ignored; `-E` and `-s`
+                                       implied; user site disabled; cwd not on
+                                       sys.path. MEASURED in the worker probe:
+                                       isolated=True, no_user_site=True.
+    trusted cwd                        set by the launcher via lpCurrentDirectory
+    no shell anywhere                  proven positively: %VAR% and $VAR arrive
+                                       as literals
+    no PATH resolution                 the child image comes from `executable=`
+    Worker-WRITE-DENIED bytes          runtime and bootstrap both measured DENIED
+
+FORWARDING IS NOT CONFIGURATION. The bootstrap reads `os.environ` only to pass
+it on; it never indexes it, never calls `.get`, never calls `getenv`. That
+distinction is enforced by an AST test — and it had to be, because the earlier
+version of that test forbade the NAME `environ` and failed the moment the D3
+design landed. The test was wrong, not the design; it now checks the property
+that was actually meant.
+
+RESIDUAL, NAMED: Python's isolated mode does not disable the Windows registry
+path lookup (HKCU\Software\Python\...). This runtime is a standalone uv build
+that does not use it, and a `python._pth` beside the interpreter would disable
+path configuration entirely. That is a Stage-8 provisioning hardening and it is
+listed in §24 rather than claimed here.
+
+
+10. SeBackupPrivilege DEPENDENCY    NONE
+11. SeRestorePrivilege DEPENDENCY   NONE
+--------------------------------------------------------------------------------------
+THE DIRECT OS-REAL PROOF (probe T13). A disposable Director child removes both
+privileges from its OWN token with SE_PRIVILEGE_REMOVED — no machine policy is
+touched, no other process is affected, and the child exits immediately — and then
+performs a real trusted launch:
+
+    privileges held before             24
+    privileges held after              22
+    SeBackupPrivilege removed          True
+    SeRestorePrivilege removed         True
+    THE TRUSTED LAUNCH STILL SUCCEEDS  True
+    observed SID                       still the expected Worker SID
+    integrity                          still Medium
+    contained in the job               still True
+    child exit code                    0
+    worker USERPROFILE                 still the Worker's
+    Director sentinel                  still absent
+
+The launcher now requires NO privilege of its caller beyond the ability to call
+`CreateProcessWithLogonW`, which requires none.
+
+
+12. OS-REAL RESULTS          68 checks, ALL PASSED
+13. TOKEN / SID REGRESSION   observed SID == expected, Medium, non-admin,
+                             no dangerous privilege, wrong SID still refused
+14. JOB REGRESSION           contained; timeout terminates the job; grandchild
+                             froze after termination; 0 worker processes left
+15. CROSS-PROCESS REGRESSION Worker -> Director VM_WRITE, VM_OPERATION,
+                             CREATE_THREAD, DUP_HANDLE, CREATE_PROCESS,
+                             ALL_ACCESS, OpenProcessToken — all DENIED
+16. TOOLCHAIN REGRESSION     python rc=0, git rc=0, claude 2.1.247 rc=0;
+                             WRITE to runtime and bootstrap DENIED
+--------------------------------------------------------------------------------------
+Everything Stage 5 previously demonstrated was re-demonstrated on the corrected
+launcher, not carried forward on trust.
+
+
+17. MUTATION RESULT          30 mutants, 30 CAUGHT, 0 SURVIVED
+--------------------------------------------------------------------------------------
+    WM26  the launcher reintroduces the LoadUserProfileW profile path
+    WM27  the launcher reintroduces LogonUserW
+    WM28  the launcher passes an explicit environment block again
+    WM29  the sealed overlay is applied AFTER the seal, so it is unsigned
+    WM30  a credential-shaped name may ride in the Worker-readable spec
+    WM31  LOGON_NETCREDENTIALS_ONLY replaces LOGON_WITH_PROFILE
+All twenty-five prior Stage-5 mutants were preserved and still die. Three of them
+(WM18, WM21, WM22) needed their anchor text updated because D3 changed the lines
+they target; the mutations themselves are unchanged in intent.
+
+
+18. SUITE / REGRESSION       1353 passed, 1 skipped, 99 subtests, exit 0  GREEN
+19. mypy / Ruff              mypy strict clean over 68 source files;
+                             ruff clean on every Stage-5 file. The pre-existing
+                             repo-wide ruff baseline in files this stage never
+                             touched is unchanged and is NOT folded into that
+                             claim.
+20. COMMITS                  b729b92  F-17 Stage 5 D3: remove the
+                             SeBackup/SeRestore dependency from the launcher
+21. HEAD                     b729b92e43c7cabeebeb7fc901adcd4113e79285
+22. EVIDENCE                 .gnosis/evidence/20260828T033211Z/
+23. ROLLBACK                 account deleted (NetUserDel status 0), Win32 profile
+                             removed, probe root removed, `net user` rc=2, DPAPI
+                             blob removed, no service, no scheduled task, no
+                             production ACL. Verified, not assumed.
+
+
+24. RESIDUAL RISKS
+--------------------------------------------------------------------------------------
+    R1  The bootstrap's startup environment is the WORKER's profile, which the
+        Worker can influence. `-I` neutralises every Python-relevant variable and
+        no PATH search occurs, but Python's isolated mode does not disable the
+        Windows REGISTRY path lookup. A `python._pth` beside the trusted runtime
+        would close that; it is a Stage-8 provisioning item, named here rather
+        than assumed away.
+    R2  D3 removes a PRIVILEGE dependency, not the TRUST dependency: the launcher
+        still needs the DPAPI blob to be readable by it and unreadable by the
+        Worker, which is an ACL Stage 8 must establish.
+    R3  Option A rests on observed seclogon behaviour. It is measured, repeatable
+        and now covered by an OS-real check, but it is OS behaviour rather than a
+        contract we control. The measured fallback (the bootstrap building the
+        block from its own token, no privilege required) is recorded in the
+        experiment so the answer exists if that behaviour ever changes.
+    R4  TCB TERMINOLOGY, FROZEN AS INSTRUCTED:
+            project-source Trust Plane   ~4295 LOC
+            trusted Python runtime       ~62 MB / 3434 files
+        Neither number may be quoted without the other until the runtime is
+        reduced or separately justified.
+    R5  DEPLOYMENT BINDING DEBT, recorded for Stage 6/8 and deliberately NOT
+        solved here: the deployment identity must bind the actual trusted
+        bootstrap and runtime artifacts that can affect execution. Today
+        `deployment_digest` does not cover them.
+    R6  Everything Stage 5 already carried: toolchain relocation required, DPAPI
+        is machine binding not launcher binding, the Job contains descendants but
+        is not a security boundary, RunIdentity is not wired until Stage 6, and
+        the single-worker lifecycle assumption.
+
+
+======================================================================================
+STAGE 5 D3 HARDENING: PASS
+READY FOR INDEPENDENT STAGE 5 CLOSURE REVIEW
+======================================================================================
