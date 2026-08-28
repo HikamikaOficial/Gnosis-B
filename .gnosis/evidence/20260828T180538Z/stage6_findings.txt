@@ -1,0 +1,133 @@
+F-17 STAGE 6 — WHAT THE VERIFICATION FOUND
+======================================================================================
+Kept as its own artifact because it is the most useful thing in this bundle.
+Almost nothing here was found by reading the code.
+
+
+A. PRODUCTION DEFECTS, FOUND OS-REAL
+--------------------------------------------------------------------------------------
+A1  THE ANCHOR STORE REWROTE WHAT THE DEPLOYMENT IDENTITY MEASURES.
+    `AnchorStore.__init__` applied `label_high_no_write_up(root)`
+    UNCONDITIONALLY, ignoring `require_high`. `deployment_digest` binds the
+    OBSERVED security descriptor of that very directory, so merely OPENING the
+    store rewrote the thing the identity is a hash of.
+
+    The probe watched the digest move between two observations of a machine
+    nobody had reconfigured, and the component-by-component diff named it:
+    `anchorstore CHANGED`, everything else unchanged. Every publication then
+    failed closed with `deployment-mismatch`.
+
+    Two things worth separating. The system FAILED CLOSED, which is correct for
+    a deployment mismatch; what was wrong is that there should have been no
+    mismatch. And the label was conceptually stale: under Stage 1 the publisher
+    was the Director at High integrity and the label WAS the boundary, but under
+    P2 the boundary is the NTFS DACL on the restricted service SID. The P2
+    design had said so; the production store had not followed.
+
+    FIXED: the relabel happens only where it is the boundary. A test reads the
+    descriptor before and after opening a non-High store; reverting the fix was
+    injected and CAUGHT.
+
+A2  THE SERVICE COULD NOT READ ITS OWN CODE. `sc start` returned ACCESS_DENIED:
+    the tool root granted Administrators, SYSTEM and the WORKER, and nothing
+    else, so the service identity could not read the interpreter it was told to
+    run. Provisioning must grant the service read/execute on its trusted code.
+    STAGE 8 OWES THIS for the production layout.
+
+A3  THE WORKER CAN WRITE THE REPOSITORY CHECKOUT ON THIS MACHINE. Discovered
+    the hard way (see C1). The design already requires that a trusted code root
+    not be worker-writable; this measured that the development checkout is not
+    such a root. STAGE 8 OWES THIS.
+
+
+B. PRODUCTION DEFECTS, FOUND BY MUTATION
+--------------------------------------------------------------------------------------
+The first mutation run left TWELVE survivors of thirty-four. None was noise.
+
+B1  `PipeServer.stop()` COULD FAIL TO STOP THE SERVICE. Waking a blocked
+    ConnectNamedPipe needs a client connection, and the serve loop spends a
+    window between closing one instance and creating the next. A single connect
+    landing in that window fails; the loop then creates a fresh instance and
+    blocks with nobody left to wake it — a service STOP that hangs until the SCM
+    kills the process. The very first test to call `stop()` found the thread
+    still alive afterwards. FIXED: the wake-up retries to a deadline.
+
+B2  THE OVERSIZE CHECK COULD NEVER FIRE. On a message-mode pipe ReadFile FAILS
+    with ERROR_MORE_DATA when the message does not fit; it does not return a
+    truncated success. So `len(raw) >= MAX_MESSAGE_BYTES` was unreachable — the
+    RM13 lesson again, A CHECK THAT CANNOT FAIL IS NOT A CHECK — and the mutant
+    that deleted it survived for exactly that reason. Worse, the remainder was
+    never drained, so the sender stayed blocked in WriteFile: a compromised
+    Worker could hang its own request instead of receiving a refusal it must
+    handle. FIXED: oversize is decided where the OS reports it, and the rest is
+    discarded under a bounded loop.
+
+B3  SHADOWED CHECKS (3 mutants). The publication request's owner and deployment
+    expectations could be switched to read the RUN instead of the SERVICE with
+    no observable change, because earlier refusals already caught the mismatch.
+    FIXED: `publication_request()` is separate and its fields are asserted
+    directly.
+
+B4  UNTESTED CONTRACTS (4 mutants). A V2 identity without a launch binding, a V2
+    deployment without a runtime tree, an executable outside the declared
+    runtime root, and a bundle checked against an external anchor: all
+    requirements that nothing exercised because the callers always satisfied
+    them. FIXED: tested where they live.
+
+B5  UNTESTED TRANSPORT (5 mutants). The pipe's constants were asserted; the
+    BEHAVIOUR was not, and a constant nobody hands to the OS protects nothing.
+    FIXED: real pipes, real clients, a real squat, and a read-back of the flags
+    actually passed to CreateNamedPipeW.
+
+
+C. DEFECTS IN THE CHECKING ITSELF
+--------------------------------------------------------------------------------------
+Recorded rather than smoothed over. Every one has the same shape as the defects
+this stage exists to prevent: a check that could not tell what it was looking at.
+
+C1  THE PROBE DAMAGED THE CHECKOUT. It aimed a real "can the Worker write this?"
+    attack at `src/gnosis/trust/publisher_service.py` IN THE REPOSITORY instead
+    of the deployed copy. The Worker could write it, a marker line was appended
+    to real source, and the next run failed to import with
+    `NameError: name 'WORKER' is not defined`.
+
+    Scope, measured: one file, one appended line. Removed surgically and
+    verified byte-identical to HEAD.
+
+    The repair is not "fix that path". A probe that runs real attacks with real
+    credentials must be UNABLE to aim them outside its disposable roots, so
+    every worker write is now checked against those roots before launch, and the
+    guard is verified in both directions.
+
+C2  THE PROBE REPORTED SUCCESS OVER NOTHING. A run that crashed inside setup()
+    printed "ALL CHECKS PASSED" because the failure list was empty — absence of
+    failure reading as presence of verification. FIXED: the verdict counts the
+    checks that actually ran and reports INCONCLUSIVE below a floor.
+
+C3  THE FRESH-CHECKOUT RUN WAS IMPORTING THE WORKING TREE. The venv's editable
+    `.pth` puts the repository's `src` on `sys.path` at startup, so a bare
+    `import gnosis` inside an extraction resolved to the repository — measured,
+    not assumed. It resolved INCONSISTENTLY, giving one process two `gnosis`
+    packages and two copies of every class in them.
+
+    THIS AFFECTS EARLIER STAGES TOO: any fresh-checkout run performed the same
+    way may have measured the working tree. FIXED:
+    `scripts/fresh_checkout_check.py` forces the extraction onto PYTHONPATH and
+    PROVES the import landed there before running anything.
+
+C4  A TEST CORRUPTED THE INTERPRETER TO TAKE ITS MEASUREMENT. The
+    publisher-closure test popped modules out of `sys.modules` and never
+    restored them, so a later file's `assertRaises(WorkerLaunchFailed)` stopped
+    catching the `WorkerLaunchFailed` in its own traceback: same name, two
+    classes. Two files passed alone and failed together. FIXED: measured in a
+    subprocess, and it now also asserts the measurement is not vacuous.
+
+C5  A TEST OF MINE WAS OVER-SPECIFIED. It pinned SCM dispatcher error 1063 and
+    went red only when run after another test in the same process, because a
+    SECOND StartServiceCtrlDispatcher call answers 1056. The property is that it
+    RAISES, not which number it raises with.
+
+C6  THE MUTATION HARNESS REFUSED TO SCORE A RED BASELINE, which is what it is
+    for. One round was discarded for that reason, and another was re-run because
+    a test file had been edited mid-flight and its verdicts would not have been
+    attributable.

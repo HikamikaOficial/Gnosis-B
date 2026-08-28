@@ -1,0 +1,142 @@
+F-17 STAGE 6 — MUTATION CHECK OVER THE COMPOSED TRUST PATH
+==========================================================================
+BASELINE: exit=0  287 passed, 84 subtests passed in 44.52s
+
+S6M01: the owner check reads the run being published, not the service's configuration
+  result: exit=1  1 failed, 8 passed, 18 subtests passed in 1.00s
+  verdict: CAUGHT
+
+S6M02: the publisher stops comparing the deployment it runs under
+  result: exit=1  1 failed, 7 passed, 18 subtests passed in 1.04s
+  verdict: CAUGHT
+
+S6M03: the request carries the run's own deployment instead of the service's
+  result: exit=1  1 failed, 26 passed, 33 subtests passed in 1.77s
+  verdict: CAUGHT
+
+S6M04: the request carries the run's own owner instead of the service's
+  result: exit=1  1 failed, 26 passed, 33 subtests passed in 1.68s
+  verdict: CAUGHT
+
+S6M05: an evidence directory outside the trusted root is opened anyway
+  result: exit=1  1 failed, 13 passed, 22 subtests passed in 1.48s
+  verdict: CAUGHT
+
+S6M06: containment becomes a string prefix, so a sibling directory passes
+  result: exit=1  1 failed, 14 passed, 22 subtests passed in 1.53s
+  verdict: CAUGHT
+
+S6M07: the bundle path is rebuilt from the run id instead of read from the record
+  result: exit=1  1 failed, 13 passed, 22 subtests passed in 1.39s
+  verdict: CAUGHT
+
+S6M08: the run id may contain path separators
+  result: exit=1  8 failed, 3 passed, 3 subtests passed in 0.93s
+  verdict: CAUGHT
+
+S6M09: an oversized request is parsed instead of refused
+  result: exit=1  1 failed, 3 passed, 11 subtests passed in 0.80s
+  verdict: CAUGHT
+
+S6M10: PUBLISHABLE stops being required
+  result: exit=1  1 failed, 11 passed, 18 subtests passed in 1.33s
+  verdict: CAUGHT
+
+S6M11: the sealed launch intent is no longer compared
+  result: exit=1  1 failed, 101 passed, 56 subtests passed in 13.17s
+  verdict: CAUGHT
+
+S6M12: a launch binding is satisfied by declining to check it
+  result: exit=1  1 failed, 102 passed, 56 subtests passed in 18.21s
+  verdict: CAUGHT
+
+S6M13: an artifact from an earlier generation may publish as a later one
+  result: exit=1  1 failed, 88 passed, 56 subtests passed in 13.02s
+  verdict: CAUGHT
+
+S6M14: the launch intent is dropped from the immutable identity digest
+  result: exit=1  1 failed, 1 passed, 3 subtests passed in 0.72s
+  verdict: CAUGHT
+
+S6M15: a V2 identity no longer needs a launch binding
+  result: exit=1  1 failed, 108 passed, 56 subtests passed in 18.25s
+  verdict: CAUGHT
+
+S6M16: the runtime tree is dropped from the deployment digest
+  result: exit=1  1 failed, 45 passed, 53 subtests passed in 17.34s
+  verdict: CAUGHT
+
+S6M17: a V2 deployment identity no longer needs the runtime tree
+  result: exit=1  1 failed, 283 passed, 84 subtests passed in 37.84s
+  verdict: CAUGHT
+
+S6M18: observation goes back to emitting an unbound V1 deployment
+  result: exit=1  1 failed, 280 passed, 84 subtests passed in 42.59s
+  verdict: CAUGHT
+
+S6M19: the measured runtime need not be the runtime that executes
+  result: exit=1  1 failed, 284 passed, 84 subtests passed in 42.67s
+  verdict: CAUGHT
+
+S6M20: a run may be created under a deployment that never measured the runtime
+  result: exit=1  1 failed, 50 passed, 53 subtests passed in 17.38s
+  verdict: CAUGHT
+
+S6M21: a seal for another run may be bound to this plan
+  result: exit=1  1 failed, 51 passed, 53 subtests passed in 17.27s
+  verdict: CAUGHT
+
+S6M22: PUBLISHABLE stops requiring a verifying bundle
+  result: exit=1  1 failed, 56 passed, 56 subtests passed in 17.46s
+  verdict: CAUGHT
+
+S6M23: a failed run becomes publishable
+  result: exit=1  3 failed, 56 passed, 53 subtests passed in 17.43s
+  verdict: CAUGHT
+
+S6M24: a bundle somewhere other than the trusted identity's path is accepted
+  result: exit=1  1 failed, 53 passed, 53 subtests passed in 17.37s
+  verdict: CAUGHT
+
+S6M25: the Worker is granted the pipe's append bit, which is CREATE_PIPE_INSTANCE
+  result: exit=1  1 failed, 20 passed, 25 subtests passed in 1.51s
+  verdict: CAUGHT
+
+S6M26: the server will attach to a pipe name somebody else already created
+  result: exit=1  1 failed, 42 passed, 53 subtests passed in 17.21s
+  verdict: CAUGHT
+
+S6M27: remote clients are accepted
+  result: exit=1  1 failed in 0.72s
+  verdict: CAUGHT
+
+S6M28: the pipe stops being single-instance
+  result: exit=1  1 failed, 18 passed, 25 subtests passed in 1.43s
+  verdict: CAUGHT
+
+S6M29: an oversized message is handed to the parser
+  result: exit=1  1 failed, 39 passed, 53 subtests passed in 12.15s
+  verdict: CAUGHT
+
+S6M30: the service starts even when the SCM never launched it
+  result: exit=1  1 failed, 30 passed, 33 subtests passed in 1.59s
+  verdict: CAUGHT
+
+S6M31: the service starts with an incomplete configuration
+  result: exit=1  8 failed, 26 passed, 25 subtests passed in 1.50s
+  verdict: CAUGHT
+
+S6M32: the endpoint opens before durable state has been reconciled
+  result: exit=1  1 failed, 30 passed, 33 subtests passed in 2.58s
+  verdict: CAUGHT
+
+S6M33: the big evidence machinery returns to the publisher's closure
+  result: exit=1  1 failed, 57 passed, 56 subtests passed in 17.95s
+  verdict: CAUGHT
+
+S6M34: the external anchor stops being compared in verification
+  result: exit=1  1 failed, 31 passed, 33 subtests passed in 1.60s
+  verdict: CAUGHT
+
+RESTORED: exit=0  287 passed, 84 subtests passed in 47.14s
+mutants: 34  survived/aborted: 0

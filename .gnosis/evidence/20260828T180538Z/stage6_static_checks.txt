@@ -1,0 +1,15 @@
+STATIC CHECKS — STAGE 6
+======================================================================
+
+$ ruff check (every file this stage touched)
+All checks passed!
+  ruff exit=0
+
+$ ruff check src tests  (repo-wide, for the baseline)
+Found 19 errors.
+No fixes available (6 hidden fixes can be enabled with the `--unsafe-fixes` option).
+  (the repo's pre-existing baseline, in files this stage never touched)
+
+$ mypy --strict src
+Success: no issues found in 74 source files
+  mypy exit=0

@@ -1,0 +1,73 @@
+PUBLISHER IMPORT CLOSURE - BEFORE AND AFTER THE VERIFIER EXTRACTION
+======================================================================
+
+Measured, not asserted, and measured AFTER A REAL PUBLICATION runs -
+because the dependency being hunted was a LAZY import inside
+publish_anchor, which a static import graph would have reported as
+absent while the running service pulled it in anyway.
+
+### BEFORE - commit 970fe0a
+
+publication outcome : ANCHORED
+anchor schema       : gnosis.anchor.v2
+
+PUBLISHER IMPORT CLOSURE (after a real publication): 14
+   gnosis
+   gnosis.kernel
+   gnosis.kernel.atomic_io
+   gnosis.kernel.canonical
+   gnosis.kernel.evidence_capture
+   gnosis.kernel.file_lock
+   gnosis.kernel.git_evidence
+   gnosis.kernel.input_lock
+   gnosis.kernel.write_observer
+   gnosis.trust
+   gnosis.trust.anchor
+   gnosis.trust.launch
+   gnosis.trust.publication
+   gnosis.trust.run_identity
+
+MODULES REQUIRED ABSENT:
+   gnosis.kernel.evidence_capture         PRESENT  <-- FAIL
+   gnosis.kernel.git_evidence             PRESENT  <-- FAIL
+   gnosis.kernel.input_lock               PRESENT  <-- FAIL
+   gnosis.kernel.write_observer           PRESENT  <-- FAIL
+   gnosis.kernel.engine                   absent
+   gnosis.director.orchestrator           absent
+   gnosis.runner.claude_cli_runner        absent
+   gnosis.trust.worker_launcher           absent
+   gnosis.trust.deployment                absent
+
+CLOSURE: FAILED - 4 forbidden module(s) reachable
+
+### AFTER - the verifier extracted to gnosis.trust.bundle_verify
+
+publication outcome : ANCHORED
+anchor schema       : gnosis.anchor.v2
+
+PUBLISHER IMPORT CLOSURE (after a real publication): 11
+   gnosis
+   gnosis.kernel
+   gnosis.kernel.atomic_io
+   gnosis.kernel.canonical
+   gnosis.kernel.file_lock
+   gnosis.trust
+   gnosis.trust.anchor
+   gnosis.trust.bundle_verify
+   gnosis.trust.launch
+   gnosis.trust.publication
+   gnosis.trust.run_identity
+
+MODULES REQUIRED ABSENT:
+   gnosis.kernel.evidence_capture         absent
+   gnosis.kernel.git_evidence             absent
+   gnosis.kernel.input_lock               absent
+   gnosis.kernel.write_observer           absent
+   gnosis.kernel.engine                   absent
+   gnosis.director.orchestrator           absent
+   gnosis.runner.claude_cli_runner        absent
+   gnosis.trust.worker_launcher           absent
+   gnosis.trust.deployment                absent
+
+CLOSURE: CLEAN
+AFTER_EXIT=0
