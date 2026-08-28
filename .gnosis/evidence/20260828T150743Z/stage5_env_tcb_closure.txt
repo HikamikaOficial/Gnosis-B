@@ -1,0 +1,63 @@
+F-17 STAGE 5 ENVIRONMENT HARDENING - TRUST PLANE TCB CLOSURE
+==========================================================================
+
+TRUST_ALLOWLIST (14 entries):
+  gnosis
+  gnosis.kernel
+  gnosis.kernel.atomic_io
+  gnosis.kernel.canonical
+  gnosis.kernel.file_lock
+  gnosis.trust
+  gnosis.trust.anchor
+  gnosis.trust.bootstrap
+  gnosis.trust.deployment
+  gnosis.trust.launch
+  gnosis.trust.launch_spec
+  gnosis.trust.publication
+  gnosis.trust.run_identity
+  gnosis.trust.worker_launcher
+
+gnosis.trust.anchor
+  loaded internal (6): gnosis, gnosis.kernel, gnosis.kernel.canonical, gnosis.trust, gnosis.trust.anchor, gnosis.trust.launch
+  third-party : NONE
+  outside allowlist : NONE
+
+gnosis.trust.launch
+  loaded internal (3): gnosis, gnosis.trust, gnosis.trust.launch
+  third-party : NONE
+  outside allowlist : NONE
+
+gnosis.trust.deployment
+  loaded internal (6): gnosis, gnosis.kernel, gnosis.kernel.canonical, gnosis.trust, gnosis.trust.deployment, gnosis.trust.launch
+  third-party : NONE
+  outside allowlist : NONE
+
+gnosis.trust.run_identity
+  loaded internal (9): gnosis, gnosis.kernel, gnosis.kernel.atomic_io, gnosis.kernel.canonical, gnosis.kernel.file_lock, gnosis.trust, gnosis.trust.anchor, gnosis.trust.launch, gnosis.trust.run_identity
+  third-party : NONE
+  outside allowlist : NONE
+
+gnosis.trust.publication
+  loaded internal (10): gnosis, gnosis.kernel, gnosis.kernel.atomic_io, gnosis.kernel.canonical, gnosis.kernel.file_lock, gnosis.trust, gnosis.trust.anchor, gnosis.trust.launch, gnosis.trust.publication, gnosis.trust.run_identity
+  third-party : NONE
+  outside allowlist : NONE
+
+gnosis.trust.launch_spec
+  loaded internal (7): gnosis, gnosis.kernel, gnosis.kernel.atomic_io, gnosis.kernel.canonical, gnosis.trust, gnosis.trust.launch, gnosis.trust.launch_spec
+  third-party : NONE
+  outside allowlist : NONE
+
+gnosis.trust.bootstrap
+  loaded internal (8): gnosis, gnosis.kernel, gnosis.kernel.atomic_io, gnosis.kernel.canonical, gnosis.trust, gnosis.trust.bootstrap, gnosis.trust.launch, gnosis.trust.launch_spec
+  third-party : NONE
+  outside allowlist : NONE
+
+gnosis.trust.worker_launcher
+  loaded internal (8): gnosis, gnosis.kernel, gnosis.kernel.atomic_io, gnosis.kernel.canonical, gnosis.trust, gnosis.trust.launch, gnosis.trust.launch_spec, gnosis.trust.worker_launcher
+  third-party : NONE
+  outside allowlist : NONE
+
+==========================================================================
+TCB CLOSURE: CLEAN - no third-party code and no module outside the
+allowlist is reachable from any Trust Plane entry point.
+TCB_EXIT=0

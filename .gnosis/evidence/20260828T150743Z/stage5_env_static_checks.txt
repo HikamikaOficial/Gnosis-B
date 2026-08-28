@@ -1,0 +1,10 @@
+STATIC CHECKS - STAGE 5 ENVIRONMENT HARDENING
+======================================================================
+
+$ ruff check (files this stage touched)
+All checks passed!
+  ruff exit=0
+
+$ mypy --strict src
+Success: no issues found in 68 source files
+  mypy exit=0

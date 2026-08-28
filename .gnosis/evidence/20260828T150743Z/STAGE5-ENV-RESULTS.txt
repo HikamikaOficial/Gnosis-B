@@ -1,0 +1,311 @@
+F-17 STAGE 5 — ENVIRONMENT HARDENING
+CLOSING THE WORKER-PROFILE POISONING CHANNEL
+======================================================================================
+D3 hardening reviewed at 466fb3d: PASS, with ONE FINAL BLOCKING FINDING.
+Environment hardening implemented at 328930c. F-14 CLOSED. F-17 OPEN. Stage 6 NOT started.
+
+
+1. THE OLD ENVIRONMENT PROPAGATION
+--------------------------------------------------------------------------------------
+    bootstrap:  child_env = dict(os.environ) + sealed overlay
+
+After D3 the bootstrap's own environment no longer came from the Director — it
+came from the WORKER'S PROFILE, built by Windows under LOGON_WITH_PROFILE. That
+fixed E1 and created this one: under T2 the Worker is compromised, and a
+previous run can persist variables into its own `HKCU\Environment` that Windows
+faithfully rebuilds for the NEXT run. Forwarding that wholesale carried a prior
+run's `NODE_OPTIONS`, `PYTHONPATH`, `GIT_CONFIG_GLOBAL`, proxy and TLS overrides
+straight into the logical command.
+
+    "Director env absent" was necessary and NOT sufficient.
+
+
+2. THE FINAL ENVIRONMENT POLICY
+--------------------------------------------------------------------------------------
+    UNKNOWN VARIABLE == DENIED.
+
+Three sources, and nothing else:
+
+    OS FACTS        SystemRoot / windir / SystemDrive / COMSPEC / PATHEXT / PATH
+                    are derived from `system_root`, which the bootstrap ASKS THE
+                    OS for (`GetSystemDirectoryW`). They are never read from the
+                    environment, so the Worker cannot redirect them.
+    PROFILE VALUES  USERPROFILE / APPDATA / LOCALAPPDATA / TEMP / TMP are taken
+                    from the Worker's environment AND REQUIRED TO LIE INSIDE the
+                    profile root the OS reported (`GetUserProfileDirectoryW` on
+                    this process's OWN token — unprivileged). A value pointing
+                    anywhere else is DROPPED, never corrected.
+    SEALED OVERLAY  applied last, from inside the digest.
+
+Everything else the Worker's profile contains is dropped, whether or not anyone
+thought of its name.
+
+
+3. THE EXACT ALLOWLIST
+--------------------------------------------------------------------------------------
+    OS-derived (never from the environment)
+        SystemRoot, windir, SystemDrive, COMSPEC, PATHEXT, PATH
+    Profile-scoped (validated against the OS-reported profile root)
+        USERPROFILE, APPDATA, LOCALAPPDATA, TEMP, TMP
+    Plain inherited (NON-PATH only, so redirection is not a risk)
+        NUMBER_OF_PROCESSORS, PROCESSOR_ARCHITECTURE, USERNAME, USERDOMAIN
+    Sealed overlay (closed set)
+        PYTHONUTF8, PYTHONIOENCODING, PATH
+
+    MEASURED LOGICAL CHILD ENVIRONMENT, OS-REAL: 14 variables.
+
+HOW IT WAS SIZED, AND THE LIMIT OF THAT MEASUREMENT. The toolchain was run under
+progressively smaller environments: `python -V`, `git --version`,
+`claude --version`, `claude mcp list` and `git config --list --global` ALL
+succeeded with an EMPTY environment, and dropping USERPROFILE, APPDATA,
+LOCALAPPDATA, TEMP, TMP, PATH, HOMEDRIVE, HOMEPATH or USERNAME changed nothing —
+the tools resolve the profile through the OS rather than through variables.
+HOMEDRIVE, HOMEPATH and the path-valued machine variables (ProgramFiles,
+ProgramData, ...) were therefore DROPPED as unnecessary; the latter are also
+overridable per-user from HKCU, so keeping them would have been a redirection
+channel for nothing.
+
+The profile variables were KEPT despite that, and the reason is stated rather
+than hidden: the probes available here are startup- and config-level, because a
+full `claude -p` turn is a PROVIDER CALL and out of scope. Node's `os.homedir()`
+consults USERPROFILE first, so a real turn plausibly needs it. Keeping five
+validated profile variables is the conservative choice; every one of them is
+range-checked against the OS-reported root, so keeping them costs nothing an
+attacker can use.
+
+
+4. PATH POLICY
+--------------------------------------------------------------------------------------
+PATH is BUILT, never inherited:
+
+    <SystemRoot>\system32 ; <SystemRoot> ; <SystemRoot>\System32\Wbem ;
+    <SystemRoot>\System32\WindowsPowerShell\v1.0
+
+prefixed by any trusted tool directories the Director SEALED. Every sealed entry
+must be absolute and drive-qualified (relative and UNC are refused at seal time).
+
+NOT included, by construction: the Worker profile PATH, the worktree, any
+profile bin directory, TEMP, or the current directory. The logical executable is
+always ABSOLUTE and is passed as `executable=`, so PATH is only ever consulted by
+helpers the tool itself spawns.
+
+OS-REAL: with `PATH=C:\worker\bin` persisted by a previous run, the logical
+child's PATH was `C:\WINDOWS\system32;C:\WINDOWS;...` and `C:\worker\bin` was
+ABSENT.
+
+
+5. SEALED-OVERLAY POLICY
+--------------------------------------------------------------------------------------
+Unchanged from D3, plus one tightening: the overlay may set ONLY names in
+`OVERLAY_ALLOWED_NAMES` = {PYTHONUTF8, PYTHONIOENCODING, PATH}. It is a CLOSED
+set, so the overlay can never reintroduce a variable the base policy dropped —
+no NODE_OPTIONS, no PYTHONPATH, no GIT_CONFIG_GLOBAL, and nothing nobody thought
+of. Still bounded (16 entries), still safe names, still duplicate-rejecting,
+still length-bounded, still applied BEFORE the seal. The launcher intersects its
+own allowlist with the same set, so a caller that widens its side cannot smuggle
+a name through.
+
+
+6. ENVIRONMENT POLICY BINDING
+--------------------------------------------------------------------------------------
+`LaunchSpec.environment_policy_version = "gnosis.trust.worker_env.v1"`, inside
+`launch_spec_digest`. A change to WHICH NAMES may cross the boundary therefore
+changes the launch's identity and cannot be invisible to provenance. The base
+values are not serialised — they are derived deterministically from Worker OS
+state — so the spec stays small while the POLICY is bound.
+
+
+7. THE WORKER PERSISTENT POISONING EXPERIMENT (OS-real, mandatory)
+--------------------------------------------------------------------------------------
+    Run A   the Worker writes 22 adversarial variables into its OWN
+            HKCU\Environment through the real launcher
+    ----    the Job is terminated; worker processes alive between runs: 0
+    Run B   the real launcher launches again; Windows rebuilds the profile
+            environment from that same registry key
+
+    RESULT
+      still present in HKCU\Environment at run B ... 22 of 22
+      poisoned NAMES reaching the logical child .... 0
+      logical child environment size .............. 14 variables
+      worker PATH entry reaching the child ......... False
+      child USERPROFILE / APPDATA .................. still the Worker's
+
+The 22-of-22 line is the part that makes this a real test rather than a
+tautology: it proves the poisoning genuinely SURVIVED the run, so the zero
+underneath it is a filter working, not an attack that never happened.
+
+INFERENTIAL STEP, STATED: the bootstrap's own environment is not dumped, so the
+chain "registry -> bootstrap environment" rests on documented Windows semantics
+(HKCU\Environment is exactly what LOGON_WITH_PROFILE rebuilds) rather than on a
+direct observation of the parent's environment block.
+
+
+8. LOGICAL-CHILD ENVIRONMENT RESULT
+--------------------------------------------------------------------------------------
+    APPDATA · COMSPEC · LOCALAPPDATA · NUMBER_OF_PROCESSORS · PATH · PATHEXT ·
+    PYTHONUTF8 · SystemDrive · SystemRoot · TEMP · TMP · USERNAME ·
+    USERPROFILE · windir
+
+Exactly the policy. Nothing else.
+
+
+9. DANGEROUS-VARIABLE MATRIX (all persisted by run A, all ABSENT in run B)
+--------------------------------------------------------------------------------------
+    NODE_OPTIONS                ABSENT      SSL_CERT_FILE               ABSENT
+    NODE_PATH                   ABSENT      SSL_CERT_DIR                ABSENT
+    PYTHONPATH                  ABSENT      SSLKEYLOGFILE               ABSENT
+    PYTHONHOME                  ABSENT      HTTP_PROXY                  ABSENT
+    PYTHONSTARTUP               ABSENT      HTTPS_PROXY                 ABSENT
+    GIT_CONFIG                  ABSENT      ALL_PROXY                   ABSENT
+    GIT_CONFIG_GLOBAL           ABSENT      CLAUDE_CODE_MESSAGING_TOKEN ABSENT
+    GIT_CONFIG_SYSTEM           ABSENT      CLAUDE_CODE_SESSION_ID      ABSENT
+    GIT_TEMPLATE_DIR            ABSENT      ANTHROPIC_API_KEY           ABSENT
+    CODEX_HOME                  ABSENT      OPENAI_API_KEY              ABSENT
+    GNOSIS_ARBITRARY_SENTINEL   ABSENT      (an arbitrary name, to prove the
+                                             policy is closed rather than a
+                                             deny-list of known bad names)
+    PATH                        VALUE REJECTED — the name necessarily exists in
+                                the child because PATH is BUILT; the worker's
+                                `C:\worker\bin` entry is absent.
+
+The PATH row is called out because an earlier version of this check treated it
+like the others and reported a failure the code did not have: for PATH the
+property is "the poisoned VALUE did not survive", not "the name is absent".
+
+
+10. PROFILE-PATH VALIDATION
+--------------------------------------------------------------------------------------
+Profile-scoped values must lie inside the OS-reported profile root, compared
+COMPONENT-WISE after case/separator normalisation — `C:\Users\Worker2` starts
+with `C:\Users\Worker` as a string and is a different profile. Tested: a
+redirected USERPROFILE, a sibling-prefix APPDATA, a bare `C:\Users`, a UNC path
+and a relative path are all DROPPED; a genuine value and a `c:/users/worker/`
+spelling of it both survive.
+
+Redirection is answered by DROPPING, never by correcting: a value the Worker
+moved is not silently repaired into something plausible.
+
+
+11-15. REGRESSIONS (re-demonstrated on the corrected build, not carried forward)
+--------------------------------------------------------------------------------------
+    bootstrap        starts, seals, launches; tampered spec still exit 121
+    toolchain        python rc=0 · git rc=0 · claude 2.1.247 rc=0;
+                     WRITE to runtime and bootstrap DENIED
+    argv fidelity    14 edge cases exact, including the 12 kB payload;
+                     %VAR%/$VAR still literal
+    SID / token      observed SID == expected; Medium; non-admin; no dangerous
+                     privilege; wrong SID still refused
+    Job              contained; timeout terminates the job; grandchild frozen
+                     after termination; 0 worker processes left
+    D3               SeBackup/SeRestore still absent from the launcher path, and
+                     the privilege-drop launch still succeeds
+    cross-process    Worker -> Director all DENIED
+    Director sentinel still ABSENT
+
+
+16. MUTATION RESULT      38 mutants, 38 CAUGHT, 0 SURVIVED
+--------------------------------------------------------------------------------------
+    WM32  the logical child gets a copy of the whole worker environment
+    WM33  an unknown variable passes the base allowlist
+    WM34  PATH is taken from the worker profile instead of being built
+    WM35  a profile path pointing outside the worker root is accepted
+    WM36  a sibling prefix counts as inside the profile root
+    WM37  the sealed overlay may set any name again
+    WM38  the environment policy version is not bound to the launch
+    WM39  OS facts are taken from the worker environment
+    WM30  a credential-shaped name is admitted into the overlay policy
+
+    WM30 SURVIVED ITS FIRST RUN AND THE DESIGN CHANGED BECAUSE OF IT. The
+    credential-shaped-name filter had been a PER-VALUE check, and once the
+    closed set existed it became unreachable: the closed set rejects every
+    unlisted name before any value is examined. That is the RM13 defect again —
+    a check that cannot fail. The guard was moved onto the POLICY SET, enforced
+    at import, where it is live: it fires the moment someone widens
+    `OVERLAY_ALLOWED_NAMES` to admit a credential. The mutant now does exactly
+    that, and dies.
+
+    All 29 earlier Stage-5 mutants preserved and still dying; WM18, WM21 and
+    WM22 had anchor text updated because this change moved the lines they
+    target, with the mutations unchanged in intent.
+
+
+17. SUITE / REGRESSION
+--------------------------------------------------------------------------------------
+    FULL SUITE       run 1 RED on the PRE-EXISTING work-queue flake; run 3
+                     GREEN 1365 passed, 1 skipped, 98 subtests (detached).
+                     Attributed by measurement on BOTH trees, not asserted:
+                     4/20 here AND 4/20 on 466fb3d before this change.
+                     tests/test_work_queue.py NOT modified - out of scope.
+    directed         75 passed, 1 skipped
+    OS-real probe    77 checks, ALL PASSED, rollback verified
+    fresh checkout   328930c extracted clean: 264 passed, 1 skipped, 28 subtests
+    mypy --strict    Success, 68 source files
+    ruff             clean on every Stage-5 file. The pre-existing repo-wide
+                     baseline in files this stage never touched is unchanged and
+                     is NOT folded into that claim.
+
+
+18. TCB DELTA
+--------------------------------------------------------------------------------------
+    trust/launch_spec.py       377 -> 536 LOC   (the environment policy)
+    trust/bootstrap.py         130 -> 186 LOC   (OS facts + closed build)
+    trust/worker_launcher.py   796 -> 804 LOC
+    Trust Plane total          4574 -> 4797 LOC
+
+    TRUST_ALLOWLIST unchanged: the filtering lives inside the existing trusted
+    launcher/bootstrap modules, as the review preferred. No new module, no
+    engine or worker dependency, no dynamic loading, no third-party code, and
+    the closed-world tests stay green.
+
+    TCB TERMINOLOGY, STILL FROZEN:
+        project-source Trust Plane   ~4797 LOC
+        trusted Python runtime       ~62 MB / 3434 files
+    Neither may be quoted without the other.
+
+    ONE NEW WIN32 SURFACE, NAMED: the bootstrap now calls
+    `GetSystemDirectoryW` and `GetUserProfileDirectoryW`. Both are unprivileged —
+    the second takes THIS PROCESS'S OWN token — and neither is `LoadUserProfileW`
+    or `CreateEnvironmentBlock`. The D3 assertion that the LAUNCHER calls no
+    privilege-requiring API is unchanged and still enforced.
+
+
+19-22. COMMITS / HEAD / EVIDENCE / ROLLBACK
+--------------------------------------------------------------------------------------
+    commits    implementation 328930c; evidence + state THIS COMMIT
+    HEAD       this evidence commit, on top of 328930c
+    evidence   .gnosis/evidence/20260828T150743Z/
+    rollback   account deleted (NetUserDel status 0), Win32 profile removed —
+               WHICH ALSO REMOVES THE POISONED HKCU\Environment, since it lives
+               in that profile's NTUSER.DAT — probe root removed, `net user`
+               rc=2, DPAPI blob removed, no service, no scheduled task, no
+               production ACL. Verified, not assumed.
+
+
+23. RESIDUAL RISKS
+--------------------------------------------------------------------------------------
+    R1  THE ALLOWLIST IS SIZED AGAINST STARTUP-LEVEL PROBES, not a full agent
+        turn, because a real turn is a provider call. If a turn needs a variable
+        the policy drops, it fails CLOSED and visibly — the failure mode is a
+        broken run, not a silent bypass — and the fix is a reviewed one-line
+        widening plus a policy-version bump.
+    R2  The bootstrap still RECEIVES the Worker's profile environment. That is
+        deliberate and was not re-litigated: it is hardened by `-I`, absolute
+        trusted runtime and script paths, no PATH search, no shell and a trusted
+        cwd. The registry path-lookup residual (`python._pth`) remains a Stage-8
+        item and this experiment produced no contradiction to Stage 5.
+    R3  Profile-path validation compares against the OS-reported root WITHOUT
+        resolving links, deliberately: resolving would follow a junction the
+        Worker planted straight past the check. A directory-junction attack
+        INSIDE the profile root is therefore not addressed here and belongs with
+        the Stage-8 ACL work.
+    R4  Everything Stage 5 already carried: toolchain relocation required, DPAPI
+        machine binding is not launcher binding, the Job contains descendants but
+        is not a security boundary, RunIdentity is unwired until Stage 6, the
+        single-worker lifecycle assumption, and the deployment-binding debt
+        (deployment_digest does not yet cover the bootstrap/runtime artifacts).
+
+
+======================================================================================
+STAGE 5 ENVIRONMENT HARDENING: PASS
+READY FOR FINAL INDEPENDENT STAGE 5 CLOSURE REVIEW
+======================================================================================

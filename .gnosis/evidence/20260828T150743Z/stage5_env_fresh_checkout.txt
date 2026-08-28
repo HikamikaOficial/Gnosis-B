@@ -1,0 +1,16 @@
+FRESH CHECKOUT OF 328930c
+======================================================================
+git archive of the COMMIT, extracted into a clean directory.
+Nothing from the working tree participates.
+
+extracted files: 1043
+
+........................................................................ [ 27%]
+...s............................................................. [ 51%]
+................................................... [ 70%]
+........................................................................ [ 98%]
+.....                                                                    [100%]
+=========================== short test summary info ===========================
+SKIPPED [1] tests\test_worker_launcher.py:966: the refusal is the non-Windows path
+264 passed, 1 skipped, 28 subtests passed in 26.19s
+FRESH_EXIT=0

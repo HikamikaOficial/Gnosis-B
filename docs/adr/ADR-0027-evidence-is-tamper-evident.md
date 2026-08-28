@@ -1994,3 +1994,105 @@ mypy strict clean over 68 source files.
 
 **Stage 5 D3 hardening: PASS. Ready for independent Stage 5 closure review.**
 Stage 6 NOT started. F-14 remains CLOSED.
+
+## Addendum — Stage 5 environment hardening (2026-08-28)
+
+The closure review approved the D3 removal of `LogonUserW` and `LoadUserProfileW`
+and then found what that removal exposed. After D3 the bootstrap runs under the
+Worker SID holding the **Worker's own** profile environment, and it forwarded
+`os.environ` to the logical child. Under T2 the Worker is assumed compromised, so
+a previous run can write into its own `HKCU\Environment`, which Windows rebuilds
+into the next run's profile block. "The Director's environment is absent" was
+necessary and not sufficient. The property actually required is:
+
+    worker-controlled persistent state cannot alter trusted logical launch semantics
+
+### A closed allowlist, because a credential-shaped filter is not a security model
+
+Filtering names that *look* secret fails open on every name nobody thought of, and
+the dangerous ones do not look secret: `NODE_OPTIONS` (injects a module into any
+node process), `PYTHONSTARTUP` and `PYTHONPATH`, `GIT_CONFIG_GLOBAL` (rewrites git
+behaviour including hooks), `SSLKEYLOGFILE` and `SSL_CERT_FILE` (exfiltrates or
+re-roots TLS trust), `HTTPS_PROXY`. The rule is now `unknown variable = DENIED`.
+
+`child_environment()` builds the block from nothing. Fourteen variables reach the
+child: four OS facts, five profile-scoped names, four inherited descriptors, and a
+built `PATH`, plus whatever the sealed overlay is permitted to set.
+
+### The OS facts are asked of the OS
+
+`SystemRoot`, `windir`, `SystemDrive`, `COMSPEC` and `PATHEXT` are not copied from
+an environment the Worker can write. The bootstrap takes them from
+`GetSystemDirectoryW` and from `GetUserProfileDirectoryW` against its own process
+token, so poisoning the variables that name them changes nothing.
+
+### PATH is built, never inherited
+
+`deterministic_path()` composes the trusted system locations in a fixed order and
+discards the Worker's `PATH` entirely. A sealed overlay may prepend trusted
+entries, and only absolute paths pass the seal.
+
+### Profile values are validated, not trusted
+
+`USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TEMP` and `TMP` are admitted only if
+they resolve **inside** the Worker's real profile root, compared component-wise so
+that a sibling directory sharing a textual prefix cannot pass.
+
+### The guard belongs on the policy, not on the values
+
+A per-value credential filter sitting behind a closed allowlist is unreachable —
+the RM13 lesson again: a check that cannot fail is not a check. `credential_shaped()`
+now guards `OVERLAY_ALLOWED_NAMES` itself and is enforced **at import**, so a future
+edit that adds a credential-shaped name to the allowlist fails to load rather than
+shipping quietly.
+
+### The policy is bound to the intent
+
+`environment_policy_version` is a sealed `LaunchSpec` field, so it is covered by
+`launch_spec_digest` and the policy in force is part of what the launch authorises.
+
+### Proved OS-real, across runs
+
+Run A poisoned 22 dangerous variables into the Worker's own `HKCU\Environment` and
+its job was terminated. Run B measured both halves of the claim: **22 of 22 still
+persisted** in the registry — the attack channel is real and was not accidentally
+disabled — and **0 of them reached the logical child**. `PATH` was present because
+it is built; the Worker's own `PATH` entry was absent; `USERPROFILE` and `APPDATA`
+were still the Worker's own validated values. Persistence proved, influence zero.
+
+### TCB terminology, restated (the pair is still frozen)
+
+    project-source Trust Plane   ~4797 LOC
+    trusted Python runtime       ~62 MB / 3434 files
+
+Neither may be quoted without the other. The Trust Plane grew from 4574 by the
+environment policy itself; the module allowlist did not change and no dependency
+was added.
+
+### Evidence
+
+`.gnosis/evidence/20260828T150743Z/` — OS-real probe 77/77 with verified rollback and the
+cross-run poisoning test; directed suite 75 passed / 1 skipped; mutation 38/38
+caught including eight new environment-policy mutants; fresh checkout of `328930c`;
+ruff clean; mypy strict clean over 68 source files.
+
+**The full suite is recorded honestly and is NOT claimed green on the first run:**
+run 1 was `1364 passed, 1 failed`, the failure being
+`test_work_queue.py::TestRepairsFromTheIndependentReview::test_a_brief_is_not_re_offered_forever`.
+That failure is the project's **pre-existing** work-queue flake, recorded in
+`docs/NEXT_ACTIONS.md` since 2026-08-26, and it was attributed rather than assumed:
+it reproduces at the same rate in isolation on this tree **and** on `466fb3d`
+before this change, and its root cause is in the test's own fixture —
+`_short_lived()` sets `default_ttl_s=0.05`, imposing a 50 ms wall-clock deadline on
+a test about attempt exhaustion that has nothing to do with lease expiry. The work
+queue is outside this stage's authorised scope and was **not** modified; the repair
+is recorded in `NEXT_ACTIONS`. A second run was **killed by the harness at 73% and
+discarded rather than reported** — a half-finished suite is not evidence — and the
+third, launched detached for that reason, finished **GREEN: `1365 passed, 1 skipped,
+98 subtests`, exit 0**. Both the red run and the green one are in the bundle, in
+that order.
+
+    bundle_digest  ca04c7f838d92147f9b6fee6680e7a3dea550490361ac17fdcc74120c7f3dce5
+
+**Stage 5 environment hardening: PASS. Ready for final independent Stage 5 closure
+review.** Stage 6 NOT started. F-14 remains CLOSED.
