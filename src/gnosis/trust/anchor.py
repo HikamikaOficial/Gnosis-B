@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from gnosis.kernel.canonical import GENESIS_HASH, hash_canonical
+from gnosis.trust.bundle_verify import verify_bundle
 from gnosis.trust.launch import (
     AuthorityUnavailable,
     assert_publisher_identity,
@@ -424,7 +425,6 @@ def build_anchor_record(store: AnchorStore, identity: RunIdentity, bundle_dir: P
        the exact run identity (V2), and is chained to the ledger's head.
     """
     if verify is None:
-        from gnosis.kernel.evidence_capture import verify_bundle  # lazy: avoid import cycle
         verify = verify_bundle
     result = verify(bundle_dir)
     if not getattr(result, "verified", False):
@@ -488,7 +488,6 @@ def verify_anchored_bundle(store: AnchorStore, run_id: str, bundle_dir: Path,
     verifiable.
     """
     if verify is None:
-        from gnosis.kernel.evidence_capture import verify_bundle  # lazy: avoid import cycle
         verify = verify_bundle
     if not store.verify_chain():
         raise AuthorityUnavailable("the anchor chain does not verify")

@@ -105,6 +105,15 @@ TRUST_ALLOWLIST: dict[str, str] = {
         "CreateProcessWithLogonW, suspended-until-verified identity checks, job "
         "containment and the environment allowlist. Trusted because a compromise "
         "of it would let a run execute under an identity nobody authorized."),
+    # Stage-6 addition. This one SHRINKS the TCB rather than enlarging it:
+    "gnosis.trust.bundle_verify": (
+        "the minimal bundle verifier (F-17 Stage 6) — manifest read, hash, "
+        "compare, and nothing else. It exists so the publisher can answer a "
+        "question about bytes WITHOUT the machinery that produced them: before "
+        "it, the default verify path pulled evidence_capture, git_evidence, "
+        "input_lock and write_observer into a running publication, and a "
+        "publisher that can execute Git is a publisher that can be made to "
+        "execute Git. `evidence_capture` now imports THIS, never the reverse."),
 }
 
 # Trust Plane entry points whose load-time closure is measured. A new trusted
@@ -125,17 +134,22 @@ TRUST_ENTRY_POINTS = ("gnosis.trust.anchor", "gnosis.trust.launch",
 # below refuses any lazy internal import that is neither allowlisted nor
 # declared here.
 #
-# This entry is the reason the PUBLISH-time trusted closure is far larger than
-# the load-time one (verify_bundle drags in git_evidence/input_lock/
-# write_observer). The `verify=` injection seam exists precisely so a deployed
-# publisher can pass a minimal verifier instead; that extraction is Stage-6
-# work (docs/F17_P2_PUBLISHER_DESIGN.md §8), deliberately NOT done here.
+# THIS LIST IS NOW EMPTY, AND THAT IS THE STAGE-6 RESULT.
+#
+# It used to hold `gnosis.kernel.evidence_capture`: verify_bundle was imported
+# lazily inside publish_anchor / verify_anchored_bundle, which meant the
+# PUBLISH-time closure was far larger than the load-time one and dragged
+# git_evidence, input_lock and write_observer into a running publication. The
+# `verify=` seam let a deployed publisher pass something smaller, but the
+# DEFAULT still reached for the big one, and a default is what runs.
+#
+# Stage 6 moved the verifier to `gnosis.trust.bundle_verify` and pointed the
+# default at it, so there is no lazy internal import left to declare. Measured
+# after a REAL publication: 14 modules -> 11, and all four forbidden modules
+# gone. If an entry reappears here, the publisher grew a dependency at run time
+# that its load-time closure does not show.
 # ---------------------------------------------------------------------------
-DEFERRED_TCB_EXPANSION: dict[str, str] = {
-    "gnosis.kernel.evidence_capture": (
-        "verify_bundle, imported inside publish_anchor / verify_anchored_bundle to "
-        "avoid an import cycle; overridable through the verify= injection seam"),
-}
+DEFERRED_TCB_EXPANSION: dict[str, str] = {}
 
 
 def _is_internal(module: str) -> bool:
