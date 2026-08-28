@@ -60,7 +60,26 @@ from gnosis.kernel.canonical import hash_canonical
 from gnosis.trust.launch import AuthorityUnavailable
 
 DEPLOYMENT_SCHEMA = "gnosis.trust.deployment.v1"
+
+# V2 EXISTS BECAUSE V1 UNDER-BOUND THE RUNTIME (F-17 Stage 6).
+#
+# A V1 identity measured the interpreter as ONE FILE: `python.exe`'s bytes. But
+# the deployed runtime is a tree of thousands of files - the standard library,
+# the DLLs, the `.pth` files - every one of which can change what that
+# executable actually does. Binding the launcher while leaving `os.py` and
+# `encodings/` unmeasured is not a deployment binding; it is a deployment
+# binding with the interesting part left out.
+#
+# So V2 adds `runtime_tree`, a closed-world manifest of the runtime root, and
+# the schema is bumped rather than the field being slipped in: a V1 digest and
+# a V2 digest over the same machine are DIFFERENT VALUES, and that must be
+# visible rather than silent.
+DEPLOYMENT_SCHEMA_V2 = "gnosis.trust.deployment.v2"
+CURRENT_DEPLOYMENT_SCHEMA = DEPLOYMENT_SCHEMA_V2
+SUPPORTED_DEPLOYMENT_SCHEMAS = frozenset({DEPLOYMENT_SCHEMA, DEPLOYMENT_SCHEMA_V2})
+
 MANIFEST_SCHEMA = "gnosis.trust.package.v1"
+FILE_TREE_SCHEMA = "gnosis.trust.file_tree.v1"
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -557,6 +576,75 @@ class TrustPackageManifest:
         return hash_canonical(self.to_dict())
 
 
+@dataclass(frozen=True)
+class FileTreeManifest:
+    """A closed-world manifest of a trusted directory tree that is NOT a package.
+
+    The trust package has a `PACKAGE.json` declaring version/commit/tree. The
+    Python runtime has nothing of the kind, and inventing one for it would be
+    inventing a provenance claim nobody made. So this carries the same measured
+    content - every file, by its real bytes, in one deterministic order - and no
+    claims at all. `label` names WHICH tree it is, so two manifests cannot be
+    silently interchanged.
+    """
+
+    schema: str
+    label: str
+    files: tuple[FileIdentity, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"schema": self.schema, "label": self.label,
+                "files": [f.to_dict() for f in self.files]}
+
+    def digest(self) -> str:
+        return hash_canonical(self.to_dict())
+
+
+def _measure_tree(root: Path, what: str) -> tuple[FileIdentity, ...]:
+    """Measure EVERY file under `root`, refusing anything that resolves out of it.
+
+    Shared by the trust package and the runtime tree because the property is the
+    same one in both places: no file is excluded, since an excluded file is an
+    unmeasured file, and an unmeasured file under a trusted root is code that can
+    run without the identity changing. A path that resolves outside the root - a
+    junction, a symlink - is refused rather than followed, because then `expected
+    path` and `executed bytes` would be two different objects.
+    """
+    _require_windows(f"{what} observation")
+    if not root.is_dir():
+        raise DeploymentIdentityUnavailable(f"{what} root {root} does not exist; fail closed")
+    resolved_root = observed_directory_path(root)
+    prefix = resolved_root.rstrip("\\") + "\\"
+
+    files: list[FileIdentity] = []
+    for candidate in root.rglob("*"):
+        if candidate.is_dir():
+            continue
+        resolved, size, digest = _measure_file(candidate)
+        if not resolved.startswith(prefix):
+            raise DeploymentIdentityUnavailable(
+                f"trusted artifact {candidate} resolves outside the {what} root "
+                f"to {resolved}; refusing to measure a redirected deployment")
+        relative = str(PurePosixPath(*Path(resolved[len(prefix):]).parts))
+        files.append(FileIdentity(path=relative, size=size, digest=digest))
+
+    if not files:
+        raise DeploymentIdentityUnavailable(f"{what} root {root} holds no files; fail closed")
+    return tuple(sorted(files, key=lambda f: f.path))
+
+
+def observe_runtime_tree(root: Path) -> FileTreeManifest:
+    """Measure the deployed Python runtime tree, byte for byte.
+
+    This is the field that makes `deployment_digest` mean what it says. Before
+    it, the runtime was bound by `python.exe` alone, and every one of the
+    thousands of library files that decide what that executable does was
+    outside the identity.
+    """
+    return FileTreeManifest(schema=FILE_TREE_SCHEMA, label="python-runtime",
+                            files=_measure_tree(root, "trusted runtime"))
+
+
 def _read_package_declaration(root: Path) -> dict[str, str]:
     """version/commit/tree, read from the DEPLOYED package, not from a caller.
 
@@ -593,35 +681,19 @@ def observe_trust_package(root: Path) -> TrustPackageManifest:
     unmeasured file under the trust root is code that can run without the
     identity changing.
     """
+    # The root check comes BEFORE the declaration read so that a missing trust
+    # root still reports itself as a missing trust root, rather than as an
+    # unreadable PACKAGE.json inside a directory that was never there.
     _require_windows("trust package observation")
     if not root.is_dir():
         raise DeploymentIdentityUnavailable(f"trust root {root} does not exist; fail closed")
-    resolved_root = observed_directory_path(root)
-    prefix = resolved_root.rstrip("\\") + "\\"
     declaration = _read_package_declaration(root)
-
-    files: list[FileIdentity] = []
-    for candidate in root.rglob("*"):
-        if candidate.is_dir():
-            continue
-        resolved, size, digest = _measure_file(candidate)
-        if not resolved.startswith(prefix):
-            # The file resolves outside the trust root: a redirection that
-            # would make `expected path` and `executed bytes` different objects.
-            raise DeploymentIdentityUnavailable(
-                f"trusted artifact {candidate} resolves outside the trust root "
-                f"to {resolved}; refusing to measure a redirected deployment")
-        relative = str(PurePosixPath(*Path(resolved[len(prefix):]).parts))
-        files.append(FileIdentity(path=relative, size=size, digest=digest))
-
-    if not files:
-        raise DeploymentIdentityUnavailable(f"trust root {root} holds no files; fail closed")
     return TrustPackageManifest(
         schema=MANIFEST_SCHEMA,
         package_version=declaration["package_version"],
         source_commit=declaration["source_commit"],
         source_tree=declaration["source_tree"],
-        files=tuple(sorted(files, key=lambda f: f.path)))
+        files=_measure_tree(root, "trust root"))
 
 
 def verify_package_against_expected(observed: TrustPackageManifest,
@@ -969,14 +1041,47 @@ class TrustPlaneDeploymentIdentity:
     runidentity_store: PathSecurityIdentity
     anchorstore: PathSecurityIdentity
     pipe_policy: PipePolicyIdentity
+    # V2 ONLY. The runtime as a TREE, not as one executable. See
+    # DEPLOYMENT_SCHEMA_V2: without it, thousands of files that decide what the
+    # interpreter does sit outside the identity that claims to bind it.
+    runtime_tree: FileTreeManifest | None = None
+
+    def __post_init__(self) -> None:
+        if self.schema not in SUPPORTED_DEPLOYMENT_SCHEMAS:
+            raise DeploymentIdentityUnavailable(
+                f"unknown deployment schema {self.schema!r}; refusing to read or write it")
+        if self.schema == DEPLOYMENT_SCHEMA_V2:
+            if self.runtime_tree is None:
+                raise DeploymentIdentityUnavailable(
+                    "a V2 deployment identity must carry runtime_tree; a V2 "
+                    "identity without it would claim a runtime binding it does "
+                    "not have")
+        elif self.runtime_tree is not None:
+            # The same anti-masquerade rule the anchor schemas use: a record is
+            # either V1 or V2, never one wearing the other's fields.
+            raise DeploymentIdentityUnavailable(
+                f"a {DEPLOYMENT_SCHEMA} identity cannot carry a runtime_tree")
 
     def to_dict(self) -> dict[str, Any]:
-        return {"schema": self.schema, "package": self.package.to_dict(),
-                "runtime": self.runtime.to_dict(), "service": self.service.to_dict(),
-                "trust_root": self.trust_root.to_dict(),
-                "runidentity_store": self.runidentity_store.to_dict(),
-                "anchorstore": self.anchorstore.to_dict(),
-                "pipe_policy": self.pipe_policy.to_dict()}
+        out = {"schema": self.schema, "package": self.package.to_dict(),
+               "runtime": self.runtime.to_dict(), "service": self.service.to_dict(),
+               "trust_root": self.trust_root.to_dict(),
+               "runidentity_store": self.runidentity_store.to_dict(),
+               "anchorstore": self.anchorstore.to_dict(),
+               "pipe_policy": self.pipe_policy.to_dict()}
+        # A V1 identity emits EXACTLY the V1 keys, so a historical
+        # deployment_digest still re-derives byte for byte.
+        if self.schema == DEPLOYMENT_SCHEMA_V2:
+            assert self.runtime_tree is not None  # enforced in __post_init__
+            out["runtime_tree"] = self.runtime_tree.to_dict()
+        return out
+
+    @property
+    def binds_runtime_tree(self) -> bool:
+        """True only for an identity that measured the runtime as a tree.
+        A V1 identity is readable as historical evidence, but it can never
+        satisfy the Stage 6 runtime-binding requirement."""
+        return self.schema == DEPLOYMENT_SCHEMA_V2
 
     def digest(self) -> str:
         """`deployment_digest` — the ONE canonical hash primitive (ADR-0004)
@@ -997,6 +1102,11 @@ class DesiredDeploymentConfig:
 
     trust_root: Path
     runtime_executable: Path
+    # WHICH TREE IS THE RUNTIME - stated, never inferred. Deriving it from
+    # `runtime_executable.parent` would be a guess, and a guess that lands one
+    # directory too high binds the whole of `Program Files`, while a guess one
+    # too low binds nothing that matters. Provisioning knows; it says so here.
+    runtime_root: Path
     runidentity_store: Path
     anchorstore: Path
     service_name: str
@@ -1004,6 +1114,31 @@ class DesiredDeploymentConfig:
     expected_service_account: str | None = None
     expected_sid_type: str | None = None
     expected_manifest: TrustPackageManifest | None = None
+
+
+def _assert_executable_inside_runtime_root(config: DesiredDeploymentConfig) -> None:
+    """The measured tree must be the tree the measured interpreter lives in.
+
+    Otherwise the two halves of the runtime binding describe different objects:
+    a `runtime_tree` over some other directory would hash thousands of files
+    that have no bearing on what `runtime_executable` loads, and would read in
+    evidence exactly like a binding that does. Both paths are resolved through
+    the OS first, so a junction cannot make an outside executable look inside.
+    """
+    resolved_root = observed_directory_path(config.runtime_root).rstrip("\\")
+    try:
+        with open(config.runtime_executable, "rb") as fh:
+            resolved_exe = _final_path(msvcrt.get_osfhandle(fh.fileno()))
+    except OSError as exc:
+        raise DeploymentIdentityUnavailable(
+            f"trusted runtime {config.runtime_executable} could not be read: {exc}") from exc
+    root_parts = resolved_root.lower().split("\\")
+    exe_parts = resolved_exe.lower().split("\\")
+    if exe_parts[:len(root_parts)] != root_parts:
+        raise DeploymentIdentityUnavailable(
+            f"trusted runtime {resolved_exe} is not inside the declared runtime "
+            f"root {resolved_root}; the runtime tree would bind a different "
+            "installation than the one that executes")
 
 
 def observe_deployment(config: DesiredDeploymentConfig) -> TrustPlaneDeploymentIdentity:
@@ -1017,10 +1152,12 @@ def observe_deployment(config: DesiredDeploymentConfig) -> TrustPlaneDeploymentI
     package = observe_trust_package(config.trust_root)
     if config.expected_manifest is not None:
         verify_package_against_expected(package, config.expected_manifest)
+    _assert_executable_inside_runtime_root(config)
     return TrustPlaneDeploymentIdentity(
-        schema=DEPLOYMENT_SCHEMA,
+        schema=CURRENT_DEPLOYMENT_SCHEMA,
         package=package,
         runtime=observe_runtime(config.runtime_executable),
+        runtime_tree=observe_runtime_tree(config.runtime_root),
         service=observe_service(config.service_name),
         trust_root=observe_path_security(config.trust_root),
         runidentity_store=observe_path_security(config.runidentity_store),

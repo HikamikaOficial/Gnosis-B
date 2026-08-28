@@ -312,6 +312,12 @@ class PublicationRequest:
     expected_repository_id: str
     expected_head_sha: str
     expected_tree_identity: str
+    # Stage 6. The sealed launch intent the trusted caller believes this run
+    # came from. `None` means "this caller holds no launch binding" and is
+    # accepted ONLY against a V1 identity, which has none either; a V2 identity
+    # is refused unless the digests match, so the binding cannot be dropped by
+    # simply not asking about it.
+    expected_launch_spec_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -365,6 +371,29 @@ def authorize_publication(store: TrustedRunIdentityStore,
                 PublicationVerdict.REFUSED,
                 f"{what} mismatch: run holds {actual!r}, expected {expected!r}",
                 record)
+    # The launch binding is compared SEPARATELY from the loop above because its
+    # absence is meaningful, not merely unequal: a V2 identity that is asked for
+    # with no expected launch digest is refused rather than waved through, which
+    # is what stops the Stage 5 seal being dropped by an under-specified caller.
+    if identity.binds_launch_intent:
+        if request.expected_launch_spec_digest is None:
+            return PublicationDecision(
+                PublicationVerdict.REFUSED,
+                "this run is bound to a sealed launch intent, but the request "
+                "carries no expected launch_spec_digest; a launch binding is "
+                "not satisfied by declining to check it", record)
+        if request.expected_launch_spec_digest != identity.launch_spec_digest:
+            return PublicationDecision(
+                PublicationVerdict.REFUSED,
+                f"launch_spec_digest mismatch: run holds "
+                f"{identity.launch_spec_digest!r}, expected "
+                f"{request.expected_launch_spec_digest!r}", record)
+    elif request.expected_launch_spec_digest is not None:
+        return PublicationDecision(
+            PublicationVerdict.REFUSED,
+            "the request expects a sealed launch intent, but this run's identity "
+            "carries none; a V1 identity cannot satisfy a launch binding", record)
+
     if request.expected_epoch != identity.epoch:
         return PublicationDecision(
             PublicationVerdict.REFUSED,

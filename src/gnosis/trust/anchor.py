@@ -46,7 +46,23 @@ CURRENT_ANCHOR_SCHEMA = ANCHOR_SCHEMA_V2
 SUPPORTED_ANCHOR_SCHEMAS = frozenset({ANCHOR_SCHEMA, ANCHOR_SCHEMA_V2})
 
 RUN_IDENTITY_SCHEMA = "gnosis.trust.run_identity.v1"
-SUPPORTED_RUN_IDENTITY_SCHEMAS = frozenset({RUN_IDENTITY_SCHEMA})
+
+# V2 BINDS THE SEALED LAUNCH INTENT (F-17 Stage 6).
+#
+# Stage 5 sealed a LaunchSpec and surfaced its `launch_spec_digest`: the exact
+# logical command, argv, cwd and environment POLICY the Director authorized. A
+# run identity that does not carry it can say which worker and which deployment
+# produced an anchor, but not WHICH AUTHORIZED LAUNCH it came from - so two runs
+# of the same worker under the same deployment with different sealed intents are
+# indistinguishable in the evidence.
+#
+# It is added to the IDENTITY rather than copied into the anchor because the
+# anchor already binds `run_identity_digest`, which covers the whole immutable
+# identity in one value. Binding it once, transitively, beats binding it twice
+# and having to keep the two copies agreeing.
+RUN_IDENTITY_SCHEMA_V2 = "gnosis.trust.run_identity.v2"
+CURRENT_RUN_IDENTITY_SCHEMA = RUN_IDENTITY_SCHEMA_V2
+SUPPORTED_RUN_IDENTITY_SCHEMAS = frozenset({RUN_IDENTITY_SCHEMA, RUN_IDENTITY_SCHEMA_V2})
 
 # A Windows SID in its canonical string form. The authoritative worker identity
 # is a SID and nothing else: a username, a display name, an environment
@@ -297,7 +313,12 @@ class RunIdentity:
     owner_worker_sid: str   # OS-observed TokenUser SID of the authorized worker
     deployment_digest: str  # the Stage-2 deployment this run belongs to
     epoch: int              # the EXISTING fencing generation (claims.TaskClaim.epoch)
-    schema: str = RUN_IDENTITY_SCHEMA
+    schema: str = CURRENT_RUN_IDENTITY_SCHEMA
+    # V2 ONLY. The Stage-5 `launch_spec_digest` of the sealed LaunchSpec this run
+    # was launched from. It has no default value that means "unknown": a V2
+    # identity without it is refused, so an extension can never be satisfied by
+    # a caller that simply did not know about it.
+    launch_spec_digest: str | None = None
 
     def __post_init__(self) -> None:
         if self.schema not in SUPPORTED_RUN_IDENTITY_SCHEMAS:
@@ -315,18 +336,32 @@ class RunIdentity:
                 f"(S-1-...); got {self.owner_worker_sid!r}. A username, display "
                 "name or label is not an identity the OS enforces against.")
         _require_digest(self.deployment_digest, "RunIdentity.deployment_digest")
+        if self.schema == RUN_IDENTITY_SCHEMA_V2:
+            _require_digest(self.launch_spec_digest, "a V2 RunIdentity's launch_spec_digest")
+        elif self.launch_spec_digest is not None:
+            # Anti-masquerade, the same rule the anchor schemas follow: an
+            # identity is either V1 or V2, never a V1 wearing a V2 field, which
+            # would let an unbound launch read as a bound one.
+            raise AuthorityUnavailable(
+                f"a {RUN_IDENTITY_SCHEMA} identity cannot carry a launch_spec_digest")
         if isinstance(self.epoch, bool) or not isinstance(self.epoch, int) or self.epoch < 0:
             raise AuthorityUnavailable(
                 f"RunIdentity.epoch must be a non-negative integer; got {self.epoch!r}")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "schema": self.schema, "task_id": self.task_id, "run_id": self.run_id,
             "repository_id": self.repository_id, "head_sha": self.head_sha,
             "tree_identity": self.tree_identity, "bundle_path": self.bundle_path,
             "owner_worker_sid": self.owner_worker_sid,
             "deployment_digest": self.deployment_digest, "epoch": self.epoch,
         }
+        # A V1 identity emits EXACTLY the V1 keys - no `launch_spec_digest: null`
+        # - so a historical identity digest, and every anchor chained to it,
+        # still re-derives byte for byte.
+        if self.schema == RUN_IDENTITY_SCHEMA_V2:
+            out["launch_spec_digest"] = self.launch_spec_digest
+        return out
 
     def digest(self) -> str:
         """The canonical digest of the WHOLE immutable identity.
@@ -336,6 +371,13 @@ class RunIdentity:
         a cross-identity anchor all detectable by a single comparison. Uses the
         ONE canonical primitive (ADR-0004); no second hashing implementation."""
         return hash_canonical(self.to_dict())
+
+    @property
+    def binds_launch_intent(self) -> bool:
+        """True only for an identity that names the sealed launch it came from.
+        A V1 identity remains readable as historical evidence, but it cannot
+        satisfy the Stage 6 launch-binding requirement."""
+        return self.schema == RUN_IDENTITY_SCHEMA_V2
 
 
 def _bundle_head_sha(bundle_dir: Path) -> str | None:

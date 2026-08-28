@@ -52,17 +52,22 @@ SID_A = "S-1-5-21-1111111111-2222222222-3333333333-1001"
 SID_B = "S-1-5-21-1111111111-2222222222-3333333333-1002"
 DEPLOY_1 = "d" * 64
 DEPLOY_2 = "f" * 64
+# Stage 6: the sealed launch intent a run was authorized from.
+LAUNCH_1 = "a" * 64
+LAUNCH_2 = "b" * 64
 ANCHOR_DIGEST = "a" * 64
 
 
 def _identity(run_id: str = "RUN-20260827T000000000Z-abcd1234", *,
               head: str = "h" * 40, tree: str = "t" * 64, sid: str = SID_A,
               deployment: str = DEPLOY_1, epoch: int = 3,
-              repo: str = "repoX", task: str = "TASK-1") -> RunIdentity:
+              repo: str = "repoX", task: str = "TASK-1",
+              launch: str = LAUNCH_1) -> RunIdentity:
     return RunIdentity(task_id=task, run_id=run_id, repository_id=repo,
                        head_sha=head, tree_identity=tree,
                        bundle_path=".gnosis/evidence/x", owner_worker_sid=sid,
-                       deployment_digest=deployment, epoch=epoch)
+                       deployment_digest=deployment, epoch=epoch,
+                       launch_spec_digest=launch)
 
 
 def _request(identity: RunIdentity, **overrides: object) -> PublicationRequest:
@@ -75,6 +80,7 @@ def _request(identity: RunIdentity, **overrides: object) -> PublicationRequest:
         "expected_repository_id": identity.repository_id,
         "expected_head_sha": identity.head_sha,
         "expected_tree_identity": identity.tree_identity,
+        "expected_launch_spec_digest": identity.launch_spec_digest,
     }
     base.update(overrides)
     return PublicationRequest(**base)  # type: ignore[arg-type]

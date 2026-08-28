@@ -44,6 +44,8 @@ from gnosis.trust.anchor import ANCHOR_SCHEMA_V2, AnchorNotDeploymentBound
 # deliberately, and only where V1 compatibility is the thing under test.
 SID = "S-1-5-21-1111111111-2222222222-3333333333-1001"
 DEPLOY = "d" * 64
+# Stage 6: every trusted identity now names the sealed launch it came from.
+LAUNCH = "a" * 64
 RUNID_DIGEST = "e" * 64
 
 
@@ -88,11 +90,12 @@ def _make_bundle(root: Path, head_sha: str, content_digest: str = "cd0") -> Path
 
 def _identity(head_sha: str, run_id: str = "run-1", *, tree: str = "cd0",
               sid: str = SID, deployment: str = DEPLOY,
-              epoch: int = 0) -> RunIdentity:
+              epoch: int = 0, launch: str = LAUNCH) -> RunIdentity:
     return RunIdentity(task_id="F-17", run_id=run_id, repository_id="repoX",
                        head_sha=head_sha, tree_identity=tree,
                        bundle_path=".gnosis/evidence/x", owner_worker_sid=sid,
-                       deployment_digest=deployment, epoch=epoch)
+                       deployment_digest=deployment, epoch=epoch,
+                       launch_spec_digest=launch)
 
 
 class TestTheAnchorRecordChains(unittest.TestCase):
@@ -220,7 +223,7 @@ class TestThePublicationProtocol(unittest.TestCase):
                                 tree_identity="cd0",
                                 bundle_path=".gnosis/evidence/x",
                                 owner_worker_sid=SID, deployment_digest=DEPLOY,
-                                epoch=0)
+                                epoch=0, launch_spec_digest=LAUNCH)
             rec = publish_anchor(store, ident, b)
             self.assertEqual(rec.run_id, "DIRECTOR-RUN")
             self.assertEqual(rec.repository_id, "canonical-repo")

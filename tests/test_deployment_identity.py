@@ -34,6 +34,7 @@ if str(REPO / "src") not in sys.path:
 
 from gnosis.trust.deployment import (
     DEPLOYMENT_SCHEMA,
+    DEPLOYMENT_SCHEMA_V2,
     MANIFEST_SCHEMA,
     AceIdentity,
     DeploymentIdentityUnavailable,
@@ -596,6 +597,7 @@ class TestDesiredIsNotObserved(unittest.TestCase):
     def _config(self, root: Path, **overrides: object) -> DesiredDeploymentConfig:
         base: dict[str, object] = {
             "trust_root": root, "runtime_executable": Path(sys.executable),
+            "runtime_root": Path(sys.executable).parent,
             "runidentity_store": root, "anchorstore": root,
             "service_name": READ_ONLY_SERVICE,
         }
@@ -675,13 +677,19 @@ class TestTheObservationComposes(unittest.TestCase):
             store.mkdir()
             config = DesiredDeploymentConfig(
                 trust_root=root, runtime_executable=Path(sys.executable),
+                runtime_root=Path(sys.executable).parent,
                 runidentity_store=store, anchorstore=store,
                 service_name=READ_ONLY_SERVICE)
             try:
                 identity = observe_deployment(config)
             except DeploymentIdentityUnavailable as exc:  # pragma: no cover - env
                 self.skipTest(f"{READ_ONLY_SERVICE} is not observable here: {exc}")
-            self.assertEqual(identity.schema, DEPLOYMENT_SCHEMA)
+            self.assertEqual(identity.schema, DEPLOYMENT_SCHEMA_V2)
+            self.assertTrue(identity.binds_runtime_tree)
+            # The runtime is bound as a TREE, not as one executable.
+            self.assertIsNotNone(identity.runtime_tree)
+            assert identity.runtime_tree is not None
+            self.assertTrue(identity.runtime_tree.files)
             self.assertEqual(len(identity.digest()), 64)
             self.assertTrue(identity.package.files)
             self.assertTrue(identity.runtime.executable_digest)
@@ -696,6 +704,7 @@ class TestTheObservationComposes(unittest.TestCase):
             (root / "publisher.py").write_bytes(b"TAMPERED")
             config = DesiredDeploymentConfig(
                 trust_root=root, runtime_executable=Path(sys.executable),
+                runtime_root=Path(sys.executable).parent,
                 runidentity_store=root, anchorstore=root,
                 service_name=READ_ONLY_SERVICE, expected_manifest=expected)
             with self.assertRaises(DeploymentIdentityUnavailable):

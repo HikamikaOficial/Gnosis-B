@@ -77,6 +77,9 @@ SID = "S-1-5-21-1111111111-2222222222-3333333333-1001"
 SID_OTHER = "S-1-5-21-1111111111-2222222222-3333333333-1002"
 DEPLOY = "d" * 64
 DEPLOY_OTHER = "f" * 64
+# Stage 6: the sealed launch intent a run was authorized from.
+LAUNCH = "a" * 64
+LAUNCH_OTHER = "b" * 64
 HEAD = "h" * 40
 
 
@@ -116,6 +119,7 @@ def _request(identity: RunIdentity, **overrides: object) -> PublicationRequest:
         "expected_repository_id": identity.repository_id,
         "expected_head_sha": identity.head_sha,
         "expected_tree_identity": identity.tree_identity,
+        "expected_launch_spec_digest": identity.launch_spec_digest,
     }
     base.update(overrides)
     return PublicationRequest(**base)  # type: ignore[arg-type]
@@ -169,12 +173,14 @@ class _Env:
 
     def new_run(self, run_id: str = "run-1", *, head: str = HEAD, tree: str = "cd0",
                 sid: str = SID, deployment: str = DEPLOY, epoch: int = 0,
+                launch: str = LAUNCH,
                 publishable: bool = True) -> RunIdentity:
         bundle = _make_bundle(self.tmp / f"bundle-{run_id}", head, tree)
         identity = RunIdentity(
             task_id="F-17", run_id=run_id, repository_id="repoX", head_sha=head,
             tree_identity=tree, bundle_path=str(bundle), owner_worker_sid=sid,
-            deployment_digest=deployment, epoch=epoch)
+            deployment_digest=deployment, epoch=epoch,
+            launch_spec_digest=launch)
         self.run_store.create(identity)
         if publishable:
             self.run_store.mark_publishable(run_id, identity.digest())
@@ -1034,7 +1040,8 @@ request = PublicationRequest(
     expected_epoch=identity.epoch,
     expected_repository_id=identity.repository_id,
     expected_head_sha=identity.head_sha,
-    expected_tree_identity=identity.tree_identity)
+    expected_tree_identity=identity.tree_identity,
+    expected_launch_spec_digest=identity.launch_spec_digest)
 
 target = point.split("@")[0]
 
