@@ -59,6 +59,9 @@ from gnosis.trust.run_identity import (
 SERVICE_NAME = "GnosisPubS6Probe"
 PIPE_NAME = r"\\.\pipe\gnosis-s6-probe-publish"
 STATE_ROOT = Path(r"C:\ProgramData\Gnosis\TrustProbe6")
+# The happy path and the adversarial matrix together assert well over this
+# many properties; anything less means the probe stopped early.
+MINIMUM_CHECKS = 40
 
 say = s5.say
 check = s5.check
@@ -192,6 +195,7 @@ class Composition:
     worker_sid: str
     runtime: Path
     deployment_digest: str
+    observed: object
 
 
 def _worker_helper_path(s5probe: object) -> Path:
@@ -201,10 +205,43 @@ def _worker_helper_path(s5probe: object) -> Path:
     return path
 
 
+DISPOSABLE_ROOTS = (STATE_ROOT, s5.PROBE_ROOT)
+
+
+def _assert_disposable(target: Path) -> None:
+    """Refuse to point a WRITE attempt at anything that is not disposable.
+
+    THIS GUARD EXISTS BECAUSE THE PROBE ONCE DAMAGED THE REPOSITORY. An earlier
+    revision aimed the "can the Worker write the service script?" check at
+    `src/gnosis/trust/publisher_service.py` in the CHECKOUT rather than at the
+    deployed copy. The Worker could write it - the checkout lives under a path
+    whose inherited permissions include Users - so the attack succeeded, a line
+    of marker text was appended to real source, and the next run failed to
+    import.
+
+    The lesson is not "fix that one path". A probe that runs real attacks with
+    real credentials must be unable to aim them outside its own disposable
+    roots, so the target is checked here rather than trusted at each call site.
+    """
+    resolved = target.resolve()
+    for root in DISPOSABLE_ROOTS:
+        try:
+            resolved.relative_to(root.resolve())
+        except ValueError:
+            continue
+        return
+    raise SystemExit(
+        f"REFUSING to aim a worker write at {resolved}: it is outside the "
+        f"probe's disposable roots {[str(r) for r in DISPOSABLE_ROOTS]}. "
+        "A probe that can damage the checkout is a defect, not a test.")
+
+
 def run_as_worker(comp: Composition, launch_id: str, mode: str,
                   *args: str, timeout_s: float = 120.0,
                   run_id: str | None = None) -> dict[str, object]:
     """Run the Stage-6 helper AS THE WORKER, through the Stage 5 launcher."""
+    if mode == "write":
+        _assert_disposable(Path(args[0]))
     s5probe = comp.s5probe
     work = s5probe.work  # type: ignore[attr-defined]
     payload = work / f"{launch_id}-result.json"
@@ -354,6 +391,28 @@ def setup() -> Composition:
     sddl = write_pipe_policy(s5probe.src, worker_sid, service_sid)  # type: ignore[attr-defined]
     say(f"   pipe SDDL: {sddl}")
 
+    # ACLS BEFORE OBSERVATION, DELIBERATELY. `deployment_digest` binds the
+    # observed security of these paths, so measuring them before provisioning
+    # finishes would bind a state the service never runs under.
+    say("   applying probe-only ACLs ...")
+    # THE SERVICE MUST BE ABLE TO READ ITS OWN CODE. The Stage 5 tool root
+    # grants Administrators, SYSTEM and the WORKER - and nothing else - so the
+    # first run of this probe failed with `sc start rc=5` (ACCESS_DENIED): the
+    # service identity could not read the interpreter it was told to run. That
+    # is a real provisioning requirement, found OS-real, and Stage 8 owes it
+    # for the production layout too.
+    tools = s5probe.tools  # type: ignore[attr-defined]
+    s5.icacls(str(tools), "/grant:r", f"*{service_sid}:(OI)(CI)(RX)")
+    # The trust state: the service writes, the worker gets NOTHING.
+    s5.icacls(str(STATE_ROOT), "/inheritance:r")
+    s5.icacls(str(STATE_ROOT), "/grant:r", "*S-1-5-32-544:(OI)(CI)F",
+              "*S-1-5-18:(OI)(CI)F", f"*{service_sid}:(OI)(CI)F")
+    # The evidence root: the worker WRITES its bundle there, the service reads.
+    s5.icacls(str(evidence_root), "/inheritance:r")
+    s5.icacls(str(evidence_root), "/grant:r", "*S-1-5-32-544:(OI)(CI)F",
+              "*S-1-5-18:(OI)(CI)F", f"*{service_sid}:(OI)(CI)F",
+              f"*{worker_sid}:(OI)(CI)M")
+
     say("   observing the deployment (V2: the runtime as a TREE) ...")
     deployment = observe_deployment(DesiredDeploymentConfig(
         trust_root=s5probe.src,  # type: ignore[attr-defined]
@@ -364,6 +423,7 @@ def setup() -> Composition:
         service_name=SERVICE_NAME))
     digest = deployment.digest()
     say(f"   deployment_digest: {digest}")
+    assert deployment.runtime_tree is not None
     say(f"   runtime tree files: {len(deployment.runtime_tree.files)}")
 
     config_path.write_text(json.dumps({
@@ -378,33 +438,33 @@ def setup() -> Composition:
         "log_path": str(log_path),
     }, indent=2), encoding="utf-8")
 
-    say("   applying probe-only ACLs to the trust state ...")
-    # The trust state: the service writes, the worker gets NOTHING.
-    s5.icacls(str(STATE_ROOT), "/inheritance:r")
-    s5.icacls(str(STATE_ROOT), "/grant:r", "*S-1-5-32-544:(OI)(CI)F",
-              "*S-1-5-18:(OI)(CI)F", f"*{service_sid}:(OI)(CI)F")
-    # The evidence root: the worker WRITES its bundle there, the service reads.
-    s5.icacls(str(evidence_root), "/inheritance:r")
-    s5.icacls(str(evidence_root), "/grant:r", "*S-1-5-32-544:(OI)(CI)F",
-              "*S-1-5-18:(OI)(CI)F", f"*{service_sid}:(OI)(CI)F",
-              f"*{worker_sid}:(OI)(CI)M")
     say("")
     return Composition(s5probe=s5probe, state_root=STATE_ROOT,
                        evidence_root=evidence_root, config_path=config_path,
                        log_path=log_path, service_sid=service_sid,
                        worker_sid=worker_sid, runtime=runtime,
-                       deployment_digest=digest)
+                       deployment_digest=digest, observed=deployment)
 
 
-def start_service() -> bool:
+def start_service(log_path: Path | None = None) -> bool:
     result = sc("start", SERVICE_NAME)
     say(f"   sc start rc={result.returncode}")
+    if result.returncode != 0:
+        say(f"   sc start said: {(result.stdout + result.stderr).strip()[:300]}")
     for _ in range(40):
         query = sc("query", SERVICE_NAME)
         if "RUNNING" in query.stdout:
             return True
         time.sleep(0.25)
     say(f"   service did not reach RUNNING: {sc('query', SERVICE_NAME).stdout[:300]}")
+    # The service's own log is the only place its refusal is explained; without
+    # it a start failure is an error code and a guess.
+    if log_path is not None and log_path.is_file():
+        say("   --- publisher log ---")
+        for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-20:]:
+            say(f"   {line}")
+    else:
+        say("   (the service wrote no log at all: it failed before its first line)")
     return False
 
 
@@ -431,6 +491,39 @@ def rollback(comp: Composition | None) -> None:
 RUN_ID = "RUN-S6-PROBE-0001"
 HEAD_SHA = "b" * 40
 TREE_ID = "c" * 64
+
+
+def _explain_deployment_drift(comp: Composition, now: object) -> None:
+    """Say WHICH component moved, instead of leaving a digest mismatch.
+
+    A deployment digest that changes between two observations of a machine
+    nobody reconfigured is either a real drift or a measurement that binds
+    something incidental. Both matter, and neither is diagnosable from the hash.
+    """
+    say("   *** the deployment digest moved; comparing component by component")
+    before = comp.observed
+    for name in ("package", "runtime", "service", "trust_root",
+                 "runidentity_store", "anchorstore", "pipe_policy",
+                 "runtime_tree"):
+        old = getattr(before, name, None)
+        new = getattr(now, name, None)
+        if old is None and new is None:
+            continue
+        same = (old.to_dict() == new.to_dict()) if (old and new) else (old is new)
+        say(f"      {name:<20s} {'unchanged' if same else 'CHANGED'}")
+        if same:
+            continue
+        old_files = {f.path: f.digest for f in getattr(old, "files", ())}
+        new_files = {f.path: f.digest for f in getattr(new, "files", ())}
+        if not old_files and not new_files:
+            continue
+        added = sorted(set(new_files) - set(old_files))
+        removed = sorted(set(old_files) - set(new_files))
+        changed = sorted(p for p in set(old_files) & set(new_files)
+                         if old_files[p] != new_files[p])
+        say(f"         added   ({len(added)}): {added[:8]}")
+        say(f"         removed ({len(removed)}): {removed[:8]}")
+        say(f"         changed ({len(changed)}): {changed[:8]}")
 
 
 def happy_path(comp: Composition) -> str | None:
@@ -460,6 +553,8 @@ def happy_path(comp: Composition) -> str | None:
         runtime_executable=comp.runtime, runtime_root=comp.runtime.parent,
         runidentity_store=comp.state_root / "runidentity",
         anchorstore=comp.state_root / "anchors", service_name=SERVICE_NAME))
+    if deployment.digest() != comp.deployment_digest:
+        _explain_deployment_drift(comp, deployment)
     check("deployment digest stable across observations",
           deployment.digest(), comp.deployment_digest)
 
@@ -551,7 +646,10 @@ def adversarial(comp: Composition) -> None:
             ("no verb", RUN_ID, "REJECTED:bad-request"),
             ("extra argument", f"PUBLISH {RUN_ID} {comp.deployment_digest}",
              "REJECTED:bad-request"),
-            ("fault-point selection", "PUBLISH F5", "REJECTED:bad-request"),
+            # "F5" is a syntactically valid run id, so the honest refusal is
+            # unknown-run. That no fault hook is installed by ANY request is
+            # asserted directly in the unit tests.
+            ("fault-point selection", "PUBLISH F5", "REJECTED:unknown-run"),
             ("oversized", "PUBLISH " + "a" * 2000, "REJECTED:oversized"),
     ):
         result = run_as_worker(comp, f"s6-adv-{abs(hash(label)) % 10000}",
@@ -565,7 +663,10 @@ def adversarial(comp: Composition) -> None:
             ("watermark", comp.state_root / "anchors" / "anchors.watermark.json"),
             ("run identity", comp.state_root / "runidentity" / f"{RUN_ID}.json"),
             ("publisher config", comp.config_path),
-            ("service script", REPO / "src" / "gnosis" / "trust" / "publisher_service.py"),
+            ("deployed service entry point",
+             comp.s5probe.src / "service_main.py"),  # type: ignore[attr-defined]
+            ("deployed publisher module",
+             comp.s5probe.src / "gnosis" / "trust" / "publisher.py"),  # type: ignore[attr-defined]
             ("trusted runtime", comp.runtime),
     ):
         result = run_as_worker(comp, f"s6-w-{abs(hash(label)) % 10000}", "write",
@@ -604,7 +705,7 @@ def restart_survives(comp: Composition) -> None:
     sc("stop", SERVICE_NAME)
     time.sleep(1.5)
     check("service stopped", "STOPPED" in sc("query", SERVICE_NAME).stdout, True)
-    if not start_service():
+    if not start_service(comp.log_path):
         s5.FAILURES.append("service did not restart")
         return
     after = AnchorStore(comp.state_root / "anchors", require_high=False)
@@ -632,7 +733,7 @@ def main() -> int:
         say(f"   required privileges: {observed.required_privileges}")
         say("")
 
-        if not start_service():
+        if not start_service(comp.log_path):
             s5.FAILURES.append("service did not start")
             return 1
         say("   service RUNNING")
@@ -647,10 +748,21 @@ def main() -> int:
         rollback(comp)
         say("")
         say("=" * 78)
+        # AN EMPTY FAILURE LIST IS NOT A PASS. A previous run crashed inside
+        # setup() before a single check executed, and this summary announced
+        # "ALL CHECKS PASSED" over zero checks - absence of failure read as
+        # presence of verification, which is the defect this whole stage exists
+        # to prevent. The count is now part of the verdict.
+        checked = len([line for line in s5.OUT if "<- required" in line])
         if s5.FAILURES:
-            say(f"PROBE RESULT: {len(s5.FAILURES)} FAILURE(S): {s5.FAILURES}")
+            say(f"PROBE RESULT: {len(s5.FAILURES)} FAILURE(S) of {checked} "
+                f"checks: {s5.FAILURES}")
+        elif checked < MINIMUM_CHECKS:
+            say(f"PROBE RESULT: INCONCLUSIVE — only {checked} checks ran "
+                f"(at least {MINIMUM_CHECKS} expected); the probe did not "
+                "finish, so nothing is claimed")
         else:
-            say("PROBE RESULT: ALL CHECKS PASSED")
+            say(f"PROBE RESULT: ALL {checked} CHECKS PASSED")
         say("=" * 78)
         out = REPO / "probe_stage6_output.txt"
         out.write_text("\n".join(s5.OUT) + "\n", encoding="utf-8")

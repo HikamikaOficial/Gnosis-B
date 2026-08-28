@@ -340,6 +340,41 @@ class TestTheJudgementContextComesFromTheService(_PublisherCase):
         self.assertEqual(request.expected_repository_id, identity.repository_id)
 
 
+@unittest.skipUnless(sys.platform == "win32", "Windows-only")
+class TestOpeningTheStoreDoesNotRewriteWhatTheIdentityMeasures(unittest.TestCase):
+    """Found OS-real by the Stage 6 composition probe.
+
+    `deployment_digest` binds the observed security descriptor of the anchor
+    store's directory. `AnchorStore.__init__` used to apply a mandatory
+    integrity label unconditionally, so merely OPENING the store rewrote the
+    thing the deployment identity is a hash of: the probe watched the digest
+    move between two observations of a machine nobody had reconfigured, and
+    every publication then failed closed with `deployment-mismatch`.
+
+    Under P2 the boundary is the NTFS DACL granted to the restricted service
+    SID, not a label, so the relabel now happens only where it IS the boundary.
+    """
+
+    def test_a_non_high_store_leaves_the_directory_descriptor_alone(self):
+        from gnosis.trust.deployment import observe_path_security
+        with tempfile.TemporaryDirectory() as tmp:
+            anchors = Path(tmp) / "anchors"
+            anchors.mkdir()
+            before = observe_path_security(anchors).to_dict()
+            AnchorStore(anchors, require_high=False)
+            after = observe_path_security(anchors).to_dict()
+            self.assertEqual(before, after,
+                             "opening the store rewrote the descriptor that "
+                             "deployment_digest binds")
+
+    def test_the_store_is_still_usable_afterwards(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AnchorStore(Path(tmp) / "anchors", require_high=False)
+            initialise_durable_store(store)
+            self.assertEqual(store.records(), [])
+            self.assertTrue(store.verify_chain())
+
+
 class TestRecoveryHappensBeforeTheEndpointExists(unittest.TestCase):
     """The order in `run_service` is a security property, so it is tested.
 

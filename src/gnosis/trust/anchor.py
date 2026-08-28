@@ -219,7 +219,27 @@ class AnchorStore:
         # check; future: the RESTRICTED service-SID gate). This is defence in
         # depth on top of the OS-enforced boundary, never a bare bypass.
         assert_publisher_identity(require_high=require_high)
-        label_high_no_write_up(root)
+        if require_high:
+            # THE RELABEL BELONGS TO THE SAME-USER MODEL ONLY, and applying it
+            # unconditionally was a defect the Stage 6 OS-real probe caught.
+            #
+            # Under Stage 1 the publisher was the Director at High integrity and
+            # a mandatory label was the boundary. Under P2 the boundary is the
+            # NTFS DACL granted to the restricted service SID, and the label is
+            # not what keeps the Worker out.
+            #
+            # Applying it anyway had a consequence nobody had measured:
+            # `deployment_digest` binds the OBSERVED security descriptor of this
+            # very directory, so merely OPENING the store rewrote the thing the
+            # deployment identity is a hash of. The probe saw the digest move
+            # between two observations of a machine nobody had reconfigured -
+            # `anchorstore CHANGED`, everything else unchanged - and every
+            # publication then failed closed with `deployment-mismatch`.
+            #
+            # A store that mutates what the identity measures cannot have a
+            # stable identity. So the relabel now happens only where it is
+            # actually the boundary.
+            label_high_no_write_up(root)
 
     def records(self) -> list[AnchorRecord]:
         if not self.ledger.exists():
