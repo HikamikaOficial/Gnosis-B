@@ -44,7 +44,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from gnosis.trust.anchor import AnchorStore
+from gnosis.trust.anchor import AnchorStore, RunIdentity
 from gnosis.trust.bundle_verify import verify_bundle
 from gnosis.trust.launch import AuthorityUnavailable
 from gnosis.trust.publication import PublishOutcome, durable_publish
@@ -128,6 +128,30 @@ class Publisher:
             self._note(f"handler error: {exc!r}")
             return _refused("handler-error")
 
+    def publication_request(self, run_id: str,
+                            identity: RunIdentity) -> PublicationRequest:
+        """Build the trusted context this publication is judged against.
+
+        PUBLIC AND SEPARATE ON PURPOSE. Mutation testing found that changing
+        these two fields to read the run instead of the service changed nothing
+        observable, because the refusals above already caught the mismatch -
+        so the fields were untested, and an untested field is one refactor away
+        from being wrong in a way nothing notices. Here they can be asserted
+        directly: `expected_owner_worker_sid` and `expected_deployment_digest`
+        come from the SERVICE'S configuration, never from the run being asked
+        about, while the run-scoped fields come from the trusted record.
+        """
+        return PublicationRequest(
+            run_id=run_id,
+            expected_owner_worker_sid=self.config.authorized_worker_sid,
+            expected_deployment_digest=self.config.expected_deployment_digest,
+            expected_epoch=identity.epoch,
+            expected_repository_id=identity.repository_id,
+            expected_head_sha=identity.head_sha,
+            expected_tree_identity=identity.tree_identity,
+            expected_launch_spec_digest=identity.launch_spec_digest,
+        )
+
     def _handle(self, request: str, client_pid: int) -> str:
         if len(request.encode("utf-8", errors="ignore")) > MAX_REQUEST_BYTES:
             return _refused("oversized")
@@ -172,16 +196,7 @@ class Publisher:
             self._note(f"bundle outside the evidence root for run {run_id}")
             return _refused("bundle-outside-evidence-root")
 
-        request_context = PublicationRequest(
-            run_id=run_id,
-            expected_owner_worker_sid=self.config.authorized_worker_sid,
-            expected_deployment_digest=self.config.expected_deployment_digest,
-            expected_epoch=identity.epoch,
-            expected_repository_id=identity.repository_id,
-            expected_head_sha=identity.head_sha,
-            expected_tree_identity=identity.tree_identity,
-            expected_launch_spec_digest=identity.launch_spec_digest,
-        )
+        request_context = self.publication_request(run_id, identity)
         try:
             result = durable_publish(self.store, self.run_store, request_context,
                                      bundle_dir, verify=verify_bundle)

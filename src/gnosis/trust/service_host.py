@@ -43,6 +43,11 @@ SERVICE_CONTROL_SHUTDOWN = 0x00000005
 # the SCM. It is the signal that "we are not actually a service", and it must
 # never be papered over by falling back to a plain foreground loop.
 ERROR_FAILED_SERVICE_CONTROLLER_CONNECT = 1063
+# A SECOND dispatcher call in one process answers this instead. It means
+# the same thing for our purposes - this process is not serving as a
+# service - and it is named so callers can recognise it rather than
+# reporting an unexplained number.
+ERROR_SERVICE_ALREADY_RUNNING = 1056
 
 
 class SERVICE_STATUS(C.Structure):
@@ -152,8 +157,13 @@ class ServiceHost:
         table[1].lpServiceProc = LPSERVICE_MAIN()
         if not _adv.StartServiceCtrlDispatcherW(table):
             error = C.get_last_error()
-            hint = (" (1063: this process was not launched by the SCM)"
-                    if error == ERROR_FAILED_SERVICE_CONTROLLER_CONNECT else "")
+            hints = {
+                ERROR_FAILED_SERVICE_CONTROLLER_CONNECT:
+                    " (1063: this process was not launched by the SCM)",
+                ERROR_SERVICE_ALREADY_RUNNING:
+                    " (1056: a dispatcher was already started in this process)",
+            }
+            hint = hints.get(error, "")
             self.log(f"StartServiceCtrlDispatcher failed {error}{hint}")
             # FAIL CLOSED. A publisher that fell back to a foreground loop here
             # would run without the service SID that its whole boundary rests on.

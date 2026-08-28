@@ -9,6 +9,7 @@ are the product.
 """
 from __future__ import annotations
 
+import ast
 import json
 import sys
 import tempfile
@@ -22,7 +23,7 @@ from gnosis.trust.anchor import (
     AnchorStore,
     RunIdentity,
 )
-from gnosis.trust.bundle_verify import write_bundle_manifest
+from gnosis.trust.bundle_verify import verify_bundle, write_bundle_manifest
 from gnosis.trust.launch import AuthorityUnavailable
 from gnosis.trust.pipe_server import (
     MAX_INSTANCES,
@@ -31,11 +32,12 @@ from gnosis.trust.pipe_server import (
     WORKER_PIPE_ACCESS,
     worker_pipe_sddl,
 )
-from gnosis.trust.publication import initialise_durable_store
+from gnosis.trust.publication import initialise_durable_store, read_watermark
 from gnosis.trust.publisher import Publisher, PublisherConfig
 from gnosis.trust.publisher_service import (
     SERVICE_CONFIG_SCHEMA,
     ServiceConfig,
+    run_service,
 )
 from gnosis.trust.run_identity import TrustedRunIdentityStore
 
@@ -305,6 +307,194 @@ class TestTheServiceRefusesToStartUnconfigured(unittest.TestCase):
     def test_a_missing_configuration_is_a_startup_failure(self):
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(AuthorityUnavailable):
             ServiceConfig.load(Path(tmp) / "absent.json")
+
+
+class TestTheJudgementContextComesFromTheService(_PublisherCase):
+    """Mutation testing found these two fields untested and shadowed.
+
+    Changing them to read the run instead of the service changed nothing
+    observable, because the earlier refusals already caught the mismatch. An
+    untested field is one refactor away from being wrong in a way nothing
+    notices, so it is asserted directly here.
+    """
+
+    def test_the_owner_and_deployment_expectations_are_the_services_own(self):
+        identity = self.identity("run-x", sid=SID_OTHER_WORKER,
+                                 deployment=DEPLOY_2, launch=LAUNCH_2, epoch=5)
+        request = self.publisher.publication_request("run-x", identity)
+        # From CONFIGURATION, not from the run being asked about:
+        self.assertEqual(request.expected_owner_worker_sid, SID_WORKER)
+        self.assertEqual(request.expected_deployment_digest, DEPLOY_1)
+        self.assertNotEqual(request.expected_owner_worker_sid,
+                            identity.owner_worker_sid)
+        self.assertNotEqual(request.expected_deployment_digest,
+                            identity.deployment_digest)
+
+    def test_the_run_scoped_expectations_come_from_the_trusted_record(self):
+        identity = self.identity("run-y", launch=LAUNCH_2, epoch=7)
+        request = self.publisher.publication_request("run-y", identity)
+        self.assertEqual(request.expected_epoch, 7)
+        self.assertEqual(request.expected_launch_spec_digest, LAUNCH_2)
+        self.assertEqual(request.expected_head_sha, identity.head_sha)
+        self.assertEqual(request.expected_tree_identity, identity.tree_identity)
+        self.assertEqual(request.expected_repository_id, identity.repository_id)
+
+
+class TestRecoveryHappensBeforeTheEndpointExists(unittest.TestCase):
+    """The order in `run_service` is a security property, so it is tested.
+
+    A publisher that answered requests while its own committed state was
+    unreconciled could report ALREADY_ANCHORED for a record that was never
+    committed. A mutant that simply deleted the recovery call survived, because
+    nothing ever called `run_service`.
+    """
+
+    def test_the_durable_store_is_settled_before_the_service_host_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            evidence = root / "evidence"
+            evidence.mkdir()
+            config_path = root / "publisher.json"
+            config_path.write_text(json.dumps({
+                "schema": SERVICE_CONFIG_SCHEMA, "service_name": "GnosisNotAService",
+                "pipe_name": r"\.\pipe\gnosis-never-served",
+                "service_sid": SID_SERVICE,
+                "trust_state_root": str(root / "state"),
+                "evidence_root": str(evidence),
+                "authorized_worker_sid": SID_WORKER,
+                "expected_deployment_digest": DEPLOY_1,
+                "log_path": str(root / "publisher.log"),
+            }), encoding="utf-8")
+
+            # This process is not a service, so the SCM dispatcher refuses and
+            # `run_service` raises - AFTER recovery has already run.
+            with self.assertRaises(OSError):
+                run_service(config_path)
+
+            watermark = read_watermark(root / "state" / "anchors")
+            self.assertIsNotNone(watermark,
+                                 "the endpoint would have opened over unsettled state")
+            assert watermark is not None
+            self.assertEqual(watermark.committed_seq, -1)
+
+
+class TestTheExternalAnchorIsCompared(unittest.TestCase):
+    """A manifest inside the bundle proves self-consistency, not tamper-evidence.
+
+    The `expected_digest` comparison is what raises it to tamper-evidence
+    against a value recorded OUTSIDE the bundle - and a mutant that removed the
+    comparison survived, because nothing in this suite ever passed one.
+    """
+
+    def test_a_bundle_that_is_not_the_expected_one_fails_verification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = _make_bundle(Path(tmp) / "b")
+            honest = verify_bundle(bundle)
+            self.assertTrue(honest.verified)
+            assert honest.bundle_digest is not None
+
+            self.assertTrue(verify_bundle(bundle, honest.bundle_digest).verified)
+            wrong = verify_bundle(bundle, "0" * 64)
+            self.assertFalse(wrong.verified)
+            self.assertTrue(any("does not match the expected" in problem
+                                for problem in wrong.problems), wrong.problems)
+
+    def test_a_recomputed_manifest_still_fails_against_the_external_anchor(self):
+        # The editor rewrites a file AND the manifest, so the bundle is
+        # internally consistent again. Only the external value catches it.
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = _make_bundle(Path(tmp) / "b")
+            recorded = verify_bundle(bundle).bundle_digest
+            assert recorded is not None
+            (bundle / "SUMMARY.json").write_text("{}", encoding="utf-8")
+            write_bundle_manifest(bundle)
+            self.assertTrue(verify_bundle(bundle).verified,
+                            "the tampered bundle is internally consistent")
+            self.assertFalse(verify_bundle(bundle, recorded).verified)
+
+
+class TestTheFaultSeamIsNotReachableFromARequest(_PublisherCase):
+    """Stage 4 left a deterministic crash seam in the publication protocol.
+
+    It is a module-private global with no setter. These tests are the
+    composition check the review asked for: that no request, however shaped,
+    selects a fault point - and that no code outside the tests can install one.
+    """
+
+    def test_no_request_installs_a_fault_hook(self):
+        from gnosis.trust import publication
+        self.publishable(self.identity())
+        attempts = [f"PUBLISH {point}" for point in
+                    ("F0", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9")]
+        attempts += ["PUBLISH run-1 F5", "PUBLISH run-1;F5", "FAULT F5",
+                     "PUBLISH run-1 --fault=F5", "_FAULT_HOOK F5"]
+        for attempt in attempts:
+            with self.subTest(attempt=attempt):
+                self.publisher.handle(attempt)
+                self.assertIsNone(publication._FAULT_HOOK,
+                                  "a request installed a fault hook")
+
+    def test_the_seam_reads_no_environment_and_no_configuration(self):
+        # A seam that could be armed by an environment variable would be armed
+        # by the WORKER, whose profile environment is attacker-controlled.
+        source = (Path(__file__).resolve().parents[1]
+                  / "src" / "gnosis" / "trust" / "publication.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and node.attr in {"environ", "getenv"}:
+                self.fail("the publication module reads the environment")
+
+    def test_only_the_publication_module_assigns_the_hook(self):
+        trust = Path(__file__).resolve().parents[1] / "src" / "gnosis" / "trust"
+        writers = []
+        for path in sorted(trust.glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                # AnnAssign matters: the seam is DEFINED as `_FAULT_HOOK: Any
+                # = None`, and a scan that only knew about plain assignment
+                # would report zero writers and pass while seeing nothing.
+                targets = (node.targets if isinstance(node, ast.Assign)
+                           else [node.target]
+                           if isinstance(node, (ast.AugAssign, ast.AnnAssign))
+                           else [])
+                for target in targets:
+                    if isinstance(target, ast.Name) and target.id == "_FAULT_HOOK":
+                        writers.append(path.name)
+        self.assertEqual(sorted(set(writers)), ["publication.py"],
+                         "only the module that owns the seam may assign it")
+
+
+class TestSomeAttacksAreNotEvenExpressible(_PublisherCase):
+    """The strongest answer to a whole class of attacks is a missing field.
+
+    A grammar of `PUBLISH <run_id>` gives the Worker no way to name an epoch, a
+    deployment, a launch digest or an expected bundle digest, so those values
+    cannot be mismatched by a request - only by the trusted store, which the
+    Worker cannot write. These tests record that as a property rather than
+    leaving it as an assumption.
+    """
+
+    def test_the_worker_cannot_name_an_epoch_a_digest_or_a_deployment(self):
+        self.publishable(self.identity())
+        for attempt in ("PUBLISH run-1 epoch=9",
+                        f"PUBLISH run-1 {DEPLOY_2}",
+                        f"PUBLISH run-1 {LAUNCH_2}",
+                        "PUBLISH run-1 --expected-digest=" + "0" * 64,
+                        f"PUBLISH run-1 owner={SID_OTHER_WORKER}"):
+            with self.subTest(attempt=attempt):
+                self.assertEqual(self.publisher.handle(attempt),
+                                 "REJECTED:bad-request")
+
+    def test_the_anchor_carries_the_epoch_and_the_launch_through_the_identity(self):
+        # Not repeated as anchor fields: bound once, in run_identity_digest.
+        identity = self.publishable(self.identity("run-e", epoch=7))
+        self.assertTrue(self.publisher.handle("PUBLISH run-e").startswith("ANCHORED:"))
+        store = AnchorStore(self.config.anchors_root, require_high=False)
+        record = store.lookup("run-e")
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.run_identity_digest, identity.digest())
+        self.assertEqual(record.schema, "gnosis.anchor.v2")
 
 
 if __name__ == "__main__":

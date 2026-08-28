@@ -33,6 +33,8 @@ from gnosis.trust.anchor import (
     ANCHOR_SCHEMA,
     ANCHOR_SCHEMA_V2,
     CURRENT_ANCHOR_SCHEMA,
+    RUN_IDENTITY_SCHEMA,
+    RUN_IDENTITY_SCHEMA_V2,
     AnchorRecord,
     AuthorityUnavailable,
     RunIdentity,
@@ -62,12 +64,14 @@ def _identity(run_id: str = "RUN-20260827T000000000Z-abcd1234", *,
               head: str = "h" * 40, tree: str = "t" * 64, sid: str = SID_A,
               deployment: str = DEPLOY_1, epoch: int = 3,
               repo: str = "repoX", task: str = "TASK-1",
-              launch: str = LAUNCH_1) -> RunIdentity:
+              launch: str | None = LAUNCH_1,
+              schema: str | None = None) -> RunIdentity:
     return RunIdentity(task_id=task, run_id=run_id, repository_id=repo,
                        head_sha=head, tree_identity=tree,
                        bundle_path=".gnosis/evidence/x", owner_worker_sid=sid,
                        deployment_digest=deployment, epoch=epoch,
-                       launch_spec_digest=launch)
+                       launch_spec_digest=launch,
+                       **({} if schema is None else {"schema": schema}))
 
 
 def _request(identity: RunIdentity, **overrides: object) -> PublicationRequest:
@@ -474,6 +478,89 @@ class TestConfusedIdentityIsRefused(_StoreCase):
         self.assertIs(authorize_publication(
             self.store, _request(old, expected_epoch=2)).verdict,
             PublicationVerdict.REFUSED)
+
+
+class TestTheSealedLaunchIntentIsPartOfTheAuthorization(_StoreCase):
+    """F-17 Stage 6. A run is authorized for the launch it came from.
+
+    Two runs of the same worker, under the same deployment, at the same epoch,
+    differ only in what the Director actually sealed. Without this comparison
+    the evidence could not tell them apart.
+    """
+
+    def test_a_matching_launch_intent_authorizes(self):
+        run = self.publishable(_identity(launch=LAUNCH_1))
+        self.assertIs(authorize_publication(self.store, _request(run)).verdict,
+                      PublicationVerdict.AUTHORIZED)
+
+    def test_a_different_sealed_launch_is_refused(self):
+        run = self.publishable(_identity(launch=LAUNCH_1))
+        decision = authorize_publication(
+            self.store, _request(run, expected_launch_spec_digest=LAUNCH_2))
+        self.assertIs(decision.verdict, PublicationVerdict.REFUSED)
+        self.assertIn("launch_spec_digest", decision.reason)
+
+    def test_a_launch_binding_is_not_satisfied_by_declining_to_check_it(self):
+        # The failure mode this exists for: a caller that simply omits the
+        # expectation would otherwise skip the binding entirely.
+        run = self.publishable(_identity(launch=LAUNCH_1))
+        decision = authorize_publication(
+            self.store, _request(run, expected_launch_spec_digest=None))
+        self.assertIs(decision.verdict, PublicationVerdict.REFUSED)
+        # The REASON is asserted, not merely the refusal. Without the guard the
+        # comparison below would also refuse, so only the diagnosis
+        # distinguishes them - and a mutant that deleted the guard survived
+        # precisely because nothing looked at the diagnosis.
+        self.assertIn("carries no expected launch_spec_digest", decision.reason)
+
+    def test_a_v1_identity_cannot_satisfy_a_launch_expectation(self):
+        run = self.publishable(_identity(run_id="RUN-v1", launch=None,
+                                         schema=RUN_IDENTITY_SCHEMA))
+        decision = authorize_publication(
+            self.store, _request(run, expected_launch_spec_digest=LAUNCH_1))
+        self.assertIs(decision.verdict, PublicationVerdict.REFUSED)
+
+    def test_the_launch_binding_is_refused_before_a_state_flavoured_verdict(self):
+        # A mismatched request must never be answered ALREADY_ANCHORED, which
+        # would read as though it nearly succeeded and leak that the run exists
+        # in a published state.
+        run = _identity(run_id="RUN-anch", launch=LAUNCH_1)
+        self.store.create(run)
+        self.store.mark_publishable("RUN-anch", run.digest())
+        self.store.mark_anchored("RUN-anch", run.digest(), "0" * 64)
+        decision = authorize_publication(
+            self.store, _request(run, expected_launch_spec_digest=LAUNCH_2))
+        self.assertIs(decision.verdict, PublicationVerdict.REFUSED)
+
+
+class TestTheV2IdentityContract(unittest.TestCase):
+    """Asserted directly because nothing else constructs an invalid V2.
+
+    The orchestration seam always supplies a launch digest, so a mutant that
+    removed the requirement changed no observable behaviour anywhere. The
+    contract has to be tested where it lives.
+    """
+
+    def test_a_v2_identity_without_a_launch_binding_is_refused(self):
+        with self.assertRaises(AuthorityUnavailable):
+            _identity(launch=None, schema=RUN_IDENTITY_SCHEMA_V2)
+
+    def test_a_v2_identity_with_a_malformed_launch_digest_is_refused(self):
+        for bad in ("", "not-a-digest", "A" * 64, "a" * 63, "a" * 65):
+            with self.assertRaises(AuthorityUnavailable, msg=bad):
+                _identity(launch=bad, schema=RUN_IDENTITY_SCHEMA_V2)
+
+    def test_a_v1_identity_carrying_a_launch_binding_is_refused(self):
+        with self.assertRaises(AuthorityUnavailable):
+            _identity(launch=LAUNCH_1, schema=RUN_IDENTITY_SCHEMA)
+
+    def test_the_launch_binding_changes_the_identity_digest(self):
+        self.assertNotEqual(_identity(launch=LAUNCH_1).digest(),
+                            _identity(launch=LAUNCH_2).digest())
+
+    def test_a_v1_identity_emits_exactly_the_v1_keys(self):
+        v1 = _identity(launch=None, schema=RUN_IDENTITY_SCHEMA)
+        self.assertNotIn("launch_spec_digest", v1.to_dict())
 
 
 if __name__ == "__main__":

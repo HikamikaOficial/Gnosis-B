@@ -29,6 +29,7 @@ into someone else's pipe.
 from __future__ import annotations
 
 import ctypes as C
+import time
 from collections.abc import Callable
 from ctypes import wintypes as W
 from typing import Any
@@ -46,6 +47,8 @@ PIPE_READMODE_MESSAGE = 0x00000002
 PIPE_WAIT = 0x00000000
 PIPE_REJECT_REMOTE_CLIENTS = 0x00000008
 ERROR_PIPE_CONNECTED = 535
+# ReadFile's answer when a message-mode pipe holds more than the buffer.
+ERROR_MORE_DATA = 234
 GENERIC_READ = 0x80000000
 OPEN_EXISTING = 3
 
@@ -53,6 +56,9 @@ OPEN_EXISTING = 3
 # before anything tries to parse it.
 MAX_INSTANCES = 1
 MAX_MESSAGE_BYTES = 512
+# A bound on the drain loop: discarding an oversized message must not
+# itself become an unbounded amount of work a client can ask for.
+MAX_DRAIN_READS = 64
 
 
 class SECURITY_ATTRIBUTES(C.Structure):
@@ -211,10 +217,31 @@ class PipeServer:
         read = W.DWORD(0)
         if not _k32.ReadFile(self._handle, buffer, MAX_MESSAGE_BYTES,
                              C.byref(read), None):
-            return "REJECTED:read-failed"
-        raw = buffer.raw[:read.value]
-        if len(raw) >= MAX_MESSAGE_BYTES:
+            # A MESSAGE LARGER THAN THE BUFFER ARRIVES HERE, NOT BELOW.
+            #
+            # On a message-mode pipe, ReadFile FAILS with ERROR_MORE_DATA when
+            # the message does not fit - it does not return a truncated success.
+            # So the `len(raw) >= MAX_MESSAGE_BYTES` test below could never fire,
+            # and the mutant that deleted it survived: a check that cannot fail
+            # is not a check. Oversize is decided here, where the OS reports it.
+            #
+            # The remainder is then DRAINED. Without that, the sender stays
+            # blocked in WriteFile waiting for bytes nobody will ever read -
+            # measured, with the client wedged and the server already back in
+            # ConnectNamedPipe - which hands a compromised Worker a way to hang
+            # its own request rather than a refusal it must handle.
+            if C.get_last_error() != ERROR_MORE_DATA:
+                return "REJECTED:read-failed"
+            scratch = (C.c_char * MAX_MESSAGE_BYTES)()
+            for _ in range(MAX_DRAIN_READS):
+                if _k32.ReadFile(self._handle, scratch, MAX_MESSAGE_BYTES,
+                                 C.byref(read), None):
+                    break
+                if C.get_last_error() != ERROR_MORE_DATA:
+                    break
+            self._note(f"oversized request from pid={client_pid}, discarded")
             return "REJECTED:oversized"
+        raw = buffer.raw[:read.value]
         try:
             request = raw.decode("utf-8").strip()
         except UnicodeDecodeError:
@@ -226,15 +253,30 @@ class PipeServer:
             self._note(f"handler error: {exc!r}")
             return "REJECTED:handler-error"
 
-    def stop(self) -> None:
-        """Unblock a synchronous ConnectNamedPipe by connecting to it once.
+    def stop(self, *, timeout_s: float = 5.0) -> None:
+        """Unblock a synchronous ConnectNamedPipe by connecting to it.
 
         Closing the handle does NOT reliably wake a blocked ConnectNamedPipe, so
-        the stop flag is set first and then a throwaway client connection lets
-        the serve loop notice it.
+        the stop flag is set first and a throwaway client connection lets the
+        serve loop notice it.
+
+        THE RETRY IS NOT DEFENSIVE PADDING; IT CLOSES A REAL RACE. The serve
+        loop spends a short window between closing one instance and creating
+        the next, and during it there is no pipe to connect to. A single
+        connect attempt that lands in that window fails, the loop then creates a
+        fresh instance, and the server blocks in ConnectNamedPipe with nobody
+        left to wake it - a service STOP that hangs until the SCM kills the
+        process. Found by the first test that ever called this: the thread was
+        still alive afterwards.
         """
         self._stop = True
-        handle = _k32.CreateFileW(self.name, GENERIC_READ, 0, None,
-                                  OPEN_EXISTING, 0, None)
-        if handle not in (INVALID_HANDLE, None, 0):
-            _k32.CloseHandle(handle)
+        deadline = time.monotonic() + timeout_s
+        while True:
+            handle = _k32.CreateFileW(self.name, GENERIC_READ, 0, None,
+                                      OPEN_EXISTING, 0, None)
+            if handle not in (INVALID_HANDLE, None, 0):
+                _k32.CloseHandle(handle)
+                return
+            if time.monotonic() >= deadline:
+                return
+            time.sleep(0.02)

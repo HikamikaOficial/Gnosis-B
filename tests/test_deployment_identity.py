@@ -717,5 +717,70 @@ class TestTheObservationComposes(unittest.TestCase):
             self.assertTrue(observed.security_descriptor.owner_sid.startswith("S-1-"))
 
 
+@WINDOWS_ONLY
+class TestTheV2DeploymentContract(unittest.TestCase):
+    """F-17 Stage 6, asserted directly.
+
+    `observe_deployment` always supplies a runtime tree and always checks the
+    executable, so mutants that removed either requirement changed nothing
+    observable. The contracts are tested where they live.
+    """
+
+    def _identity(self, **overrides: object) -> TrustPlaneDeploymentIdentity:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_trust_root(Path(tmp))
+            store = Path(tmp) / "state"
+            store.mkdir()
+            config = DesiredDeploymentConfig(
+                trust_root=root, runtime_executable=Path(sys.executable),
+                runtime_root=Path(sys.executable).parent,
+                runidentity_store=store, anchorstore=store,
+                service_name=READ_ONLY_SERVICE)
+            try:
+                observed = observe_deployment(config)
+            except DeploymentIdentityUnavailable as exc:  # pragma: no cover - env
+                self.skipTest(f"{READ_ONLY_SERVICE} is not observable here: {exc}")
+        return dataclasses.replace(observed, **overrides)  # type: ignore[arg-type]
+
+    def test_a_v2_identity_without_a_runtime_tree_is_refused(self):
+        with self.assertRaises(DeploymentIdentityUnavailable):
+            self._identity(runtime_tree=None)
+
+    def test_a_v1_identity_carrying_a_runtime_tree_is_refused(self):
+        with self.assertRaises(DeploymentIdentityUnavailable):
+            self._identity(schema=DEPLOYMENT_SCHEMA)
+
+    def test_an_unknown_deployment_schema_is_refused(self):
+        with self.assertRaises(DeploymentIdentityUnavailable):
+            self._identity(schema="gnosis.trust.deployment.v9")
+
+    def test_the_runtime_tree_changes_the_deployment_digest(self):
+        observed = self._identity()
+        assert observed.runtime_tree is not None
+        thinner = dataclasses.replace(
+            observed.runtime_tree, files=observed.runtime_tree.files[:-1])
+        self.assertNotEqual(observed.digest(),
+                            dataclasses.replace(observed, runtime_tree=thinner).digest())
+
+    def test_an_executable_outside_the_declared_runtime_root_is_refused(self):
+        # The two halves of the runtime binding must describe ONE installation:
+        # a tree over some other directory hashes thousands of files that have
+        # no bearing on what this executable loads.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_trust_root(Path(tmp))
+            store = Path(tmp) / "state"
+            store.mkdir()
+            elsewhere = Path(tmp) / "not-the-runtime"
+            elsewhere.mkdir()
+            (elsewhere / "filler.txt").write_bytes(b"x")
+            config = DesiredDeploymentConfig(
+                trust_root=root, runtime_executable=Path(sys.executable),
+                runtime_root=elsewhere,
+                runidentity_store=store, anchorstore=store,
+                service_name=READ_ONLY_SERVICE)
+            with self.assertRaises(DeploymentIdentityUnavailable):
+                observe_deployment(config)
+
+
 if __name__ == "__main__":
     unittest.main()
