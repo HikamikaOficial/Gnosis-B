@@ -104,7 +104,8 @@ def _make_bundle(path: Path, head_sha: str = HEAD, content_digest: str = "cd0") 
     (path / "pytest.stdout.txt").write_text("ok\n", encoding="utf-8")
     (path / "SUMMARY.json").write_text(json.dumps({
         "tree_identity": {"post": {"fingerprint": {"head_sha": head_sha}}},
-        "boundary": {"protection": {"content_digest": content_digest}},
+        "boundary": {"verdict": "CLEAN",
+                     "protection": {"content_digest": content_digest}},
     }), encoding="utf-8")
     write_bundle_manifest(path)
     return path

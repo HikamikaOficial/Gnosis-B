@@ -167,7 +167,7 @@ def main():
         bundle.mkdir(parents=True, exist_ok=True)
         (bundle / "SUMMARY.json").write_text(json.dumps({
             "tree_identity": {"post": {"fingerprint": {"head_sha": rest[1]}}},
-            "boundary": {"protection": {"content_digest": rest[2]}},
+            "boundary": {"verdict": "CLEAN", "protection": {"content_digest": rest[2]}},
         }), encoding="utf-8")
         result["bundle"] = str(bundle)
     with open(out, "w", encoding="utf-8") as fh:

@@ -56,7 +56,7 @@ def _make_bundle(path: Path, *, head: str = HEAD, tree: str = TREE) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     (path / "SUMMARY.json").write_text(json.dumps({
         "tree_identity": {"post": {"fingerprint": {"head_sha": head}}},
-        "boundary": {"protection": {"content_digest": tree}},
+        "boundary": {"verdict": "CLEAN", "protection": {"content_digest": tree}},
     }), encoding="utf-8")
     write_bundle_manifest(path)
     return path

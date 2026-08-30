@@ -34,7 +34,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from gnosis.trust.anchor import CURRENT_RUN_IDENTITY_SCHEMA, RunIdentity
+from gnosis.trust.anchor import (
+    _PUBLISHABLE_BOUNDARY_VERDICT,
+    CURRENT_RUN_IDENTITY_SCHEMA,
+    RunIdentity,
+    _bundle_boundary_verdict,
+)
 from gnosis.trust.bundle_verify import verify_bundle
 from gnosis.trust.deployment import TrustPlaneDeploymentIdentity
 from gnosis.trust.launch import AuthorityUnavailable
@@ -159,4 +164,13 @@ def authorize_publishable(store: TrustedRunIdentityStore,
         raise RunNotPublishable(
             f"run {identity.run_id} has an unverifiable bundle: "
             f"{'; '.join(result.problems)}")
+    # F-17 Stage 7, defence in depth ahead of the build_anchor_record chokepoint:
+    # a run whose capture recorded a non-CLEAN (or no) .git-machinery boundary
+    # verdict never becomes PUBLISHABLE in the first place.
+    boundary_verdict = _bundle_boundary_verdict(evidence.bundle_dir)
+    if boundary_verdict != _PUBLISHABLE_BOUNDARY_VERDICT:
+        raise RunNotPublishable(
+            f"run {identity.run_id} has boundary verdict {boundary_verdict!r}, "
+            f"not {_PUBLISHABLE_BOUNDARY_VERDICT!r}; its .git machinery was "
+            "tampered, unqualified, redirected or unrecorded")
     return store.mark_publishable(identity.run_id, identity.digest())

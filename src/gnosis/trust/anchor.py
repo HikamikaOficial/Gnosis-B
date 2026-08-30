@@ -421,6 +421,32 @@ def _bundle_content_digest(bundle_dir: Path) -> str:
     return value if isinstance(value, str) else ""
 
 
+# F-17 Stage 7. The one boundary verdict a bundle may carry to be anchored. The
+# capture writes this from the closed-world .git classification (kernel side):
+# CLEAN means every observed .git write was qualified as bookkeeping; anything
+# else — a trust-sensitive tamper (MACHINERY_MUTATED), an unqualified surface
+# (MACHINERY_UNQUALIFIED), a redirected resolution (MACHINERY_REDIRECTED), a
+# covered-input write, or an unobserved interval — is not CLEAN and must not
+# reach an anchor.
+_PUBLISHABLE_BOUNDARY_VERDICT = "CLEAN"
+
+
+def _bundle_boundary_verdict(bundle_dir: Path) -> str | None:
+    """The capture's boundary verdict from SUMMARY.json, or None if unrecorded.
+
+    Absence is NOT clean. A bundle that records no boundary verdict — a
+    pre-Stage-7 bundle, or one hand-built without the field — returns None here
+    and is refused by the caller, so the git-machinery gate cannot be passed by
+    simply omitting the evidence for it.
+    """
+    try:
+        summary = json.loads((bundle_dir / "SUMMARY.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    verdict = summary.get("boundary", {}).get("verdict")
+    return verdict if isinstance(verdict, str) else None
+
+
 def build_anchor_record(store: AnchorStore, identity: RunIdentity, bundle_dir: Path,
                         verify: Any = None) -> AnchorRecord:
     """Everything a publication decides BEFORE it writes anything: verify the
@@ -449,6 +475,17 @@ def build_anchor_record(store: AnchorStore, identity: RunIdentity, bundle_dir: P
     result = verify(bundle_dir)
     if not getattr(result, "verified", False):
         raise AuthorityUnavailable("bundle is not self-consistent; refusing to anchor it")
+    # F-17 Stage 7: connect the .git classifier to publication. This is the one
+    # chokepoint every Anchor V2 passes through, from either protocol, and it
+    # already parses SUMMARY.json — so it is where an UNQUALIFIED (or otherwise
+    # non-CLEAN, or unrecorded) capture is stopped from becoming an anchor.
+    boundary_verdict = _bundle_boundary_verdict(bundle_dir)
+    if boundary_verdict != _PUBLISHABLE_BOUNDARY_VERDICT:
+        raise AuthorityUnavailable(
+            f"bundle boundary verdict is {boundary_verdict!r}, not "
+            f"{_PUBLISHABLE_BOUNDARY_VERDICT!r}: the capture's .git machinery was "
+            "tampered, unqualified, redirected or unrecorded, so it may not be "
+            "anchored (F-17 Stage 7 fail-closed)")
     bound = _bundle_head_sha(bundle_dir)
     if bound is None or bound != identity.head_sha:
         raise AuthorityUnavailable(
