@@ -127,6 +127,11 @@ from .git_evidence import (
     git_resolution_faithful,
     git_topology_eligible,
 )
+from .git_surface import (
+    GitSurfaceClass,
+    classify_git_surface,
+    in_git_domain,
+)
 from .input_lock import (
     InputLock,
     LockOutcome,
@@ -157,6 +162,11 @@ EXIT_STREAMS_MUTATED = 8
 EXIT_MACHINERY_MUTATED = 9
 EXIT_MACHINERY_UNOBSERVABLE = 10
 EXIT_MACHINERY_REDIRECTED = 11
+# F-17 Stage 7. A `.git` administrative surface was written that the closed-world
+# classifier does not qualify: we cannot say it is safe, so we do not. Distinct
+# from MUTATED (a KNOWN-dangerous surface) because the operator response differs
+# — a surface to be classified, not a tamper to be investigated.
+EXIT_MACHINERY_UNQUALIFIED = 12
 
 _UNREADABLE_PREFIX = "unreadable: "
 
@@ -307,6 +317,9 @@ class ObservationVerdict(Enum):
     MACHINERY_MUTATED = "MACHINERY_MUTATED"
     MACHINERY_UNOBSERVABLE = "MACHINERY_UNOBSERVABLE"
     MACHINERY_REDIRECTED = "MACHINERY_REDIRECTED"
+    # F-17 Stage 7: a `.git` surface the closed-world classifier does not
+    # qualify was written during the interval. UNKNOWN -> fail closed.
+    MACHINERY_UNQUALIFIED = "MACHINERY_UNQUALIFIED"
 
 
 @dataclass(frozen=True)
@@ -772,21 +785,48 @@ def classify_observation(
     violations: list[str] = []
     stream_violations: list[str] = []
     machinery_violations: list[str] = []
+    unqualified_violations: list[str] = []
     allowed_count = 0
     machinery = 0
     unknown: dict[str, str] = {}
     for event in observation.events:
         path = event.path
-        if _is_git_machinery_tamper(path) or _is_git_resolution_redirect(path):
-            # F-17: a hook or config written during the capture is a tamper
-            # of the machinery that produced the evidence; a write to a
-            # resolution-redirect surface (refs/replace, alternates, grafts,
-            # shallow, packed-refs, config.worktree) tampers with how git
-            # resolves the objects the evidence names (BLOCKER A). Checked
-            # before the .git bookkeeping count below, so both are judged,
-            # not forgiven, and before the stream branch so a stream on any
-            # of them is judged too.
-            machinery_violations.append(f"{event.action}: {path}")
+        if in_git_domain(path):
+            # F-17 Stage 7: every `.git` surface is classified closed-world
+            # (kernel.git_surface). This one branch replaces the old two ad-hoc
+            # predicates AND the broad `.git/` forgive-by-default that followed
+            # them, so a `.git` write can no longer be benign merely by not
+            # matching a hand-written danger list.
+            #   KNOWN_TRUST_SENSITIVE  a hook, config, a resolution-redirect
+            #     surface, HEAD or a resolving ref namespace — a tamper of the
+            #     machinery that produced the evidence. Judged; observed, so an
+            #     in-interval create+delete (ABA) is caught, which a before/after
+            #     fingerprint is blind to.
+            #   KNOWN_CONTENT_OR_BOOKKEEPING  the index, a content-addressed
+            #     object, the reflog — cannot change the trusted identity, which
+            #     is bound at the endpoints. Counted, not judged.
+            #   UNKNOWN  no rule qualifies it, so it is not safe by default:
+            #     MACHINERY_UNQUALIFIED, fail closed. This is the Stage 7 crux.
+            owner = path.split(":", 1)[0]
+            if event.action == "modified" and (repo / owner).is_dir():
+                # A `.git` directory's own timestamp moves when its entries
+                # change (e.g. `.git/objects` when an object lands); the entries
+                # produce their own classified events, so the directory's
+                # timestamp is git bookkeeping, not a surface to classify. This
+                # is the same forgiveness the non-.git dir branch below applies,
+                # and it is `modified`-only: an added/removed/renamed `.git`
+                # directory is structural and still goes through the classifier.
+                machinery += 1
+            else:
+                surface = classify_git_surface(path)
+                if surface.surface_class is GitSurfaceClass.KNOWN_TRUST_SENSITIVE:
+                    machinery_violations.append(f"{event.action}: {path}")
+                elif (surface.surface_class
+                      is GitSurfaceClass.KNOWN_CONTENT_OR_BOOKKEEPING):
+                    machinery += 1
+                else:
+                    unqualified_violations.append(
+                        f"{event.action}: {path} [{surface.rule_id}]")
         elif ":" in path:
             # A named data stream, delivered by the observer's stream
             # filters as `owner:name` (or `:name` on the root itself). A
@@ -813,11 +853,6 @@ def classify_observation(
                 stream_violations.append(f"{event.action}: {path}")
         elif path in covered:
             violations.append(f"{event.action}: {path}")
-        elif path == _GIT_DIR.rstrip("/") or path.startswith(_GIT_DIR):
-            # Git rewrites its index while merely reading the tree, so
-            # judging these would make the mechanism unusable. They are
-            # counted instead of forgiven silently.
-            machinery += 1
         elif _is_allowed_path(path, allowed):
             allowed_count += 1
         elif event.action == "modified" and (repo / path).is_dir():
@@ -869,6 +904,24 @@ def classify_observation(
             "alternates, grafts, shallow, packed-refs, config.worktree) under "
             ".git was written during the capture, tampering with the machinery "
             "that produced the evidence",
+            machinery_events=machinery, protection=protection,
+            locked_identity=prepared)
+
+    if unqualified_violations:
+        # F-17 Stage 7: a `.git` surface was written that the closed-world
+        # classifier does not qualify. We cannot say it is safe, so the capture
+        # fails closed rather than forgiving it by default. Its own verdict,
+        # distinct from MACHINERY_MUTATED, because the operator response is to
+        # CLASSIFY the surface (move it into a known class with a stated
+        # property, or confirm it is a genuine tamper), not to assume a tamper.
+        return Boundary(
+            ObservationVerdict.MACHINERY_UNQUALIFIED, observation.mechanism,
+            len(observation.events), allowed_count,
+            tuple(dict.fromkeys(unqualified_violations)), len(covered),
+            tuple(allowed),
+            "a .git administrative surface the closed-world classifier does not "
+            "qualify was written during the capture; it is not safe by default "
+            "and fails closed until it is classified (see boundary.violations)",
             machinery_events=machinery, protection=protection,
             locked_identity=prepared)
 
@@ -1041,6 +1094,8 @@ def _exit_code(binding: TreeBinding, checks: ChecksVerdict, boundary: Boundary) 
         return EXIT_MACHINERY_UNOBSERVABLE
     if boundary.verdict is ObservationVerdict.MACHINERY_REDIRECTED:
         return EXIT_MACHINERY_REDIRECTED
+    if boundary.verdict is ObservationVerdict.MACHINERY_UNQUALIFIED:
+        return EXIT_MACHINERY_UNQUALIFIED
     if boundary.verdict is ObservationVerdict.UNPROTECTED:
         return EXIT_INPUTS_UNPROTECTED
     if boundary.verdict is ObservationVerdict.PREPARATION_DRIFT:
@@ -1085,9 +1140,13 @@ def _verdict_line(binding: TreeBinding, checks: ChecksVerdict, boundary: Boundar
         return ("INVALID EVIDENCE: a named data stream appeared, vanished or "
                 "changed length during the capture; see boundary.violations")
     if boundary.verdict is ObservationVerdict.MACHINERY_MUTATED:
-        return ("INVALID EVIDENCE: a hook or config under .git was written during "
-                "the capture, tampering with the machinery that produced it; see "
-                "boundary.violations")
+        return ("INVALID EVIDENCE: a hook, config, or a resolution-redirect "
+                "surface under .git was written during the capture, tampering "
+                "with the machinery that produced it; see boundary.violations")
+    if boundary.verdict is ObservationVerdict.MACHINERY_UNQUALIFIED:
+        return ("INVALID EVIDENCE: a .git administrative surface that the "
+                "closed-world classifier does not qualify was written during the "
+                "capture, so it cannot be assumed safe; see boundary.violations")
     if boundary.verdict is ObservationVerdict.INPUTS_MUTATED:
         return ("INVALID EVIDENCE: a covered input was written during the capture "
                 "and the endpoints do not show it; see boundary.violations")
