@@ -1,0 +1,122 @@
+﻿==============================================================================
+F-17 STAGE 6 ÔÇö OS-REAL COMPOSITION PROBE
+==============================================================================
+
+SETUP ÔÇö disposable infrastructure
+------------------------------------------------------------------------------
+   copying the Python runtime into the probe tool root ...
+   copying the bootstrap's module closure into the probe tool root ...
+   relocating the Claude CLI into the probe tool root ...
+   creating the disposable account GnosisWkrS5Probe ...
+   worker SID: S-1-5-21-1160728320-3593568380-93362170-1029
+   DPAPI-protecting the credential (machine-bound) ...
+   applying probe-only ACLs ...
+
+SETUP ÔÇö Stage 6 additions
+------------------------------------------------------------------------------
+   sc create GnosisPubS6Probe ...
+   create rc=0 [SC] CreateService CORRECTO
+   sc sidtype GnosisPubS6Probe restricted ...
+   sidtype rc=0 [SC] ChangeServiceConfig2 CORRECTO
+   service SID: S-1-5-80-1601248226-2899973967-2481327289-699189507-2782868652
+   pipe SDDL: O:S-1-5-80-1601248226-2899973967-2481327289-699189507-2782868652D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;S-1-5-80-1601248226-2899973967-2481327289-699189507-2782868652)(A;;0x00120083;;;S-1-5-21-1160728320-3593568380-93362170-1029)
+   applying probe-only ACLs ...
+   observing the deployment (V2: the runtime as a TREE) ...
+   deployment_digest: 31653230b22c52e27b191be5bfa0a83e8989eb176a7d5a5e583efba8f5e4daf2
+   runtime tree files: 3434
+
+SERVICE IDENTITY
+------------------------------------------------------------------------------
+   service SID type                                    : RESTRICTED                 <- required RESTRICTED   OK
+   service SID is a service SID                        : True                       <- required True   OK
+   start type                                          : DEMAND                     <- required DEMAND   OK
+   account            : NT SERVICE\GnosisPubS6Probe
+   required privileges: ()
+
+   sc start rc=0
+   service RUNNING
+
+HAPPY PATH ÔÇö trusted Director -> Worker -> Publisher -> Anchor v2
+------------------------------------------------------------------------------
+   fixture worker exit code                            : 0                          <- required 0   OK
+   worker SID observed                                 : S-1-5-21-1160728320-3593568380-93362170-1029 <- required S-1-5-21-1160728320-3593568380-93362170-1029   OK
+   launch_spec_digest : 848742744ae33f2668c48917f920a235f63b3a938d93dddcfbf506eae89671fb
+   bundle produced by the worker                       : True                       <- required True   OK
+   deployment digest stable across observations        : 31653230b22c52e27b191be5bfa0a83e8989eb176a7d5a5e583efba8f5e4daf2 <- required 31653230b22c52e27b191be5bfa0a83e8989eb176a7d5a5e583efba8f5e4daf2   OK
+   run identity owner is the OBSERVED sid              : S-1-5-21-1160728320-3593568380-93362170-1029 <- required S-1-5-21-1160728320-3593568380-93362170-1029   OK
+   run identity binds the sealed launch                : 848742744ae33f2668c48917f920a235f63b3a938d93dddcfbf506eae89671fb <- required 848742744ae33f2668c48917f920a235f63b3a938d93dddcfbf506eae89671fb   OK
+   run identity starts NOT_PUBLISHABLE                 : PublicationState.NOT_PUBLISHABLE <- required PublicationState.NOT_PUBLISHABLE   OK
+   worker could open the pipe                          : True                       <- required True   OK
+   publish BEFORE publishable is refused               : True                       <- required True   OK
+   reply: REJECTED:AuthorityUnavailable
+   trusted gate marked it PUBLISHABLE                  : PublicationState.PUBLISHABLE <- required PublicationState.PUBLISHABLE   OK
+   reply: ANCHORED:517e653ce356:seq=0
+   publication ANCHORED                                : True                       <- required True   OK
+   anchor record exists                                : True                       <- required True   OK
+   anchor schema is V2                                 : gnosis.anchor.v2           <- required gnosis.anchor.v2   OK
+   anchor binds the deployment                         : 31653230b22c52e27b191be5bfa0a83e8989eb176a7d5a5e583efba8f5e4daf2 <- required 31653230b22c52e27b191be5bfa0a83e8989eb176a7d5a5e583efba8f5e4daf2   OK
+   anchor binds the run identity                       : 04810e8896b5fc7d5b59d73b7f6215afce6a04e1654e17ae55c20706447f3b3d <- required 04810e8896b5fc7d5b59d73b7f6215afce6a04e1654e17ae55c20706447f3b3d   OK
+   watermark confirms the commit                       : True                       <- required True   OK
+   run identity reconciled to ANCHORED                 : PublicationState.ANCHORED  <- required PublicationState.ANCHORED   OK
+   a retry is ALREADY_ANCHORED                         : True                       <- required True   OK
+   exactly one anchor record                           : 1                          <- required 1   OK
+
+ADVERSARIAL COMPOSITION ÔÇö every case has an expected verdict
+------------------------------------------------------------------------------
+  IPC grammar
+     unknown run                                       : REJECTED:unknown-run       <- required REJECTED:unknown-run   OK
+     path traversal                                    : REJECTED:bad-request       <- required REJECTED:bad-request   OK
+     absolute path                                     : REJECTED:bad-request       <- required REJECTED:bad-request   OK
+     another verb                                      : REJECTED:bad-request       <- required REJECTED:bad-request   OK
+     no verb                                           : REJECTED:bad-request       <- required REJECTED:bad-request   OK
+     extra argument                                    : REJECTED:bad-request       <- required REJECTED:bad-request   OK
+     fault-point selection                             : REJECTED:unknown-run       <- required REJECTED:unknown-run   OK
+     oversized                                         : REJECTED:oversized         <- required REJECTED:oversized   OK
+
+  the Worker against trusted state (ACL prevention)
+     write anchor ledger                               : True                       <- required True   OK
+     write watermark                                   : True                       <- required True   OK
+     write run identity                                : True                       <- required True   OK
+     write publisher config                            : True                       <- required True   OK
+     write deployed service entry point                : True                       <- required True   OK
+     write deployed publisher module                   : True                       <- required True   OK
+     write trusted runtime                             : True                       <- required True   OK
+
+  the Worker against the endpoint and the service
+     worker creates an instance of the trusted pipe    : True                       <- required True   OK
+     worker can stop the service                       : False                      <- required False   OK
+     worker can reconfigure the image path             : False                      <- required False   OK
+     worker can change the SID type                    : False                      <- required False   OK
+     worker can delete the service                     : False                      <- required False   OK
+     service still installed and RUNNING               : True                       <- required True   OK
+
+RESTART ÔÇö committed state survives and reconciles
+------------------------------------------------------------------------------
+   service stopped                                     : True                       <- required True   OK
+   sc start rc=0
+   anchor count unchanged across a restart             : 1                          <- required 1   OK
+   chain still verifies                                : True                       <- required True   OK
+   a retry after restart is still ALREADY_ANCHORED     : True                       <- required True   OK
+
+
+ROLLBACK
+------------------------------------------------------------------------------
+   sc stop rc=0
+   sc delete rc=0
+   service absent (query rc 1060 means gone)           : 1060                       <- required 1060   OK
+   stage 6 state root removed                          : False                      <- required False   OK
+
+ROLLBACK
+------------------------------------------------------------------------------
+   NetUserDel(GnosisWkrS5Probe)                       : status 0 (deleted)
+   Win32 profile removed                          : True
+   probe root removed                             : True
+   account residue (net user rc!=0 means gone)    : rc=2
+   DPAPI blob removed                             : True
+   no service, no scheduled task, no production ACL was ever created
+
+==============================================================================
+PROBE RESULT: ALL 49 CHECKS PASSED
+==============================================================================
+PROBE_EXIT=0
+PROBE_DONE

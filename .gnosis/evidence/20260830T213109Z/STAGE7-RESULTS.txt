@@ -1,0 +1,298 @@
+F-17 IMPLEMENTATION — STAGE 7: UNKNOWN .GIT FAIL-CLOSED ENFORCEMENT
+======================================================================================
+Starting HEAD  : 3e5a2e2e0f674f55d10b6c6767f31d014e5421a1
+Preflight      : CLEAN (worktree tracked content identical to HEAD)
+Git observed   : git version 2.55.0.windows.4 ; ref backend "files"
+F-14 CLOSED. F-17 OPEN. Stage 8 NOT started.
+
+
+1-3. START STATE
+--------------------------------------------------------------------------------------
+The Stage 7 preflight ran clean and HEAD matched the authorized commit. Git and
+its ref backend were observed and are inside the qualified contract (2.55.x,
+files). A reftable or materially different git would have STOPPED here.
+
+
+4-5. CLASSIFIER ARCHITECTURE AND THE THREE CLASSES
+--------------------------------------------------------------------------------------
+`gnosis.kernel.git_surface` (KERNEL, pure, stdlib only) turns a `.git` path into
+exactly one class:
+
+    KNOWN_TRUST_SENSITIVE          a write can change what Git EXECUTES or how it
+                                   RESOLVES, in a way an in-interval undo hides
+                                   from the endpoints -> judged (MACHINERY_MUTATED)
+    KNOWN_CONTENT_OR_BOOKKEEPING   a write cannot change the trusted identity or
+                                   resolution, property stated -> counted
+    UNKNOWN                        no rule qualifies it -> MACHINERY_UNQUALIFIED,
+                                   fail closed. The only catch-all.
+
+It is imported by the kernel capture to judge write events; the trust plane never
+imports it (it reads the recorded verdict), so the publisher closure is unchanged.
+
+
+6. THE SEMANTIC MATRIX (26 rules + UNKNOWN catch-all)
+--------------------------------------------------------------------------------------
+    ts.config                      TS  config selects filters, hooksPath, alternates, worktree and extensions — it can redirect resolution and execution
+    ts.config-worktree             TS  per-worktree config (extensions.worktreeConfig) sets executable keys like core.fsmonitor
+    ts.head                        TS  HEAD is the symbolic ref that defines the checked-out commit; a write changes what every `HEAD`-relative read resolves to
+    ts.packed-refs                 TS  the packed form of the ref backend; a write moves what refs resolve to (the packed twin of the loose refs/ rules)
+    ts.shallow                     TS  grafts the history boundary; changes ancestry resolution
+    ts.commondir                   TS  redirects the common dir — the root of ref/object resolution
+    ts.info-grafts                 TS  fabricates commit parentage; changes ancestry resolution
+    ts.info-exclude                TS  steers what Git enumerates as ignored/untracked, which shapes the covered-input set and the content fingerprint's untracked hashes
+    ts.info-attributes             TS  drives clean/smudge filters and diff behaviour, so it can change what `git diff HEAD` reports for the same bytes
+    ts.objects-info-alternates     TS  redirects object lookup to an external store
+    ts.objects-info-http-alternates TS  redirects object lookup to an external (http) store
+    ts.refs-replace                TS  replace refs substitute one object for another during resolution with the original bytes intact (BLOCKER A)
+    ts.refs-heads                  TS  a branch ref is what HEAD resolves to; an in-interval write is the loose form of the packed-refs risk
+    ts.refs-tags                   TS  a tag resolves to an object a check may read via `git rev-parse`
+    ts.refs-remotes                TS  a remote-tracking ref resolves to an object a check may read
+    ts.hook                        TS  a non-sample hook is code Git executes on the next operation
+    bk.index                       BK  the staging/stat-cache index; the trusted identity is working-tree vs HEAD (`git diff HEAD`, index-independent) plus endpoint-captured `git status`, so an index write cannot alter identity without moving an endpoint the capture already binds
+    bk.index-lock                  BK  the transient lock Git writes and removes around an index update
+    bk.sharedindex                 BK  the split-index backing file; same property as index — staging state, captured at the endpoints via `git status`
+    bk.loose-object                BK  a content-addressed loose object: its name is the hash of its bytes, so it cannot be made to name different content; F-14 byte-binds tracked content and the redirect rules cover substitution
+    bk.pack                        BK  content-addressed pack data; same property as a loose object
+    bk.reflog-head                 BK  the HEAD reflog: an append-only record of ref movement, never consulted when resolving a ref to an object
+    bk.reflog-refs                 BK  a ref's reflog; append-only movement history, not consulted in ref->object resolution
+    bk.commit-editmsg              BK  the last commit message buffer; scratch, never consulted by resolution or by the trusted read
+    bk.description                 BK  the human repo description (gitweb only); never consulted
+    bk.hook-sample                 BK  an inert example hook Git ships; the `.sample` suffix means it is never executed
+    (no rule matches)              UK  UNKNOWN -> MACHINERY_UNQUALIFIED, fail closed
+
+
+7. TRUST-SENSITIVE RULES — the property each protects
+--------------------------------------------------------------------------------------
+config / config.worktree (execution+redirection), HEAD (defines the checkout),
+packed-refs and refs/heads|tags|remotes/** (ref->object resolution; loose and
+packed treated CONSISTENTLY — the packed-refs risk re-demonstrated), refs/replace
+(object substitution, BLOCKER A), shallow + info/grafts + commondir (ancestry /
+common-dir redirection), objects/info/alternates + http-alternates (object-store
+redirection), info/exclude (steers ignored/untracked enumeration), info/attributes
+(clean/smudge filters + diff), a non-sample hook (executed code).
+
+
+8. CONTENT/BOOKKEEPING RULES — why a write cannot alter the trusted claim
+--------------------------------------------------------------------------------------
+index / index.lock / sharedindex.* (staging + stat cache; identity is
+working-tree-vs-HEAD via `git diff HEAD`, index-independent, plus endpoint status),
+loose objects objects/<2hex>/<hash> and objects/pack/pack-*.{pack,idx,rev,...}
+(content-addressed: the name IS the hash of the bytes), logs/HEAD + logs/refs/**
+(reflog, append-only, never consulted in ref->object resolution),
+COMMIT_EDITMSG (scratch), description (gitweb-only), hooks/*.sample (inert).
+Grounded OS-real: a read-only capture writes exactly `.git/index`.
+
+
+9. UNKNOWN FALLBACK
+--------------------------------------------------------------------------------------
+Anything not matched — refs/codex/** (present on this machine), objects/info/
+commit-graph(s)/packs, worktrees/**, modules/**, ORIG_HEAD, FETCH_HEAD,
+reftable/**, sparse-checkout, any future surface — is UNKNOWN with ZERO
+special-case code, and fails closed as MACHINERY_UNQUALIFIED.
+
+
+10-11. ORDER-INDEPENDENCE AND OVERLAP REJECTION
+--------------------------------------------------------------------------------------
+The classifier collects EVERY matching rule and requires at most one; two matches
+raise GitSurfaceOverlap rather than pick a winner. Tested: reversed order and 50
+randomized orders classify identically; an injected overlapping rule raises; the
+shipped rule set is internally disjoint (each sample matches exactly one rule).
+There are no first-match security semantics.
+
+
+12. PATH NORMALIZATION
+--------------------------------------------------------------------------------------
+Before matching: case-folded (NTFS), separators unified, per-component trailing
+dots/spaces stripped, and any `.`/`..` component makes the whole path UNKNOWN.
+Tested: `.GIT/CONFIG`, `.git\\config`, `config.`, `config ` all classify as the
+real surface; `refs/heads/../../config` fails closed. Residual: an 8.3 short name
+falls to UNKNOWN (still fail closed) — section 39.
+
+
+13-21. THE NAMESPACES, EXPLICITLY
+--------------------------------------------------------------------------------------
+    refs            NO broad refs/** rule. heads/tags/remotes/replace qualified;
+                    any other namespace (refs/codex) -> UNKNOWN.
+    packed-refs     trust-sensitive; the loose/packed twin is consistent.
+    replace refs    trust-sensitive AND refused at capture start by
+                    git_resolution_faithful; both demonstrated OS-real.
+    objects         NO broad objects/** rule. Loose objects and pack files
+                    qualified by the content-addressed property; objects/info/*
+                    is NOT absorbed (info is not 2-hex).
+    objects/info    only alternates + http-alternates qualified (trust-sensitive);
+                    commit-graph, packs, anything else -> UNKNOWN.
+    index/sharedindex  bookkeeping WITH the stated property; sharedindex qualified
+                    and exercised OS-real with core.splitIndex on.
+    config          config and config.worktree trust-sensitive (not parsed; the
+                    whole file is judged). No git config interpreter added.
+    worktrees       linked worktree topology already refused by
+                    git_topology_eligible; a worktrees/** admin surface -> UNKNOWN.
+    submodules      unchanged; the superproject stays an eligible files repo.
+
+
+22. BACKEND / VERSION GATE
+--------------------------------------------------------------------------------------
+git_backend_and_version_qualified runs FIRST. Requires git 2.55.x and the `files`
+backend. reftable / unknown backend / unparseable or out-of-family version /
+broken git -> MACHINERY_UNQUALIFIED, nothing runs. The resolution probes' three
+fail-opens (failed replace probe, failed shallow probe, unreadable redirection
+file) are closed: a probe that cannot answer is UNKNOWN. Deliberately strict — a
+git upgrade fails closed until re-qualified (section 39).
+
+
+23-24. ENFORCEMENT LOCUS AND UNKNOWN -> PUBLICATION REJECTION
+--------------------------------------------------------------------------------------
+build_anchor_record — the one chokepoint every Anchor V2 passes through — reads
+the boundary verdict from SUMMARY.json and refuses anything but CLEAN, ABSENT
+included (a pre-Stage-7 bundle cannot pass by lacking the field).
+authorize_publishable applies the same gate earlier, defence in depth, via the
+one shared helper. The trust plane gains ZERO new imports; publisher closure is
+still 15 modules and gnosis.kernel.git_surface is ABSENT from it.
+
+Proved: UNKNOWN observed -> authoritative publication impossible. Unit
+(test_git_surface_enforcement) and OS-real (the matrix enforcement attack): a
+clean bundle anchors; the same bundle re-sealed MACHINERY_UNQUALIFIED is refused
+and no anchor / no watermark advance results.
+
+
+25. OS-REAL GIT MATRIX — 26 / 26
+--------------------------------------------------------------------------------------
+Disposable local repos, rolled back, no network. Gates: ordinary files
+(qualified), packed-refs (faithful), replace ref (refused), shallow (refused),
+linked worktree + separate git-dir (ineligible), split-index (real sharedindex,
+faithful), reftable (rejected, reason names reftable). Captures: benign CLEAN,
+ORIG_HEAD UNQUALIFIED exit 12, unknown .git subtree UNQUALIFIED, HEAD ABA
+MUTATED exit 9. Enforcement attack: clean anchors, unqualified refused. Rollback
+verified (disposable root removed).
+
+
+26. STAGE 6 COMPOSITION REGRESSION — 49 / 49
+--------------------------------------------------------------------------------------
+The OS-real composition probe re-run under Stage 7: a known-good git state still
+reaches an Anchor V2 through the real RESTRICTED service-SID publisher, with the
+new boundary gate in the path; retry ALREADY_ANCHORED; restart reconciles. The
+UNKNOWN-fails-closed half is demonstrated through the same seam by the git-matrix
+enforcement attack and the durable_publish enforcement unit test.
+
+
+27. F-14 REGRESSION
+--------------------------------------------------------------------------------------
+tests/test_evidence_binding.py (the F-14 byte-binding / ADS / ABA suite plus the
+Stage 7 machinery tests) passes in the full run. F-14 stays CLOSED; no
+contradiction observed. Stage 7 did not touch ADS observation, ABA handling,
+completeness or byte binding.
+
+
+28. MUTATION — 19 / 19 CAUGHT
+--------------------------------------------------------------------------------------
+Green baseline (51 tests / 104 subtests), 0 survived. Mutants: unqualified
+default -> bookkeeping; overlap guard -> first-match; refs/heads and loose-object
+-> blanket refs/ and objects/; packed-refs / replace / HEAD / info/exclude
+downgraded; canonicalization drops case-fold or trailing-dot strip; version and
+reftable gates fail open; replace and shallow probes fail open; both boundary
+gates removed; absent verdict -> CLEAN; unqualified write counted; UNQUALIFIED ->
+exit 0. All die. No diagnostic-only mutant is claimed as a security barrier.
+
+
+29. TCB DELTA
+--------------------------------------------------------------------------------------
+    + src/gnosis/kernel/git_surface.py   321 LOC  (KERNEL, pure stdlib, no I/O)
+    kernel.evidence_capture, kernel.git_evidence  extended in place
+    TRUST PLANE: unchanged. The classifier is kernel; the trust gate reads a JSON
+      string and imports nothing new. No third-party git library. No dynamic
+      loading. Stage 1 closed-world rules intact.
+    Reported separately, never summed:
+      project-source Trust Plane   ~6174 LOC   (unchanged by Stage 7)
+      trusted Python runtime       ~62 MB / 3434 files
+
+
+30. TRUST-BOUNDARY RESULT
+--------------------------------------------------------------------------------------
+publisher_service import closure: 15 modules, gnosis.kernel.git_surface ABSENT,
+no engine/provider/worker/evidence-capture modules. The closed-world trust
+boundary test passes; git_surface is a kernel module and is deliberately NOT in
+the publisher closure.
+
+
+31-34. VALIDATION
+--------------------------------------------------------------------------------------
+    directed Stage 7            git_surface 22/84, enforcement 9, backend 9,
+                                e2e machinery 10 — all pass
+    semantic matrix             26 rules, each with a stated reason (section 6)
+    order-independence          reversed + 50 randomized orders identical
+    overlap rejection           injected overlap raises; shipped set disjoint
+    unknown-child / future      tested UNKNOWN, zero special-case code
+    OS-real git matrix          26/26, rollback verified
+    backend/version gate        files accepted; reftable rejected OS-real
+    Stage 6 composition         49/49 known-good still anchors
+    F-14 regression             test_evidence_binding green
+    mutation                    19/19 caught, 0 survived
+    mypy --strict               Success, 75 source files
+    ruff                        clean on every touched file; repo-wide unchanged
+                                at the 19-finding baseline
+    FULL SUITE                  1483 passed, 1 skipped, 261 subtests, exit 0 (GREEN on the first run; the work_queue flake did not fire this run)
+    isolated fresh checkout     280 passed, 132 subtests, exit 0; PREFLIGHT PROVED the import resolved inside the extraction (gnosis-fresh-*/tree/src/gnosis), NOT the working tree
+    secret scan                 clean over the Stage 7 diff (3e5a2e2..HEAD)
+
+
+35-38. COMMITS / HEAD / EVIDENCE
+--------------------------------------------------------------------------------------
+    affab20  a closed-world classifier for .git surfaces
+    46910ff  connect the classifier to publication, fail closed
+    57b5391  qualify the git backend/version, and close the fail-opens
+    5f2d704  e2e machinery tests, mutation suite, OS-real git matrix
+    this evidence + state commit  evidence + state
+    HEAD     5f2d704 (implementation); the evidence+state commit adds only docs and .gnosis/evidence on top
+    evidence .gnosis/evidence/20260830T213109Z  (bundle_digest recorded in ADR-0029 and the evidence commit message (the external anchor; a manifest cannot contain its own digest))
+
+
+40. ROLLBACK
+--------------------------------------------------------------------------------------
+The OS-real probes create only disposable local repos (git matrix) and a
+disposable service+account (Stage 6 composition regression), both rolled back
+and verified: disposable roots removed, service deleted, account deleted, no
+production ACL. No production repository was ever attacked.
+
+
+39. RESIDUAL RISKS
+--------------------------------------------------------------------------------------
+    R1  8.3 SHORT NAMES. A short name the observer reports instead of the long
+        name (CONFIG~1) will not match an exact rule and falls to UNKNOWN — still
+        fail closed, but misclassified as unqualified rather than as the specific
+        surface. There is no relative-path long-name canonicaliser (the OS-answer
+        canonicalisers need an open handle); recorded, not resolved.
+    R2  VERSION STRICTNESS. A git upgrade beyond 2.55.x fails captures closed
+        until re-qualified. This is the intended reading of the mandate, but it
+        means a routine git update pauses evidence capture until Stage 8/ops
+        re-qualify the new version.
+    R3  BOOKKEEPING BREADTH vs A REPO-MUTATING CHECK. refs/heads|tags|remotes are
+        trust-sensitive, so a check that legitimately commits inside a captured
+        interval fails closed (MACHINERY_MUTATED). That is correct for evidence
+        capture (the tree must be fixed) but is a behaviour change from Stage 6.
+    R4  sharedindex qualified by analogy to index and exercised with core.
+        splitIndex on; a future split-index internal format change would need
+        re-qualification (it would only ever fail MORE closed).
+    R5  The trust gate keys on the boundary verdict STRING in SUMMARY.json; a
+        bundle whose manifest and SUMMARY were both forged by a party who can
+        write the evidence root could carry a CLEAN verdict. That is the same
+        signature-vs-tamper-evidence limit ADR-0027 already declared, and the
+        evidence root is ACL-protected (Stage 8 provisions the production ACL).
+
+
+42. DECISIONS REQUIRING INDEPENDENT REVIEW
+--------------------------------------------------------------------------------------
+    D1  refs/heads|tags|remotes as TRUST_SENSITIVE (R3): confirm a check that
+        commits during capture SHOULD fail closed, or carve a qualified
+        exception.
+    D2  The 2.55.x-only version gate (R2): confirm the strict family gate, or
+        widen to a floor (>=2.55) accepting forward versions until a known break.
+    D3  The 8.3 short-name residual (R1): accept fail-closed-but-misclassified,
+        or require a relative-path long-name canonicaliser in Stage 8.
+    D4  Carried from Stage 6, still open: kernel.authority still re-exports two
+        private _bundle_* helpers (facade cleanup deferred).
+
+
+======================================================================================
+STAGE 7 RESULT: PASS
+RECOMMENDATION: DO NOT CLOSE F-17
+======================================================================================
