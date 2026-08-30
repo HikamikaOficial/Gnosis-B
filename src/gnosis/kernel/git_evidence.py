@@ -19,6 +19,60 @@ from .canonical import hash_canonical
 
 _SHA_RE = re.compile(r"[0-9a-f]{40,64}\Z")
 
+# F-17 Stage 7. The Git backend and version family this project's evidence
+# machinery was qualified against. The classifier and the resolution/topology
+# gates were reasoned and measured OS-real on the `files` ref backend, git
+# 2.55.x; a different ref backend (reftable) changes where refs live entirely,
+# and a materially different version can change probe semantics. Neither is
+# silently accepted: outside this contract, the capture fails closed and the
+# operator re-qualifies. `_QUALIFIED_REF_FORMAT` is the only backend the whole
+# .git surface catalogue reasons about.
+_QUALIFIED_REF_FORMAT = "files"
+_QUALIFIED_GIT_MAJOR = 2
+_QUALIFIED_GIT_MINOR = 55
+_GIT_VERSION_RE = re.compile(r"git version (\d+)\.(\d+)")
+
+
+def git_backend_and_version_qualified(repo_path: Path) -> tuple[bool, str | None]:
+    """Is Git the qualified version and ref backend? Fail closed if not.
+
+    Runs BEFORE the topology and resolution gates: if the version or the ref
+    backend is outside the qualified contract, the semantics those gates and the
+    .git classifier rely on are not established, so nothing the capture would
+    conclude can be trusted. A broken/absent git, an unreadable version, an
+    unknown or reftable backend all return ``(False, reason)``.
+    """
+    code, out = _run_git(repo_path, ["--version"])
+    if code != 0:
+        return False, f"could not determine the git version (rc={code}): {out}"
+    match = _GIT_VERSION_RE.search(out)
+    if match is None:
+        return False, f"could not parse the git version from {out!r}"
+    major, minor = int(match.group(1)), int(match.group(2))
+    if (major, minor) != (_QUALIFIED_GIT_MAJOR, _QUALIFIED_GIT_MINOR):
+        return False, (
+            f"git {major}.{minor} is outside the qualified family "
+            f"{_QUALIFIED_GIT_MAJOR}.{_QUALIFIED_GIT_MINOR}.x; the .git surface "
+            "catalogue and resolution gates were not qualified against it, so "
+            "the capture fails closed until re-qualified")
+
+    # The ref backend. `--show-ref-format` exists from git 2.45; on the
+    # qualified 2.55 it is present. A non-`files` backend (reftable, or anything
+    # this project has not qualified) fails closed: reftable stores refs in
+    # .git/reftable/* rather than loose refs + packed-refs, so the classifier's
+    # ref rules do not describe it.
+    code, out = _run_git(repo_path, ["rev-parse", "--show-ref-format"])
+    if code != 0:
+        return False, (
+            f"could not determine the ref-storage backend (rc={code}): {out}")
+    fmt = out.strip()
+    if fmt != _QUALIFIED_REF_FORMAT:
+        return False, (
+            f"ref-storage backend is {fmt!r}, not the qualified "
+            f"{_QUALIFIED_REF_FORMAT!r}; this backend is not qualified and the "
+            "capture fails closed")
+    return True, None
+
 
 @dataclass(frozen=True)
 class GitEvidence:
@@ -167,7 +221,14 @@ def git_resolution_faithful(repo_path: Path) -> tuple[bool, str | None]:
     # `git replace` (both reproduced OS-real).
     code, out = _run_git(
         repo_path, ["for-each-ref", "--format=%(refname)", "refs/replace"])
-    if code == 0 and out.strip():
+    if code != 0:
+        # F-17 Stage 7: a FAILED probe is UNKNOWN, not "no replace refs". The
+        # previous `if code == 0 and out.strip()` let a broken probe read as
+        # faithful — a fail-open the module's own doctrine forbids.
+        return False, (
+            f"could not probe replace refs (rc={code}): {out}; a capture "
+            "cannot proceed without confirming resolution is unredirected")
+    if out.strip():
         first = out.strip().splitlines()[0]
         return False, (
             f"a replace ref is active ({first}): git substitutes one object "
@@ -176,7 +237,11 @@ def git_resolution_faithful(repo_path: Path) -> tuple[bool, str | None]:
 
     # A shallow repository truncates ancestry (measured: rev-list count drops).
     code, out = _run_git(repo_path, ["rev-parse", "--is-shallow-repository"])
-    if code == 0 and out.strip() == "true":
+    if code != 0:
+        # A failed probe is UNKNOWN, not "not shallow" (fail-open removed).
+        return False, (
+            f"could not probe shallow state (rc={code}): {out}")
+    if out.strip() == "true":
         return False, (
             "the repository is shallow: its ancestry is truncated, so it is "
             "not a faithful full repository to capture")
@@ -205,8 +270,16 @@ def git_resolution_faithful(repo_path: Path) -> tuple[bool, str | None]:
         target = common_path / rel
         try:
             present = target.is_file() and target.stat().st_size > 0
-        except OSError:
-            present = False
+        except FileNotFoundError:
+            present = False  # genuinely absent: not a redirection
+        except OSError as exc:
+            # F-17 Stage 7: an unreadable redirection file is UNKNOWN, not
+            # absent. The previous blanket `except OSError: present = False`
+            # let a file we could not stat read as "no redirection" — a
+            # fail-open. We cannot confirm it is harmless, so we fail closed.
+            return False, (
+                f"could not read {rel} to confirm resolution is unredirected "
+                f"({exc}); failing closed")
         if present:
             return False, (
                 f"{why}; a faithful capture requires unredirected resolution")

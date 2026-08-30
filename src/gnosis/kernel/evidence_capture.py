@@ -124,6 +124,7 @@ from gnosis.trust.bundle_verify import (  # noqa: F401
 from .canonical import hash_canonical
 from .git_evidence import (
     content_fingerprint,
+    git_backend_and_version_qualified,
     git_resolution_faithful,
     git_topology_eligible,
 )
@@ -659,6 +660,7 @@ def classify_observation(
     streams: Sequence[str] = (),
     topology_reason: str | None = None,
     resolution_reason: str | None = None,
+    backend_reason: str | None = None,
 ) -> Boundary:
     """Turn prevention plus a stream of writes into one verdict.
 
@@ -690,6 +692,21 @@ def classify_observation(
     allowed = (BARRIER_DIR, *allowed_writes)
     protection: Mapping[str, Any] = lock.to_dict() if lock is not None else {}
     prepared: Mapping[str, Any] = locked_identity or {}
+    if backend_reason is not None:
+        # F-17 Stage 7: Git is outside the qualified version/ref-backend
+        # contract, so the semantics the topology gate, the resolution gate and
+        # the .git surface classifier all rely on are not established. Nothing
+        # ran; fail closed rather than reach conclusions with machinery we have
+        # not qualified. Same verdict as an in-interval unqualified surface,
+        # because the meaning is the same: unqualified machinery.
+        return Boundary(
+            ObservationVerdict.MACHINERY_UNQUALIFIED, observation.mechanism,
+            len(observation.events), 0, (backend_reason,), len(covered),
+            tuple(allowed),
+            "the git version or ref-storage backend is outside the qualified "
+            "contract, so the evidence machinery is not qualified here and "
+            "nothing ran",
+            protection=protection, locked_identity=prepared)
     if topology_reason is not None:
         # F-17 / BLOCKER 1: the git machinery (hooks, config, HEAD, index)
         # lives outside the watched tree — a linked worktree, a submodule,
@@ -1365,16 +1382,24 @@ def run_capture(
     # git-dir capture would otherwise run to a CLEAN verdict with its hooks
     # and config unobserved. Determined once, treated as adversarial input
     # (the .git redirect is resolved by git and checked to lie in-tree).
-    topology_ok, topology_reason = git_topology_eligible(repo)
-    # F-17 / BLOCKER A: only meaningful for an eligible (standard) topology —
-    # for an ineligible one the topology gate already refuses, and the
-    # resolution probe would run git against machinery outside the tree.
+    # F-17 Stage 7: the backend/version contract is the most fundamental gate —
+    # if Git is not the qualified version and ref backend, the semantics the
+    # topology gate, the resolution gate and the .git classifier rely on are not
+    # established, so the other probes are not even run against unqualified
+    # machinery.
+    backend_ok, backend_reason = git_backend_and_version_qualified(repo)
+    topology_ok, topology_reason = (True, None)
     resolution_ok, resolution_reason = (True, None)
-    if topology_ok:
-        resolution_ok, resolution_reason = git_resolution_faithful(repo)
+    if backend_ok:
+        topology_ok, topology_reason = git_topology_eligible(repo)
+        # F-17 / BLOCKER A: only meaningful for an eligible (standard) topology —
+        # for an ineligible one the topology gate already refuses, and the
+        # resolution probe would run git against machinery outside the tree.
+        if topology_ok:
+            resolution_ok, resolution_reason = git_resolution_faithful(repo)
     try:
         pre = identity(repo)
-        if pre.available and topology_ok and resolution_ok:
+        if pre.available and backend_ok and topology_ok and resolution_ok:
             covered = covered_paths(repo, allowed_writes)
             env = check_environment(scratch)
             lock = input_lock(repo)
@@ -1431,7 +1456,8 @@ def run_capture(
     boundary = classify_observation(repo, observation, covered, allowed_writes,
                                     lock_outcome, drift,
                                     prepared.to_dict() if prepared is not None else None,
-                                    streams, topology_reason, resolution_reason)
+                                    streams, topology_reason, resolution_reason,
+                                    backend_reason)
     checks_verdict = _checks_verdict(results)
     summary = build_summary(
         binding, results, checks_verdict, boundary,
