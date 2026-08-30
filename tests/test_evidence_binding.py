@@ -38,6 +38,7 @@ from gnosis.kernel.evidence_capture import (
     EXIT_MACHINERY_MUTATED,
     EXIT_MACHINERY_REDIRECTED,
     EXIT_MACHINERY_UNOBSERVABLE,
+    EXIT_MACHINERY_UNQUALIFIED,
     EXIT_OK,
     EXIT_PREPARATION_DRIFT,
     EXIT_STREAMS_MUTATED,
@@ -3522,6 +3523,76 @@ class TestGitMachineryIsJudged(unittest.TestCase):
             )], root / "s")
             self.assertIs(capture.boundary.verdict, ObservationVerdict.MACHINERY_MUTATED)
             self.assertEqual(capture.exit_code, EXIT_MACHINERY_MUTATED)
+
+    @WINDOWS_ONLY
+    def test_an_unqualified_git_surface_write_fails_closed(self):
+        # F-17 Stage 7: a .git administrative surface the closed-world
+        # classifier does not qualify (here ORIG_HEAD) is written during the
+        # capture. It must not be forgiven by default: MACHINERY_UNQUALIFIED.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = run_capture(self._repo(root), [_script(
+                "import os",
+                "open(os.path.join('.git', 'ORIG_HEAD'), 'w', "
+                "encoding='utf-8').write('0'*40)",
+            )], root / "s")
+            self.assertIs(capture.boundary.verdict,
+                          ObservationVerdict.MACHINERY_UNQUALIFIED)
+            self.assertFalse(capture.evidence_valid)
+            self.assertEqual(capture.exit_code, EXIT_MACHINERY_UNQUALIFIED)
+            self.assertTrue(any("ORIG_HEAD" in v
+                                for v in capture.boundary.violations),
+                            capture.boundary.violations)
+
+    @WINDOWS_ONLY
+    def test_an_unknown_refs_namespace_write_fails_closed(self):
+        # refs/codex/ exists on this machine and is NOT a qualified namespace.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = run_capture(self._repo(root), [_script(
+                "import os",
+                "os.makedirs(os.path.join('.git', 'refs', 'codex'), "
+                "exist_ok=True)",
+                "open(os.path.join('.git', 'refs', 'codex', 'x'), 'w', "
+                "encoding='utf-8').write('0'*40)",
+            )], root / "s")
+            self.assertIs(capture.boundary.verdict,
+                          ObservationVerdict.MACHINERY_UNQUALIFIED)
+            self.assertEqual(capture.exit_code, EXIT_MACHINERY_UNQUALIFIED)
+
+    @WINDOWS_ONLY
+    def test_writing_head_during_the_capture_is_judged(self):
+        # HEAD is trust-sensitive in the Stage 7 classifier (it defines the
+        # checkout). Written and RESTORED inside the interval (ABA), so the
+        # endpoints match and the binding stays BOUND — the observer still
+        # caught the write, and it is MACHINERY_MUTATED with exit 9. This is
+        # exactly the case a before/after fingerprint is blind to.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = run_capture(self._repo(root), [_script(
+                "import os",
+                "p = os.path.join('.git', 'HEAD')",
+                "original = open(p, encoding='utf-8').read()",
+                "open(p, 'w', encoding='utf-8').write('ref: refs/heads/other\\n')",
+                "open(p, 'w', encoding='utf-8').write(original)",
+            )], root / "s")
+            self.assertIs(capture.boundary.verdict,
+                          ObservationVerdict.MACHINERY_MUTATED)
+            self.assertEqual(capture.exit_code, EXIT_MACHINERY_MUTATED)
+
+    @WINDOWS_ONLY
+    def test_writing_info_exclude_during_the_capture_is_judged(self):
+        # info/exclude steers what git enumerates as ignored/untracked, so it
+        # is trust-sensitive in Stage 7.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = run_capture(self._repo(root), [_script(
+                "import os",
+                "open(os.path.join('.git', 'info', 'exclude'), 'a', "
+                "encoding='utf-8').write('*.log\\n')",
+            )], root / "s")
+            self.assertIs(capture.boundary.verdict,
+                          ObservationVerdict.MACHINERY_MUTATED)
 
     @WINDOWS_ONLY
     def test_a_sample_hook_write_is_not_a_violation(self):
