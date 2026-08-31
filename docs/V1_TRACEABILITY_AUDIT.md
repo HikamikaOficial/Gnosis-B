@@ -317,12 +317,49 @@ implementa un ledger append-only hash-encadenado que se re-verifica íntegro ant
 de extenderse. La evidencia que sostiene las afirmaciones del proyecto es la
 parte menos protegida del proyecto.
 
-### F-18 · FAIL · MEDIA · deriva de evidencia
+### F-18 · RESOLVED / STALE (histórico: FAIL / MEDIA) · deriva de evidencia
 
 `PROJECT_REPORT.md` declara `Commit: edec96e` y cita `20260821T174016Z` como
 "Latest evidence bundle". Ese bundle registra HEAD `92fe18a` — el commit
 **anterior** — con árbol sucio. `HEAD` en la auditoría es `83ae84e`. **No existe
 bundle de evidencia para `edec96e` ni para `83ae84e`.**
+
+- **status (2026-08-31 · RESOLVED / STALE)** el defecto era una **deriva
+  documental / de procedencia** (una cita humana equivocada), NO una falla de
+  integridad de evidencia en tiempo de ejecución: el bundle citado
+  (`.gnosis/evidence/20260821T174016Z/`) se auto-identificaba correctamente
+  (`SUMMARY.json` y `git-head.stdout.txt` registran el commit real `92fe18a`); el
+  elemento incorrecto era la cita del informe. El estado autoritativo **rastreado**
+  ya no exhibe el defecto: se verificó que **todas las 49 referencias a bundles de
+  evidencia en la documentación rastreada existen (49/49, 0 faltantes)**, la
+  documentación de cierre de F-17 cita el estado cualificado de forma consistente
+  (ADR-0031 → `06cdf00` ↔ el bundle rastreado cuyo README registra el árbol
+  cualificado `06cdf00` ↔ raíz `f27a5f8a…`), y los bundles registran su propia
+  identidad real (cualquier deriva es DETECTABLE). **Distinción de alcance:** F-18
+  NO es la deriva de árbol en tiempo de ejecución (cerrada por F-14: observador →
+  PRE → entradas bloqueadas → PREPARED → comandos → POST → veredicto de
+  binding/boundary) NI la integridad de publicación autoritativa (cerrada por
+  F-17: separación candidato/autoritativo, raíz autoritativa denegada al Worker,
+  RunIdentity de confianza, recomputación del digest del bundle en el chokepoint
+  `build_anchor_record`, autorización del Publisher, Anchor V2, watermark durable,
+  binding de despliegue). **verify→publish:** no queda ventana de deriva
+  explotable por T2 en la ruta autoritativa F-17 — la construcción del ancla
+  recomputa/liga la identidad del bundle en el chokepoint de confianza y el Worker
+  no puede mutar la raíz de evidencia autoritativa (sin ampliar la afirmación a
+  Administrator/SYSTEM ni a compromiso del plano de confianza). **Post-publicación:**
+  la garantía es **tamper-evidence / binding de contenido**, no inmutabilidad
+  física perpetua — una modificación posterior de bytes cambia la identidad de
+  contenido y es detectable frente al digest/raíz registrado (sin PKI/autenticidad
+  externa). **Residual (honesto, no reabre F-18):** el artefacto históricamente
+  nombrado `PROJECT_REPORT.md` sigue existiendo como archivo **no rastreado,
+  preexistente y fuera de alcance**, y aún contiene la cita obsoleta; no es estado
+  autoritativo rastreado y su disposición queda para el operador (no se edita, no
+  se borra, no se añade en este cierre). Sin cambio de código/tests/scripts/
+  evidencia. F-14 y F-17 permanecen CLOSED. Deuda de aseguramiento no-bloqueante
+  (opcional, no requerida): un chequeo de que las rutas de bundles citadas por la
+  documentación rastreada existen (hoy 0 faltantes) y, donde exista un esquema de
+  cita legible por máquina, validar el commit/árbol declarado contra la identidad
+  registrada por el bundle.
 
 ---
 
