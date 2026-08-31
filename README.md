@@ -1,8 +1,9 @@
 # Gnosis
 
 Gnosis is a local, autonomous AI software-engineering system. Its
-architecture is **kernel-authoritative** and **provider-neutral**: the
-kernel — not any language model — authorizes state transitions, gates,
+architecture is **kernel-authoritative** and **provider-neutral at the
+adapter boundary**: the kernel — not any language model — authorizes state
+transitions, gates,
 permissions, integration, and promotion. Agents (used during development
 and review) only *propose*; the kernel decides. See `CLAUDE.md` for the
 full engineering constitution.
@@ -48,10 +49,21 @@ Detail lives in the ADRs; this is orientation only.
   (ADR-0028), and provisioning that realizes the OS boundaries (ADR-0030).
 
 The **Director** is a local orchestration component, not a language
-model. Typed `DirectorBrief` JSON files drive the kernel through the
-policy gate. No external LLM is a required runtime dependency. Claude
-Code and Codex are used to build and review Gnosis; they are development /
-review tools, not runtime infrastructure. A ChatGPT / MCP Director
+model: typed `DirectorBrief` JSON files drive the kernel through the
+policy gate. Gnosis has no third-party Python runtime package
+dependencies — the core package uses the standard library
+(`dependencies = []`) — and it embeds no provider SDK. Provider-backed
+execution is mediated through adapters, not an in-process SDK. The
+currently wired execution path uses `ClaudeCodeCLIRunner`
+(`src/gnosis/runner/claude_cli_runner.py`), which invokes a locally
+installed `claude` CLI; that executable and its provider access are
+therefore operational dependencies for that execution capability. The
+kernel and orchestration core (ledger, claims, lease, policy/authority,
+run store, queue) run without invoking a provider; producing new agent
+work does not. Codex is used as development/review tooling and is not
+wired into the runtime execution path. "Provider-neutral" here describes
+the adapter/interface boundary, not the absence of provider-specific
+tooling in the shipped execution path. A ChatGPT / MCP Director
 transport exists in the tree only as an **unimplemented placeholder**
 (`src/gnosis/transport/mcp_transport.py`).
 
@@ -64,8 +76,9 @@ produce an authoritative publication, bound to tamper-evident evidence.
 The qualified claim, in ADR-0031's own words, is that *under the
 documented Windows / Git 2.55.x files-backend / Python-runtime /
 deployment contract, a compromised dedicated Worker cannot cause an
-authoritative publication the trusted plane did not authorize*, and
-unsupported or ambiguous conditions fail closed. This is a
+authoritative historical-evidence publication that the trusted plane did
+not authorize*, and relevant unsupported or ambiguous conditions fail
+closed. This is a
 **production-equivalent qualification under that contract** — not a
 claim of a live production deployment. See ADR-0031 for the exact boundary
 and the formal non-claims.
@@ -154,5 +167,7 @@ intentionally does not hardcode a test count.)
   Python, or provider compatibility. See ADR-0031 for the exact contract
   and the formal non-claims.
 - The MCP / ChatGPT Director transport is unimplemented (placeholder).
-- Gnosis is provider-neutral; it integrates no external inference provider
-  as a runtime dependency.
+- Gnosis is provider-neutral at the adapter/interface boundary and embeds
+  no provider SDK as a Python runtime dependency; provider-backed execution
+  is mediated through adapters/external tools, and the currently wired
+  execution path uses the local `claude` CLI.
