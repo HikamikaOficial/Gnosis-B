@@ -221,7 +221,7 @@ bytes de un árbol sucio pasaron las pruebas.**
   **desde la evidencia**.
 - **confidence** ALTA
 
-### F-15 · FAIL · ALTA · primitiva existente no utilizada
+### F-15 · RESOLVED / STALE (histórico: FAIL / ALTA) · primitiva existente no utilizada
 
 - **files** `scripts/capture_evidence.py` vs `src/gnosis/kernel/git_evidence.py:78`
 - **symbol** `content_fingerprint`, `tamper_fingerprint`
@@ -235,6 +235,27 @@ bytes de un árbol sucio pasaron las pruebas.**
 - **confidence** ALTA
 - **corrección sugerida** escribir `content_fingerprint(REPO)` en `SUMMARY.json`
   antes y después de la tanda.
+- **status (2026-08-31 · RESOLVED / STALE)** el hallazgo era válido al escribirse
+  (`capture_evidence.py` no usaba `content_fingerprint`), pero el trabajo de
+  vinculación de evidencia posterior (ADR-0026 / era F-14–F-17) ya conectó la
+  primitiva a la ruta de producción de captura. Cableado actual:
+  `capture_evidence.py` → `run_capture(...)` →
+  `probe_tree_identity(..., fingerprint=content_fingerprint)` (huella PRE antes
+  del primer check y POST tras el último) → `bind_tree(pre, post)` →
+  `TreeBinding.to_dict()` → `SUMMARY.json`, con la identidad de contenido
+  (incluido `patch_sha256`) enlazada y fallo cerrado si los extremos difieren o
+  la identidad no puede tomarse. La primitiva NO está sin usar: la consumen
+  además `kernel/engine.py`, `kernel/integration.py`, `adapters/cli_review.py`,
+  `runner/replay_runner.py` y `kernel/evidence_capture.py`; cubierta por
+  `test_evidence_binding.py` (extremo a extremo, `patch_sha256`, `bind_tree`) y
+  la suite de mutación F-14. Sin cambio de código en este cierre; F-14 y F-17
+  permanecen CLOSED. La capa de captura produce evidencia vinculada, NO una
+  segunda ruta de autoridad: la publicación autoritativa sigue siendo la ruta
+  F-17 ya cualificada. (Deuda técnica separada, no-F-15, no-bloqueante: el
+  parámetro inyectable `fingerprint=` podría dar una huella estructuralmente
+  incompleta y `bind_tree` describirla como BOUND; producción fija
+  `content_fingerprint` y no expone ese selector a entrada no confiable — no
+  reabre F-15/F-14/F-17 y no se corrige ahora.)
 
 ### F-16 · FAIL · ALTA · orden de captura
 
