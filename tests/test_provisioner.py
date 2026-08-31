@@ -50,9 +50,17 @@ class _RecordingOps:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[object, ...]]] = []
         self.made: set[str] = set()
+        self.accounts: set[str] = set()
+        self.services: set[str] = set()
 
     def run(self, argv):  # type: ignore[no-untyped-def]
         self.calls.append(("run", tuple(argv)))
+        # Model the two idempotence probes: a service query reports absence
+        # until `sc create` has run, so a fresh install takes the create path.
+        if len(argv) >= 3 and argv[0] == "sc.exe" and argv[1] == "query":
+            return (0, "RUNNING") if argv[2] in self.services else (1060, "")
+        if len(argv) >= 3 and argv[0] == "sc.exe" and argv[1] == "create":
+            self.services.add(argv[2])
         return (0, "")
 
     def mkdir(self, path):  # type: ignore[no-untyped-def]
@@ -84,8 +92,12 @@ class _RecordingOps:
             return SID_SERVICE
         return SID_WORKER
 
+    def account_exists(self, username):  # type: ignore[no-untyped-def]
+        return username in self.accounts
+
     def create_worker(self, username, password, comment):  # type: ignore[no-untyped-def]
         self.calls.append(("create_worker", (username,)))
+        self.accounts.add(username)
 
     def delete_worker(self, username):  # type: ignore[no-untyped-def]
         self.calls.append(("delete_worker", (username,))); return 0
@@ -124,9 +136,11 @@ class TestPureRenderers(unittest.TestCase):
         img = service_imagepath(r"C:\rt\python.exe", r"C:\rt\service_main.py",
                                 r"C:\pd\config.json")
         self.assertEqual(
-            img, '"C:\\rt\\python.exe" -I "C:\\rt\\service_main.py" '
+            img, '"C:\\rt\\python.exe" -I -B "C:\\rt\\service_main.py" '
                  '"C:\\pd\\config.json"')
         self.assertIn(" -I ", img)
+        # -B forbids bytecode in the measured trust root (digest stability).
+        self.assertIn(" -B ", img)
 
     def test_config_binds_the_service_and_worker_sids_and_digest(self):
         cfg = service_config_json(_config(), ResolvedSids(
@@ -201,6 +215,36 @@ class TestTransactionOrder(unittest.TestCase):
         self.assertTrue(any(
             c[0] == "write_bytes" and c[1][0].endswith("worker.dpapi")
             for c in self.ops.calls))
+
+
+class TestIdempotence(unittest.TestCase):
+    def test_re_running_install_creates_no_second_account_or_service(self):
+        ops = _RecordingOps()
+        prov = Provisioner(
+            config=_config(), ops=ops, runtime_src=r"C:\src\runtime",
+            publisher_files=[(r"C:\src\p.py", "gnosis/x.py")],
+            bootstrap_files=[(r"C:\src\b.py", "gnosis/trust/bootstrap.py")],
+            toolchain_files=[(r"C:\tools\git.exe", "git.exe")],
+            observe_fn=lambda _config: _FakeIdentity())
+        prov.install("Pw!secret123")
+        prov.install("Pw!secret123")  # a second, converging run
+        creates = [c for c in ops.calls if c[0] == "create_worker"]
+        self.assertEqual(len(creates), 1, "a second account was created")
+        sc_creates = [c for c in ops.calls if c[0] == "run" and c[1][:2]
+                      == ("sc.exe", "create")]
+        self.assertEqual(len(sc_creates), 1, "a second service was created")
+
+    def test_grants_are_replace_not_add_so_acls_cannot_broaden(self):
+        # icacls /grant:r REPLACES a principal's ACE; a re-run yields identical
+        # ACLs, so the matrix cannot broaden on convergence.
+        _prov, ops = _install()
+        grants = [argv for kind, argv in ops.calls
+                  if kind == "run" and argv[:1] == ("icacls",)
+                  and "/grant:r" in argv]
+        self.assertTrue(grants)
+        for argv in grants:
+            self.assertIn("/grant:r", argv)
+            self.assertNotIn("/grant", [a for a in argv if a == "/grant"])
 
 
 class TestUninstallOrder(unittest.TestCase):

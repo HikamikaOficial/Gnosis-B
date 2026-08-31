@@ -1,0 +1,90 @@
+F-17 STAGE 8 — MUTATION CHECK OVER THE LAYOUT, ACL MATRIX AND PROVISIONER
+==========================================================================
+BASELINE: exit=0  27 passed in 0.26s
+
+S8M01: worker granted MODIFY on the credential blob root
+  result: exit=1  6 failed, 21 passed in 0.40s
+  verdict: CAUGHT
+
+S8M02: worker granted MODIFY on the authoritative bundles (Stage 7 R5)
+  result: exit=1  5 failed, 22 passed in 0.39s
+  verdict: CAUGHT
+
+S8M03: worker granted MODIFY on the anchor ledger
+  result: exit=1  6 failed, 21 passed in 0.41s
+  verdict: CAUGHT
+
+S8M04: worker granted FULL on the publisher code
+  result: exit=1  5 failed, 22 passed in 0.43s
+  verdict: CAUGHT
+
+S8M05: worker upgraded from RX to MODIFY on the runtime
+  result: exit=1  3 failed, 24 passed in 0.38s
+  verdict: CAUGHT
+
+S8M06: the credential blob root stops stripping inheritance
+  result: exit=1  2 failed, 25 passed in 0.37s
+  verdict: CAUGHT
+
+S8M07: code releases are no longer versioned (rollback impossible)
+  result: exit=1  1 failed, 26 passed in 0.38s
+  verdict: CAUGHT
+
+S8M08: the authoritative bundles collapse onto the worker work root
+  result: exit=1  2 failed, 25 passed in 0.38s
+  verdict: CAUGHT
+
+S8M09: python._pth re-enables site (import site)
+  result: exit=1  1 failed, 26 passed in 0.38s
+  verdict: CAUGHT
+
+S8M10: python._pth puts site-packages on the path
+  result: exit=1  1 failed, 26 passed in 0.38s
+  verdict: CAUGHT
+
+S8M11: the service ImagePath drops -I isolation
+  result: exit=1  1 failed, 26 passed in 0.38s
+  verdict: CAUGHT
+
+S8M12: icacls grants are additive (/grant) not replacing (/grant:r)
+  result: exit=1  1 failed, 26 passed in 0.37s
+  verdict: CAUGHT
+
+S8M13: the inheritance strip is skipped for every root
+  result: exit=1  1 failed, 26 passed in 0.36s
+  verdict: CAUGHT
+
+S8M14: config.json binds the service SID as the authorized worker
+  result: exit=1  1 failed, 26 passed in 0.38s
+  verdict: CAUGHT
+
+S8M15: config.json points trust_state_root at the versioned code base
+  result: exit=1  1 failed, 26 passed in 0.36s
+  verdict: CAUGHT
+
+S8M16: ACLs are applied AFTER the deployment is observed
+  result: exit=1  1 failed, 26 passed in 0.36s
+  verdict: CAUGHT
+
+S8M17: the service is left UNRESTRICTED (no sidtype restricted)
+  result: exit=1  1 failed, 26 passed in 0.37s
+  verdict: CAUGHT
+
+S8M18: the DPAPI credential blob is never written
+  result: exit=1  1 failed, 26 passed in 0.37s
+  verdict: CAUGHT
+
+S8M19: uninstall removes the worker BEFORE stopping the service
+  result: exit=1  1 failed, 26 passed in 0.38s
+  verdict: CAUGHT
+
+S8M20: install always creates the worker (not idempotent)
+  result: exit=1  1 failed, 26 passed in 0.36s
+  verdict: CAUGHT
+
+S8M21: install always sc-creates the service (not idempotent)
+  result: exit=1  1 failed, 26 passed in 0.36s
+  verdict: CAUGHT
+
+RESTORED: exit=0  27 passed in 0.22s
+mutants: 21  survived/aborted: 0

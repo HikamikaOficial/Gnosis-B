@@ -96,10 +96,16 @@ def service_imagepath(runtime_executable: str, service_entry: str,
 
     `-I` isolates the interpreter (ignores PYTHONPATH, the registry and per-user
     site); the entry point puts the deployed trust package on sys.path itself.
+    `-B` forbids writing bytecode: the deployment identity measures EVERY file
+    under the trust root and the runtime tree, so a first run that dropped
+    `__pycache__/*.pyc` into either would change the measured deployment after it
+    was observed. Refusing to write bytecode keeps the trusted tree byte-for-byte
+    as deployed (found OS-real: without `-B` the first publish drifted the digest
+    and every subsequent run was refused `deployment-mismatch`).
     Every component is an absolute path in the trusted, non-worker-writable code
     root, and there is no shell and no PATH executable lookup.
     """
-    return f'"{runtime_executable}" -I "{service_entry}" "{config_path}"'
+    return f'"{runtime_executable}" -I -B "{service_entry}" "{config_path}"'
 
 
 def package_json(version: str, commit: str, tree: str) -> dict[str, str]:
@@ -162,9 +168,75 @@ class Operations(Protocol):
     def write_text(self, path: str, text: str) -> None: ...
     def write_bytes(self, path: str, data: bytes) -> None: ...
     def resolve_sid(self, name: str) -> str: ...
+    def account_exists(self, username: str) -> bool: ...
     def create_worker(self, username: str, password: str, comment: str) -> None: ...
     def delete_worker(self, username: str) -> int: ...
     def protect_secret(self, secret: str) -> bytes: ...
+
+
+class RealOperations:
+    """The production side effects: real accounts, ACLs, DPAPI, files.
+
+    Thin wrappers over `gnosis.provision.winapi` (account/SID) and the trust
+    plane (DPAPI credential protection), plus stdlib filesystem calls. This is
+    what a real install runs; the qualification probe drives the same code.
+    """
+
+    def run(self, argv: list[str]) -> tuple[int, str]:
+        from gnosis.provision import winapi
+        return winapi.run(argv)
+
+    def mkdir(self, path: str) -> None:
+        Path(path).mkdir(parents=True, exist_ok=True)
+
+    def rmtree(self, path: str) -> None:
+        import shutil
+        for item in Path(path).rglob("*"):
+            try:
+                item.chmod(0o700)
+            except OSError:
+                pass
+        shutil.rmtree(path, ignore_errors=True)
+
+    def exists(self, path: str) -> bool:
+        return Path(path).exists()
+
+    def copytree(self, src: str, dst: str) -> None:
+        import shutil
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+
+    def copyfile(self, src: str, dst: str) -> None:
+        import shutil
+        Path(dst).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+
+    def write_text(self, path: str, text: str) -> None:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(text, encoding="utf-8")
+
+    def write_bytes(self, path: str, data: bytes) -> None:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_bytes(data)
+
+    def resolve_sid(self, name: str) -> str:
+        from gnosis.provision import winapi
+        return winapi.resolve_sid(name)
+
+    def account_exists(self, username: str) -> bool:
+        from gnosis.provision import winapi
+        return winapi.account_exists(username)
+
+    def create_worker(self, username: str, password: str, comment: str) -> None:
+        from gnosis.provision import winapi
+        winapi.create_local_account(username, password, comment)
+
+    def delete_worker(self, username: str) -> int:
+        from gnosis.provision import winapi
+        return winapi.delete_local_account(username)
+
+    def protect_secret(self, secret: str) -> bytes:
+        from gnosis.trust.worker_launcher import protect_worker_secret
+        return protect_worker_secret(secret, description="gnosis-worker-prod")
 
 
 class ProvisioningError(RuntimeError):
@@ -212,13 +284,26 @@ class Provisioner:
         return InstallResult(sids=sids, deployment_digest=digest, observed=observed)
 
     def _create_identities(self, worker_password: str) -> ResolvedSids:
-        maintenance = self.ops.resolve_sid("BUILTIN\\Administrators")
+        # The maintenance principal is the Administrators GROUP, whose SID is
+        # well-known and identical on every install and locale. Resolving it by
+        # the name "BUILTIN\\Administrators" fails on a non-English Windows
+        # (LookupAccountName returns ERROR_NONE_MAPPED, winerr 1332), so the
+        # constant SID is used directly — more correct, not merely a workaround.
+        maintenance = WELL_KNOWN_ADMINISTRATORS
         system = WELL_KNOWN_SYSTEM
-        self.ops.create_worker(self.config.worker_username, worker_password,
-                               self.config.worker_comment)
-        worker = self.ops.resolve_sid(self.config.worker_username)
-        self._note(f"create worker account {self.config.worker_username} "
-                   f"(SID {worker})")
+        # Idempotent: a re-run reuses the existing account (and its SID) rather
+        # than creating a second one, so the installer converges instead of
+        # drifting.
+        if self.ops.account_exists(self.config.worker_username):
+            worker = self.ops.resolve_sid(self.config.worker_username)
+            self._note(f"worker account {self.config.worker_username} already "
+                       f"present (SID {worker}); reused")
+        else:
+            self.ops.create_worker(self.config.worker_username, worker_password,
+                                   self.config.worker_comment)
+            worker = self.ops.resolve_sid(self.config.worker_username)
+            self._note(f"create worker account {self.config.worker_username} "
+                       f"(SID {worker})")
         # The DPAPI blob is written now; its ACL (worker DENIED) is applied in
         # the ACL pass. The plaintext exists only transiently in memory here.
         blob = self.ops.protect_secret(worker_password)
@@ -267,9 +352,18 @@ class Provisioner:
         name = self.config.service_name
         binary = service_imagepath(lay.runtime_executable, lay.service_entry,
                                    lay.config_path)
-        self._checked(["sc.exe", "create", name, "binPath=", binary,
-                       "type=", "own", "start=", "demand",
-                       "obj=", f"NT SERVICE\\{name}"], "sc create")
+        # Idempotent: if the service already exists, reconfigure its ImagePath
+        # rather than fail; a re-run converges to the intended binary.
+        exists_rc, _ = self.ops.run(["sc.exe", "query", name])
+        if exists_rc == 0:
+            self._checked(["sc.exe", "config", name, "binPath=", binary,
+                           "type=", "own", "start=", "demand",
+                           "obj=", f"NT SERVICE\\{name}"], "sc config (reinstall)")
+            self._note(f"service {name} already present; ImagePath reconfigured")
+        else:
+            self._checked(["sc.exe", "create", name, "binPath=", binary,
+                           "type=", "own", "start=", "demand",
+                           "obj=", f"NT SERVICE\\{name}"], "sc create")
         self._checked(["sc.exe", "sidtype", name, "restricted"], "sc sidtype")
         # Least privilege: only SeChangeNotify (traverse). Everything else is
         # stripped by naming only this one.
@@ -298,20 +392,26 @@ class Provisioner:
                 self._checked(cmd, f"icacls {spec.key}")
         # The service-object DACL: the worker gets NO ACE; maintenance may
         # query/start/stop; SYSTEM and Administrators keep full control.
-        self._set_service_dacl(sids)
+        self._set_service_dacl()
         self._note("apply ACL matrix (inheritance stripped, worker denied on "
                    "every trusted root) and the service-object DACL")
 
-    def _set_service_dacl(self, sids: ResolvedSids) -> None:
-        # SY/BA full; the maintenance principal query+start+stop+interrogate;
-        # the worker is absent (no SERVICE_* rights, cannot change config, SID
-        # type, ImagePath, or delete). A High mandatory label as defence in
-        # depth.
-        maint = sids.maintenance
-        sddl = (f"D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)"
-                f"(A;;CCLCSWRPWPDTLOCRRC;;;BA)"
-                f"(A;;CCLCSWRPRC;;;{maint})"
-                f"S:(ML;;NW;;;HI)")
+    def _set_service_dacl(self) -> None:
+        # SYSTEM and Administrators keep FULL service control — query, start,
+        # stop, change-config, delete, WRITE_DAC/OWNER — so maintenance can
+        # update, reconfigure and uninstall the service. No other principal is
+        # named, so the non-admin worker has NO service access at all: it cannot
+        # query, start, stop, reconfigure, change the SID type, or delete it.
+        #
+        # The rights token must include DC (change-config), SD (delete) and
+        # WD/WO for maintenance: an earlier DACL that granted Administrators only
+        # CCLCSWRPWPDTLOCRRC locked maintenance out of its own service, found
+        # OS-real as `sc config ... rc=5 ACCESS_DENIED`. No SACL is set: reading
+        # a mandatory label needs a privilege observation does not take, so it
+        # would not be measured, and the worker (absent from the DACL) already
+        # has no access without it.
+        full = "CCDCLCSWRPWPDTLOCRSDRCWDWO"
+        sddl = f"D:(A;;{full};;;SY)(A;;{full};;;BA)"
         self._checked(["sc.exe", "sdset", self.config.service_name, sddl],
                       "sc sdset", allow_fail=True)
 
@@ -345,6 +445,105 @@ class Provisioner:
         rc, out = self.ops.run(argv)
         if rc != 0 and not allow_fail:
             raise ProvisioningError(f"{label} failed (rc={rc}): {out[:200]}")
+
+    # -- update / rollback ----------------------------------------------------
+    def stage_release(self, new_layout: DeploymentLayout,
+                      sids: ResolvedSids) -> None:
+        """Deploy a new code release BESIDE the current one and ACL it.
+
+        Touches only the new release directory and the code base; the running
+        service and its state are untouched, so a failure here leaves the old
+        release active (fail-closed update). The caller verifies before
+        activating.
+        """
+        from gnosis.trust.pipe_server import worker_pipe_sddl
+        saved = self.config
+        object.__setattr__(self, "config",
+                           ProvisionConfig(**{**saved.__dict__, "layout": new_layout}))
+        try:
+            self._deploy_code()
+            self._write_descriptors_pre_acl(sids)
+            self.ops.write_text(new_layout.pipe_policy_json, json.dumps(
+                pipe_policy_json(self.config.pipe_name,
+                                 worker_pipe_sddl(sids.worker, sids.service)),
+                indent=2, sort_keys=True))
+            for spec in new_layout.roots():
+                if spec.relative_to != "code":
+                    continue  # state/work roots are stable across releases
+                path = new_layout.path(spec)
+                if not self.ops.exists(path):
+                    self.ops.mkdir(path)
+                for cmd in icacls_commands(spec, path, sids):
+                    self._checked(cmd, f"icacls {spec.key} (staged)")
+            self._note(f"stage release {new_layout.release_id} beside the active one")
+        finally:
+            object.__setattr__(self, "config", saved)
+
+    def verify_release(self, target_layout: DeploymentLayout) -> tuple[bool, str]:
+        """Independently verify a STAGED release WITHOUT touching the service.
+
+        The gate an update must pass before the ImagePath is flipped: the trust
+        package observes cleanly, and the interpreter and the service entry the
+        new ImagePath would name both exist. It reads only the new release's
+        files, never `observe_service`, so a failure here leaves the running
+        release untouched — this is what makes a failed update fail closed.
+        """
+        from gnosis.trust.deployment import (
+            DeploymentIdentityUnavailable,
+            observe_trust_package,
+        )
+        if not self.ops.exists(target_layout.runtime_executable):
+            return False, f"runtime missing at {target_layout.runtime_executable}"
+        if not self.ops.exists(target_layout.service_entry):
+            return False, f"service entry missing at {target_layout.service_entry}"
+        try:
+            observe_trust_package(Path(target_layout.trust_root))
+        except DeploymentIdentityUnavailable as exc:
+            return False, f"trust package unobservable: {exc}"
+        return True, "ok"
+
+    def activate_release(self, target_layout: DeploymentLayout,
+                         sids: ResolvedSids) -> tuple[str, object]:
+        """Point the service at `target_layout`'s release and rebind its config.
+
+        Maintenance-only: `sc config` of the ImagePath needs a service ACE the
+        worker does not have. Used by both update (to the new release) and
+        rollback (to a prior, still-present release). The deployment is OBSERVED
+        AFTER the ImagePath flip — `observe_service` reads the now-current
+        ImagePath — so the digest written to config.json is exactly what the
+        service will re-observe and require at its next boot. Returns the
+        (digest, observed) it committed.
+        """
+        binary = service_imagepath(target_layout.runtime_executable,
+                                   target_layout.service_entry,
+                                   target_layout.config_path)
+        self._checked(["sc.exe", "config", self.config.service_name,
+                       "binPath=", binary], "sc config (activate)")
+        digest, observed = self.observe_release(target_layout)
+        # config.json is stable (state base) but its expected_deployment_digest
+        # and code-relative fields must match the newly-active release.
+        saved = self.config
+        object.__setattr__(self, "config",
+                           ProvisionConfig(**{**saved.__dict__, "layout": target_layout}))
+        try:
+            self._write_config(sids, digest)
+        finally:
+            object.__setattr__(self, "config", saved)
+        self._note(f"activate release {target_layout.release_id} "
+                   f"(digest {digest[:12]})")
+        return digest, observed
+
+    def observe_release(self, target_layout: DeploymentLayout) -> tuple[str, object]:
+        from gnosis.trust.deployment import DesiredDeploymentConfig, observe_deployment
+        observer = self.observe_fn or observe_deployment
+        observed = observer(DesiredDeploymentConfig(
+            trust_root=Path(target_layout.trust_root),
+            runtime_executable=Path(target_layout.runtime_executable),
+            runtime_root=Path(target_layout.runtime_root),
+            runidentity_store=Path(target_layout.runidentity_root),
+            anchorstore=Path(target_layout.anchors_root),
+            service_name=self.config.service_name))
+        return observed.digest(), observed
 
     # -- teardown -------------------------------------------------------------
     def uninstall(self, *, remove_worker: bool = True) -> None:

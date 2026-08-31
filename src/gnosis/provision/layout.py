@@ -235,7 +235,13 @@ class DeploymentLayout:
 
     @property
     def deployment_json(self) -> str:
-        return f"{self.code_release_base}\\publisher\\DEPLOYMENT.json"
+        # A human-readable record of the observed deployment digest. It lives in
+        # the STATE base, never under the trust root: its content IS the digest
+        # of the trust root, so measuring it would be circular, and writing it
+        # there after observation would add an unmeasured file that drifts the
+        # identity on the next observation (found OS-real as a digest that was
+        # stable nowhere after the first install).
+        return f"{self.state_base}\\DEPLOYMENT.json"
 
     @property
     def pth_file(self) -> str:
