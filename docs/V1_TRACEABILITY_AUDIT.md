@@ -367,7 +367,7 @@ bundle de evidencia para `edec96e` ni para `83ae84e`.**
 
 | # | file | Contradicción | Verificación | sev |
 |---|---|---|---|---|
-| F-19 | `docs/PROJECT_STATE.md:304` | "164 unit/contract tests + 3 memory-fabric" como *Suite status* | `pytest --collect-only` → **760** | ALTA |
+| F-19 | `docs/PROJECT_STATE.md` "## Suite status" | histórico (FAIL/ALTA): "164 unit/contract tests + 3 memory-fabric" (=167) presentado como *Suite status* actual | **RESOLVED 2026-08-31 (docs-only)**: la sección se reemplazó por un checkpoint cualificado (F-17 final, árbol `06cdf00`, 1510 passed / 1 skipped / 291 subtests / exit 0; 1511 collected; ref. ADR-0031 + `.gnosis/evidence/20260831T025855Z-f17-final-qualification/`). **Causa raíz**: un conteo estático de fase temprana quedó embebido en un documento de estado de vida larga y se presentó indefinidamente como actual. **Remedio durable**: redacción checkpoint-cualificada referenciada a evidencia en vez de un número vivo sin fecha. Consecuencia: documental/auditabilidad; sin defecto de seguridad en runtime | ALTA → RESOLVED |
 | F-20 | `docs/PROJECT_STATE.md:106` | "mypy strict clean (47 files)" | evidencia propia: `no issues found in 55 source files`; `find src -name "*.py"` → 55 | MEDIA |
 | F-21 | `docs/PROJECT_STATE.md:5` | `Last update: 2026-08-20` | el cuerpo documenta trabajo del 2026-08-21 (deuda de revisión, L-0042) | BAJA |
 | F-22 | `docs/PROJECT_STATE.md:307` | "Codex login pending (human-only step)" | contradice sus propios gates `[x] Codex CLI installed (0.148.0) and authenticated` y `NEXT_ACTIONS:1` "codex login DONE" | ALTA |
