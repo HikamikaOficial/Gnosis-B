@@ -1,0 +1,21 @@
+FRESH CHECKOUT OF 77c639a
+======================================================================
+extracted files: 1101
+extracted to   : C:\Users\nicol\AppData\Local\Temp\gnosis-fresh-_9q94mer\tree
+
+PREFLIGHT — which tree does `import gnosis` actually resolve to?
+{"gnosis": "C:\\Users\\nicol\\AppData\\Local\\Temp\\gnosis-fresh-_9q94mer\\tree\\src\\gnosis\\__init__.py", "path0": ""}
+preflight OK: the extraction won the import
+
+RUNNING: tests/test_evidence_binding.py tests/test_git_surface.py tests/test_git_surface_enforcement.py tests/test_git_backend_gate.py tests/test_git_evidence.py tests/test_deployment_identity.py tests/test_run_identity_authorization.py tests/test_durable_publication.py tests/test_trusted_orchestration.py tests/test_provision_layout.py tests/test_provisioner.py
+----------------------------------------------------------------------
+..................................s..................................................................................................... [ 28%]
+................................................................................................................ [ 52%]
+........................................................................ [ 67%]
+........................................................................ [ 82%]
+............................................ [ 91%]
+........................................                              [100%]
+=========================== short test summary info ===========================
+SKIPPED [1] tests\test_evidence_binding.py:580: git could not probe the repository
+475 passed, 1 skipped, 143 subtests passed in 191.73s (0:03:11)
+FRESH_EXIT=0
