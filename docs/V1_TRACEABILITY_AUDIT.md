@@ -257,7 +257,7 @@ bytes de un árbol sucio pasaron las pruebas.**
   `content_fingerprint` y no expone ese selector a entrada no confiable — no
   reabre F-15/F-14/F-17 y no se corrige ahora.)
 
-### F-16 · FAIL · ALTA · orden de captura
+### F-16 · RESOLVED / STALE (histórico: FAIL / ALTA) · orden de captura
 
 - **file** `scripts/capture_evidence.py:64-70`
 - **symbol** `main()`
@@ -267,6 +267,47 @@ bytes de un árbol sucio pasaron las pruebas.**
   que la suite corrió. No hay captura pre/post ni comparación.
 - **evidence** `captured_at` = 17:49:22 frente al sello del directorio 17:40:16.
 - **confidence** ALTA
+- **status (2026-08-31 · RESOLVED / STALE)** el hallazgo era válido cuando se
+  escribió, pero la arquitectura de captura posterior (era F-14/F-17,
+  `kernel/evidence_capture.py:run_capture`) lo superó. Secuencia de producción
+  actual: (1) init de staging/scratch; (2) observador de escritura ARMADO; (3–5)
+  puertas Git backend/versión, topología, resolución; (6) **identidad PRE de
+  árbol/contenido (`pre = identity(repo)`, 1401)**; (7) bloqueo de entradas
+  cubiertas; (8) **identidad PREPARED tras dejar las entradas no escribibles
+  (1415)**; (9) chequeo de deriva de preparación — si `PRE != PREPARED` el bucle
+  de comandos NO se ejecuta; (10) **comandos de cualificación (1429)**; (11)
+  deriva de streams; (12) liberación del bloqueo; (13) **identidad POST (1439)**;
+  (14) fin del observador; (15) `bind_tree(pre, post)`; (16) clasificación de
+  observación/boundary; (17) veredicto de checks; (18) `SUMMARY.json`; (19)
+  manifiesto del bundle; (20) publicación como paso separado del bundle
+  completado. **Propiedad de seguridad: existe una identidad PRE de confianza
+  ANTES de que se ejecute el primer comando de cualificación** (NO se requiere
+  escribir `SUMMARY` antes de los comandos). Si la identidad PRE no está
+  disponible, no corre ningún comando, el efecto colateral del comando está
+  ausente y la captura devuelve identity-unavailable / fallo cerrado — protegido
+  por `test_an_unavailable_pre_identity_runs_nothing_and_fails_closed`,
+  `test_an_unavailable_post_identity_fails_closed_although_every_check_passed`,
+  `test_a_capture_with_no_checks_is_refused`, `test_the_observer_is_armed_before_the_lock`
+  y demostrado con un experimento controlado desechable (orden observado
+  `identity, identity, command, identity`; PRE no disponible → 0 checks, sin
+  efecto colateral, exit 3). La identidad de contenido y la COMPLETITUD de la
+  observación del intervalo son garantías SEPARADAS: el observador está armado
+  antes de PRE y activo hasta POST, y el bloqueo protege el conjunto de entradas
+  durante la ejecución; el diseño NO depende solo de huellas PRE/POST iguales.
+  Los transcripts parciales viven en staging antes del enlace final y NO
+  constituyen un bundle publicado válido: un bundle válido requiere
+  identidad/enlace + veredicto de boundary + veredicto de checks + `SUMMARY` +
+  manifiesto + paso de publicación (que rehúsa sobrescribir). Sin cambio de
+  código en este cierre. F-14 y F-17 permanecen CLOSED; la capa de captura
+  produce un transcript de hito enlazado, NO una segunda ruta de autoridad (la
+  publicación autoritativa sigue siendo la ruta F-17 cerrada). Deuda de
+  aseguramiento no-bloqueante (compartida con F-15, NO-F-16): el parámetro
+  inyectable `fingerprint=` podría dar snapshots estructuralmente incompletas
+  pero iguales que el enlace genérico llamaría BOUND; producción fija
+  `content_fingerprint` y ninguna entrada no confiable elige el proveedor — no
+  reabre F-14/F-16/F-17 y no se corrige ahora. Las entradas de comando
+  `git-head`/`git-status` son ahora transcript redundante; su retirada sería
+  limpieza cosmética, no requerida para resolver el hallazgo.
 
 ### F-17 · FAIL · MEDIA · tamper-evidence
 
