@@ -1,0 +1,202 @@
+==============================================================================
+F-17 STAGE 8 — OS-REAL PROVISIONING PROBE
+==============================================================================
+
+A. CLEAN INSTALL
+------------------------------------------------------------------------------
+   toolchain artifact for provenance: C:\Users\nicol\.local\bin\claude.EXE
+   installing (create account, deploy code, ACLs, service, observe) ...
+     - create worker account GnosisWkrS8 (SID S-1-5-21-1160728320-3593568380-93362170-1035)
+     - write DPAPI machine-bound worker credential blob
+     - deploy runtime + python._pth
+     - deploy publisher trust package, bootstrap, toolchain, entry
+     - write PACKAGE.json (real provenance) + PIPE_POLICY.json
+     - install RESTRICTED service GnosisPubS8Probe (SeChangeNotify only, no auto-restart)
+     - apply ACL matrix (inheritance stripped, worker denied on every trusted root) and the service-object DACL
+     - observe deployment -> digest b2453475ad10
+     - write config.json (expected_deployment_digest) + DEPLOYMENT.json
+     - verify: observed deployment matches intended
+
+A/B. OS STATE + DEPLOYMENT IDENTITY
+------------------------------------------------------------------------------
+   [PASS] worker account exists: True (want True)
+   [PASS] service installed: 0 (want 0)
+   [PASS] service SID type is RESTRICTED: 'RESTRICTED' (want 'RESTRICTED')
+   [PASS] service SID resolves (S-1-5-80-*): True (want True)
+   [PASS] DPAPI credential blob present: True (want True)
+   [PASS] root exists: code_root: True (want True)
+   [PASS] no broad principal on code_root: True (want True)
+   [PASS] root exists: runtime: True (want True)
+   [PASS] no broad principal on runtime: True (want True)
+   [PASS] root exists: publisher: True (want True)
+   [PASS] no broad principal on publisher: True (want True)
+   [PASS] root exists: bootstrap: True (want True)
+   [PASS] no broad principal on bootstrap: True (want True)
+   [PASS] root exists: toolchain: True (want True)
+   [PASS] no broad principal on toolchain: True (want True)
+   [PASS] root exists: state_root: True (want True)
+   [PASS] no broad principal on state_root: True (want True)
+   [PASS] root exists: anchors: True (want True)
+   [PASS] no broad principal on anchors: True (want True)
+   [PASS] root exists: runidentity: True (want True)
+   [PASS] no broad principal on runidentity: True (want True)
+   [PASS] root exists: bundles: True (want True)
+   [PASS] no broad principal on bundles: True (want True)
+   [PASS] root exists: secrets: True (want True)
+   [PASS] no broad principal on secrets: True (want True)
+   [PASS] root exists: logs: True (want True)
+   [PASS] no broad principal on logs: True (want True)
+   [PASS] root exists: work: True (want True)
+   [PASS] no broad principal on work: True (want True)
+   [PASS] deployment digest stable across observations: 'b2453475ad10f612dd1eb39a17ef5a0cfde48e718158082120561e2cc178a2a7' (want 'b2453475ad10f612dd1eb39a17ef5a0cfde48e718158082120561e2cc178a2a7')
+   [PASS] deployment binds the runtime tree: True (want True)
+   [PASS] runtime tree is non-trivial (>1000 files): True (want True)
+   [PASS] config expected_deployment_digest matches install: 'b2453475ad10f612dd1eb39a17ef5a0cfde48e718158082120561e2cc178a2a7' (want 'b2453475ad10f612dd1eb39a17ef5a0cfde48e718158082120561e2cc178a2a7')
+   [PASS] config authorized_worker_sid is the worker: 'S-1-5-21-1160728320-3593568380-93362170-1035' (want 'S-1-5-21-1160728320-3593568380-93362170-1035')
+
+C. IMPORT PROVENANCE (deployed runtime + python._pth)
+------------------------------------------------------------------------------
+   [PASS] python._pth present next to python.exe: True (want True)
+   [PASS] python._pth disables site (no 'import site'): True (want True)
+   [PASS] python._pth pins the publisher (..\publisher): True (want True)
+   [PASS] sys.executable is the deployed runtime: True (want True)
+   [PASS] import gnosis resolves under the deployed publisher: True (want True)
+   [PASS] import gnosis.trust.publisher resolves under the deployed publisher: True (want True)
+   [PASS] no site-packages on sys.path: True (want True)
+
+D. ADVERSARIAL ACL MATRIX (as the provisioned worker)
+------------------------------------------------------------------------------
+   [PASS]   write runtime DENIED: True (want True)
+   [PASS]   delete runtime DENIED: True (want True)
+   [PASS]   rename runtime DENIED: True (want True)
+   [PASS]   writedac runtime DENIED: True (want True)
+   [PASS]   writeowner runtime DENIED: True (want True)
+   [PASS]   read runtime ALLOWED (RX): True (want True)
+   [PASS]   write publisher DENIED: True (want True)
+   [PASS]   delete publisher DENIED: True (want True)
+   [PASS]   rename publisher DENIED: True (want True)
+   [PASS]   writedac publisher DENIED: True (want True)
+   [PASS]   writeowner publisher DENIED: True (want True)
+   [PASS]   read publisher DENIED: True (want True)
+   [PASS]   write bootstrap DENIED: True (want True)
+   [PASS]   delete bootstrap DENIED: True (want True)
+   [PASS]   rename bootstrap DENIED: True (want True)
+   [PASS]   writedac bootstrap DENIED: True (want True)
+   [PASS]   writeowner bootstrap DENIED: True (want True)
+   [PASS]   read bootstrap ALLOWED (RX): True (want True)
+   [PASS]   write toolchain DENIED: True (want True)
+   [PASS]   delete toolchain DENIED: True (want True)
+   [PASS]   rename toolchain DENIED: True (want True)
+   [PASS]   writedac toolchain DENIED: True (want True)
+   [PASS]   writeowner toolchain DENIED: True (want True)
+   [PASS]   read toolchain ALLOWED (RX): True (want True)
+   [PASS]   write anchors DENIED: True (want True)
+   [PASS]   delete anchors DENIED: True (want True)
+   [PASS]   rename anchors DENIED: True (want True)
+   [PASS]   writedac anchors DENIED: True (want True)
+   [PASS]   writeowner anchors DENIED: True (want True)
+   [PASS]   read anchors DENIED: True (want True)
+   [PASS]   write runidentity DENIED: True (want True)
+   [PASS]   delete runidentity DENIED: True (want True)
+   [PASS]   rename runidentity DENIED: True (want True)
+   [PASS]   writedac runidentity DENIED: True (want True)
+   [PASS]   writeowner runidentity DENIED: True (want True)
+   [PASS]   read runidentity DENIED: True (want True)
+   [PASS]   write bundles DENIED: True (want True)
+   [PASS]   delete bundles DENIED: True (want True)
+   [PASS]   rename bundles DENIED: True (want True)
+   [PASS]   writedac bundles DENIED: True (want True)
+   [PASS]   writeowner bundles DENIED: True (want True)
+   [PASS]   read bundles DENIED: True (want True)
+   [PASS]   write secrets DENIED: True (want True)
+   [PASS]   delete secrets DENIED: True (want True)
+   [PASS]   rename secrets DENIED: True (want True)
+   [PASS]   writedac secrets DENIED: True (want True)
+   [PASS]   writeowner secrets DENIED: True (want True)
+   [PASS]   read secrets DENIED: True (want True)
+   [PASS]   write state_root DENIED: True (want True)
+   [PASS]   delete state_root DENIED: True (want True)
+   [PASS]   rename state_root DENIED: True (want True)
+   [PASS]   writedac state_root DENIED: True (want True)
+   [PASS]   writeowner state_root DENIED: True (want True)
+   [PASS]   read state_root DENIED: True (want True)
+   [PASS]   write logs DENIED: True (want True)
+   [PASS]   delete logs DENIED: True (want True)
+   [PASS]   rename logs DENIED: True (want True)
+   [PASS]   writedac logs DENIED: True (want True)
+   [PASS]   writeowner logs DENIED: True (want True)
+   [PASS]   read logs DENIED: True (want True)
+   [PASS]   DPAPI credential blob unreadable by worker: True (want True)
+   [PASS]   POSITIVE: worker writes its own work root: 'WROTE' (want 'WROTE')
+   [PASS]   POSITIVE: worker reads the runtime it must run: True (want True)
+   [PASS]   worker ran as the provisioned SID: 'S-1-5-21-1160728320-3593568380-93362170-1035' (want 'S-1-5-21-1160728320-3593568380-93362170-1035')
+
+E. COMPOSITION SMOKE (Director -> worker -> publisher -> Anchor v2)
+------------------------------------------------------------------------------
+   sc start rc=0 NOMBRE_SERVICIO: GnosisPubS8Probe 
+        TIPO               : 10  WIN32_OWN_PROCESS  
+        ESTADO             : 2  START_PENDING 
+                         
+   [PASS]   service reached RUNNING: True (want True)
+   [PASS]   candidate worker exit (RUN-S8-OK-0001): 0 (want 0)
+   [PASS]   publish before publishable is refused: True (want True)
+   [PASS]   trusted gate marked it PUBLISHABLE: <PublicationState.PUBLISHABLE: 'PUBLISHABLE'> (want <PublicationState.PUBLISHABLE: 'PUBLISHABLE'>)
+   publish reply: ANCHORED:517e653ce356:seq=0
+   [PASS]   publication ANCHORED: True (want True)
+   [PASS]   anchor record exists: True (want True)
+   [PASS]   anchor schema is V2: 'gnosis.anchor.v2' (want 'gnosis.anchor.v2')
+   [PASS]   anchor binds the deployment: 'b2453475ad10f612dd1eb39a17ef5a0cfde48e718158082120561e2cc178a2a7' (want 'b2453475ad10f612dd1eb39a17ef5a0cfde48e718158082120561e2cc178a2a7')
+   [PASS]   watermark committed: True (want True)
+   [PASS]   candidate worker exit (RUN-S8-BAD-0001): 0 (want 0)
+   [PASS]   non-CLEAN verdict refused at the trusted gate: True (want True)
+   [PASS]   service refuses to anchor the non-CLEAN run: True (want True)
+   [PASS]   no anchor for the non-CLEAN run: True (want True)
+   [PASS]   worker cannot create the trusted pipe: True (want True)
+
+F1. IDEMPOTENCE (re-run the installer)
+------------------------------------------------------------------------------
+   [PASS]   re-install reused the worker account (SID stable): 'S-1-5-21-1160728320-3593568380-93362170-1035' (want 'S-1-5-21-1160728320-3593568380-93362170-1035')
+   [PASS]   re-install digest stable: 'b2453475ad10f612dd1eb39a17ef5a0cfde48e718158082120561e2cc178a2a7' (want 'b2453475ad10f612dd1eb39a17ef5a0cfde48e718158082120561e2cc178a2a7')
+   [PASS]   ACLs did not broaden on re-run: {'code_root': 'C:\\Program Files\\GnosisStage8Probe\\Trust\\releases\\R1 NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                                     BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'runtime': 'C:\\Program Files\\GnosisStage8Probe\\Trust\\releases\\R1\\runtime DESKTOP-VTQPQVL\\GnosisWkrS8:(OI)(CI)(RX)\n                                                             NT SERVICE\\GnosisPubS8Probe:(OI)(CI)(RX)\n                                                             NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                                             BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'publisher': 'C:\\Program Files\\GnosisStage8Probe\\Trust\\releases\\R1\\publisher NT SERVICE\\GnosisPubS8Probe:(OI)(CI)(RX)\n                                                               NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                                               BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'bootstrap': 'C:\\Program Files\\GnosisStage8Probe\\Trust\\releases\\R1\\bootstrap DESKTOP-VTQPQVL\\GnosisWkrS8:(OI)(CI)(RX)\n                                                               NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                                               BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'toolchain': 'C:\\Program Files\\GnosisStage8Probe\\Trust\\releases\\R1\\toolchain DESKTOP-VTQPQVL\\GnosisWkrS8:(OI)(CI)(RX)\n                                                               NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                                               BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'state_root': 'C:\\ProgramData\\GnosisStage8Probe\\Trust NT SERVICE\\GnosisPubS8Probe:(OI)(CI)(RX)\n                                       NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                       BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'anchors': 'C:\\ProgramData\\GnosisStage8Probe\\Trust\\anchors NT SERVICE\\GnosisPubS8Probe:(OI)(CI)(M)\n                                               NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                               BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'runidentity': 'C:\\ProgramData\\GnosisStage8Probe\\Trust\\runidentity NT SERVICE\\GnosisPubS8Probe:(OI)(CI)(M)\n                                                   NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                                   BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'bundles': 'C:\\ProgramData\\GnosisStage8Probe\\Trust\\bundles NT SERVICE\\GnosisPubS8Probe:(OI)(CI)(R)\n                                               NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                               BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'secrets': 'C:\\ProgramData\\GnosisStage8Probe\\Trust\\secrets NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                               BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'logs': 'C:\\ProgramData\\GnosisStage8Probe\\Trust\\logs NT SERVICE\\GnosisPubS8Probe:(OI)(CI)(M)\n                                            NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                            BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'work': 'C:\\ProgramData\\GnosisStage8Probe\\Work DESKTOP-VTQPQVL\\GnosisWkrS8:(OI)(CI)(M)\n                                      NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                      BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos'} (want {'code_root': 'C:\\Program Files\\GnosisStage8Probe\\Trust\\releases\\R1 NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                                     BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'runtime': 'C:\\Program Files\\GnosisStage8Probe\\Trust\\releases\\R1\\runtime DESKTOP-VTQPQVL\\GnosisWkrS8:(OI)(CI)(RX)\n                                                             NT SERVICE\\GnosisPubS8Probe:(OI)(CI)(RX)\n                                                             NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                                             BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'publisher': 'C:\\Program Files\\GnosisStage8Probe\\Trust\\releases\\R1\\publisher NT SERVICE\\GnosisPubS8Probe:(OI)(CI)(RX)\n                                                               NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                                               BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'bootstrap': 'C:\\Program Files\\GnosisStage8Probe\\Trust\\releases\\R1\\bootstrap DESKTOP-VTQPQVL\\GnosisWkrS8:(OI)(CI)(RX)\n                                                               NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                                               BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'toolchain': 'C:\\Program Files\\GnosisStage8Probe\\Trust\\releases\\R1\\toolchain DESKTOP-VTQPQVL\\GnosisWkrS8:(OI)(CI)(RX)\n                                                               NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                                               BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'state_root': 'C:\\ProgramData\\GnosisStage8Probe\\Trust NT SERVICE\\GnosisPubS8Probe:(OI)(CI)(RX)\n                                       NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                       BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'anchors': 'C:\\ProgramData\\GnosisStage8Probe\\Trust\\anchors NT SERVICE\\GnosisPubS8Probe:(OI)(CI)(M)\n                                               NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                               BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'runidentity': 'C:\\ProgramData\\GnosisStage8Probe\\Trust\\runidentity NT SERVICE\\GnosisPubS8Probe:(OI)(CI)(M)\n                                                   NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                                   BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'bundles': 'C:\\ProgramData\\GnosisStage8Probe\\Trust\\bundles NT SERVICE\\GnosisPubS8Probe:(OI)(CI)(R)\n                                               NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                               BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'secrets': 'C:\\ProgramData\\GnosisStage8Probe\\Trust\\secrets NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                               BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'logs': 'C:\\ProgramData\\GnosisStage8Probe\\Trust\\logs NT SERVICE\\GnosisPubS8Probe:(OI)(CI)(M)\n                                            NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                            BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos', 'work': 'C:\\ProgramData\\GnosisStage8Probe\\Work DESKTOP-VTQPQVL\\GnosisWkrS8:(OI)(CI)(M)\n                                      NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n                                      BUILTIN\\Administradores:(OI)(CI)(F)\n\nSe procesaron correctamente 1 archivos; error al procesar 0 archivos'})
+   [PASS]   exactly one worker account: 1 (want 1)
+
+F2. UPDATE / FAILED-UPDATE / ROLLBACK (versioned releases)
+------------------------------------------------------------------------------
+   [PASS]   staged R2 verifies: True (want True)
+   [PASS]   R2 digest differs from R1 (new code is really active): True (want True)
+   [PASS]   service ImagePath points at R2: True (want True)
+   [PASS]   R1 release still present (for rollback): True (want True)
+   sc start rc=0 NOMBRE_SERVICIO: GnosisPubS8Probe 
+        TIPO               : 10  WIN32_OWN_PROCESS  
+        ESTADO             : 2  START_PENDING 
+                         
+   [PASS]   service runs on R2: True (want True)
+   R3 verify: ok=False reason=service entry missing at C:\Program Files\GnosisStage8Probe\Trust\releases\R3broken\publisher\service_main.py
+   [PASS]   broken R3 fails verification (not activated): False (want False)
+   [PASS]   service STILL points at R2 after the failed update: True (want True)
+   [PASS]   service still RUNNING after the failed update: True (want True)
+   [PASS]   rollback recomputes the original R1 digest: 'b2453475ad10f612dd1eb39a17ef5a0cfde48e718158082120561e2cc178a2a7' (want 'b2453475ad10f612dd1eb39a17ef5a0cfde48e718158082120561e2cc178a2a7')
+   [PASS]   service ImagePath points at R1 after rollback: True (want True)
+   sc start rc=0 NOMBRE_SERVICIO: GnosisPubS8Probe 
+        TIPO               : 10  WIN32_OWN_PROCESS  
+        ESTADO             : 2  START_PENDING 
+                         
+   [PASS]   service runs on R1 after rollback: True (want True)
+
+F3. UNINSTALL + OS POST-CHECK
+------------------------------------------------------------------------------
+     - uninstall: service stopped+deleted, worker removed, gnosis-owned roots removed
+   [PASS]   service absent (query rc 1060): 1060 (want 1060)
+   [PASS]   worker account absent: True (want True)
+   [PASS]   code base removed: False (want False)
+   [PASS]   state base removed: False (want False)
+   [PASS]   work base removed: False (want False)
+   [PASS]   credential blob removed: False (want False)
+
+ROLLBACK — remove every disposable artifact
+------------------------------------------------------------------------------
+   C:\Program Files\GnosisStage8Probe removed: True
+   C:\ProgramData\GnosisStage8Probe removed: True
+
+==============================================================================
+PROBE RESULT: ALL 140 CHECKS PASSED

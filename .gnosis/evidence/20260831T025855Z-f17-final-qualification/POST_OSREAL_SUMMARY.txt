@@ -1,0 +1,18 @@
+﻿########## DIRECTED REQUALIFICATION (exact tree, excl work_queue) ##########
+directed EXIT=0  613 passed, 1 skipped, 206 subtests passed in 256.79s (0:04:16)
+########## MUTATION UNION ##########
+mutation stage8 EXIT=0  mutants: 21  survived/aborted: 0
+mutation stage7 EXIT=0  mutants: 19  survived/aborted: 0
+mutation worker_launcher EXIT=0  mutants: 38  survived/aborted: 0
+mutation run_identity EXIT=0  mutants: 17  survived/aborted: 0
+mutation publication EXIT=0  mutants: 21  survived/aborted: 0
+mutation deployment EXIT=1  mutants: 11  survived/aborted: 1  -> ['DM9 (NOT APPLIED)']
+mutation authority EXIT=0  mutants: 13  survived/aborted: 0
+mutation f14 EXIT=1  mutants: 56  survived/aborted: 6  -> MF44 (NOT APPLIED), MF49 (NOT APPLIED), MF50 (NOT APPLIED), MF52 (NOT APPLIED), MF54 (NOT APPLIED), MF56 (NOT APPLIED)
+mutation stage6 EXIT=1  mutants: 34  survived/aborted: 1  -> ['S6M22']
+mutation general EXIT=0  mutants: 9  survived/aborted: 0
+########## ISOLATED FRESH CHECKOUT (06cdf00, provenance-proven) ##########
+fresh-checkout EXIT=0  475 passed, 1 skipped, 143 subtests passed in 257.39s (0:04:17)
+ FRESH_EXIT=0
+ 
+########## POST-OSREAL DONE ##########
