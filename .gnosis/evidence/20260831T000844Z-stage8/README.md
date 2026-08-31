@@ -39,6 +39,21 @@ permanent install was left behind.
   historical fresh-checkout assertions, which imported the working tree via the
   venv's editable `.pth` and so measured nothing.
 
+## Closure gate (additive — added after the independent Stage 8 review)
+
+- `stage8_closure_gate.md` — the closure-gate adjudication. Full-suite closure
+  run was **RED** (`2 failed, 1508 passed, 1 skipped, 260 subtests`), same
+  `work_queue` `StaleLeaseError` timing flake. Option A (green complete run) did
+  not succeed; the flake repeatedly prevented it. Option B adjudication:
+  byte-identity of all involved files HEAD↔`ad32bba`, plus a controlled
+  frequency experiment showing the pre-Stage-8 baseline fails at an
+  equal-or-higher rate than HEAD under identical induced load. Verdict:
+  `STAGE 8 CLOSURE GATE: PASS (via adjudication)`.
+- `stage8_closure_suite.txt` — the RED closure full-suite run (preserved).
+- `stage8_flake_adjudication.txt` — raw cohort frequencies.
+- `stage8_fullsuite.txt` — the original RED qualification run 1, **preserved
+  unchanged**.
+
 ## Static analysis
 
 - `mypy --strict src`: clean (79 source files).
