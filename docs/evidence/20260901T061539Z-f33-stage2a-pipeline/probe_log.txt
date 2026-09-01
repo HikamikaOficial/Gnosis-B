@@ -1,0 +1,40 @@
+F-33 STAGE 2A — OS-REAL PIPELINE-THROUGH-PORT QUALIFICATION
+==============================================================================
+
+PROVISION — disposable infrastructure
+------------------------------------------------------------------------------
+   relocating runtime + full gnosis tree ...
+   creating disposable non-admin account GnosisWkrF33b ...
+   worker SID: S-1-5-21-1160728320-3593568380-93362170-1038
+
+COMPOSE — TaskEngine.cli_runner = TrustedExecutionRunner
+------------------------------------------------------------------------------
+   [PASS] engine.cli_runner IS the trusted runner (integrated seam)
+
+RUN #1 — engine.cli_runner.run() over the REAL Worker boundary
+------------------------------------------------------------------------------
+   [PASS] integrated runner run succeeded
+   [PASS] observed SID == disposable worker SID  (S-1-5-21-1160728320-3593568380-93362170-1038)
+   [PASS] worker SID != director SID  (dir=S-1-5-21-1160728320-3593568380-93362170-1000)
+   [PASS] worker non-admin
+   [PASS] worker contained in job
+   [PASS] provider calls == 0
+
+RUN #2 — engine.execute_task() governed verdict via the seam
+------------------------------------------------------------------------------
+   [PASS] governed execute_task reached COMPLETED via trusted seam  (TaskState.COMPLETED)
+
+RUN #3 — integrated seam propagates a REAL worker failure
+------------------------------------------------------------------------------
+   [PASS] real worker failure -> integrated runner FAILED (fail closed)
+
+   F-17 implementation diff: NONE
+
+ROLLBACK
+------------------------------------------------------------------------------
+   netuserdel_status: 0
+   profile_removed: True
+   probe_root_removed: True
+   account_absent: True
+   dpapi_blob_absent: True
+   rollback: PASS
