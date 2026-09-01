@@ -19,19 +19,23 @@ if str(REPO / "src") not in sys.path:
     sys.path.insert(0, str(REPO / "src"))
 
 from stage2cb import (
+    RESIDUE_SCHEMA_V2,
     BudgetError,
     FakeObserved,
     LiveCallBudget,
     OperatorRouteSelection,
     ResidueManifest,
+    ResidueStore,
     Stage2CBConfig,
     Stage2CBOrchestrator,
     TransactionJournal,
     make_base_provision,
     ownership_matches,
     parse_residue_manifest,
+    parse_residue_record,
     plan_recovery,
     preflight,
+    recover,
     reviewer_environment,
     select_production_route,
     worker_environment,
@@ -66,11 +70,18 @@ class _Base(unittest.TestCase):
 
     def _orch(self, ops: DryOperations, *, used: int = 1,
               inject_fail_after: str | None = None,
-              operator_exit_code: int = 0) -> Stage2CBOrchestrator:
+              operator_exit_code: int = 0, with_store: bool = False,
+              inject_crash_at: str | None = None) -> Stage2CBOrchestrator:
+        store = (ResidueStore(self.config.residue_record_path(), self.config.run_id)
+                 if with_store or inject_crash_at else None)
         return Stage2CBOrchestrator(
             config=self.config, ops=ops, budget=LiveCallBudget(used=used),
             reobserve_f17=lambda: F17D, observe_fn=lambda c: FakeObserved(F17D),
-            inject_fail_after=inject_fail_after, operator_exit_code=operator_exit_code)
+            inject_fail_after=inject_fail_after, operator_exit_code=operator_exit_code,
+            residue_store=store, inject_crash_at=inject_crash_at)
+
+    def _store(self) -> ResidueStore:
+        return ResidueStore(self.config.residue_record_path(), self.config.run_id)
 
 
 class TestPositiveSimulatedB1(_Base):
@@ -323,6 +334,140 @@ class TestRouteAndEnv(unittest.TestCase):
         r = reviewer_environment(env)
         self.assertEqual(set(r), {"PATH", "SystemRoot", "TEMP"})
         self.assertNotIn("SECRET_TOKEN", r)
+
+
+class TestCrashPersistentResidue(_Base):
+    HK_BOUNDARIES: ClassVar[list[str]] = [
+        "HK0_before_base", "HK_after_base_os_before_persist", "HK_after_base_acquired",
+        "base_provision", "composed_deployment", "acls", "service_start",
+        "operator_launch", "anchored_check"]
+
+    def test_manifest_persisted_before_first_acquisition(self) -> None:
+        # HBM17: a HARD kill BEFORE any OS mutation still leaves an on-disk record
+        # (intended, not acquired). A purely in-memory journal cannot satisfy this.
+        self._orch(DryOperations(), inject_crash_at="HK0_before_base").run()
+        rec = self._store().load()
+        self.assertIsNotNone(rec)
+        assert rec is not None
+        self.assertEqual(rec.schema, RESIDUE_SCHEMA_V2)
+        self.assertEqual(rec.status, "active")
+        self.assertTrue(all(r.intended and not r.acquired for r in rec.resources))
+
+    def test_acquisition_persisted_incrementally(self) -> None:
+        # HBM18: after base acquisition the disk record reflects acquired=true.
+        self._orch(DryOperations(), inject_crash_at="HK_after_base_acquired").run()
+        rec = self._store().load()
+        assert rec is not None
+        self.assertTrue(any(r.identity == self.config.worker_username and r.acquired
+                            for r in rec.resources))
+        self.assertTrue(any(r.identity == self.config.service_name and r.acquired
+                            for r in rec.resources))
+
+    def test_ambiguous_window_recoverable_not_assumed_unrelated(self) -> None:
+        # crash AFTER OS creation but BEFORE acquired persisted: acquired=false, yet
+        # the worker/service exist. Recovery observes reality and plans cleanup.
+        ops = DryOperations()
+        self._orch(ops, inject_crash_at="HK_after_base_os_before_persist").run()
+        rec = self._store().load()
+        assert rec is not None
+        self.assertFalse(any(r.acquired for r in rec.resources))  # not yet persisted
+        status, targets = recover(self._store(), self.config, ops)
+        self.assertEqual(status, "PLAN")
+        self.assertIn(f"worker:{self.config.worker_username}", targets)
+
+    def test_clean_rollback_removes_resources_and_record(self) -> None:
+        ops = DryOperations()
+        r = self._orch(ops, with_store=True).run()
+        self.assertTrue(r.success)
+        self.assertTrue(ops.account_absent(self.config.worker_username))
+        self.assertTrue(ops.service_absent(self.config.service_name))
+        self.assertFalse(self.config.residue_record_path().is_file())  # retired
+
+    def test_failed_rollback_keeps_record_with_remaining_residue(self) -> None:
+        ops = DryOperations(fail_cleanup=("delete_worker",))
+        r = self._orch(ops, with_store=True, inject_fail_after="composed_deployment").run()
+        self.assertFalse(r.rollback_ok)
+        rec = self._store().load()
+        assert rec is not None                              # HBM19: record NOT deleted
+        self.assertTrue(any(r.identity == self.config.worker_username and r.acquired
+                            for r in rec.resources))
+        # recovery targets only the positively-owned remaining resource
+        status, targets = recover(self._store(), self.config, ops)
+        self.assertEqual(status, "PLAN")
+        self.assertIn(f"worker:{self.config.worker_username}", targets)
+
+    def test_hard_kill_at_every_boundary_leaves_valid_or_absent_record(self) -> None:
+        for hk in self.HK_BOUNDARIES:
+            with self.subTest(hk=hk), tempfile.TemporaryDirectory() as d:
+                self.config = _config(Path(d))
+                self._orch(DryOperations(), inject_crash_at=hk).run()
+                rec = self._store().load()  # must be parseable (or absent)
+                self.assertIsNotNone(rec)   # written before the first mutation
+
+    def test_preflight_active_record_stops(self) -> None:
+        st = self._store()
+        st.write_initial(self.config)
+        r = preflight(self.config, DryOperations(), expected_head="H", actual_head="H",
+                      f17_stable=True, budget=LiveCallBudget(used=1), store=st)
+        self.assertFalse(r.ok)
+        self.assertTrue(any("active residue record" in x for x in r.failures))
+
+    def test_preflight_malformed_record_stops(self) -> None:
+        self.config.residue_record_path().parent.mkdir(parents=True, exist_ok=True)
+        self.config.residue_record_path().write_text('{"schema":', encoding="utf-8")
+        r = preflight(self.config, DryOperations(), expected_head="H", actual_head="H",
+                      f17_stable=True, budget=LiveCallBudget(used=1), store=self._store())
+        self.assertFalse(r.ok)
+        self.assertTrue(any("malformed residue record" in x for x in r.failures))
+
+    def test_recovery_refuses_run_id_mismatch(self) -> None:
+        st = self._store()
+        st.write_initial(self.config)
+        st.mark_acquired({self.config.worker_username})
+        other = _config(Path(self.tmp.name))  # same paths, different run_id
+        other = Stage2CBConfig(**{**other.__dict__, "run_id": "different-run"})
+        status, _targets = recover(st, other, DryOperations())
+        self.assertEqual(status, "REFUSE_RUN_MISMATCH")
+
+    def test_corrupt_and_stale_record(self) -> None:
+        path = self.config.residue_record_path()
+        for bad in ('{"schema":', '{"schema":"gnosis.stage2cb.residue.v1"}',
+                    '{"schema":"gnosis.stage2cb.residue.v2","run_id":"r"}'):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(bad, encoding="utf-8")
+            with self.assertRaises(ValueError):
+                parse_residue_record(bad)
+        # stale: valid record but resources already absent -> STALE_VERIFIED_ABSENT
+        st = self._store()
+        st.write_initial(self.config)
+        st.mark_acquired({self.config.worker_username})
+        status, _targets = recover(st, self.config, DryOperations())  # fresh ops: absent
+        self.assertEqual(status, "STALE_VERIFIED_ABSENT")
+
+    def test_recovery_refuses_ambiguous_ownership(self) -> None:
+        # HBM20: a present resource whose identity the current config does NOT claim
+        # must NEVER be destructively cleaned; recovery returns AMBIGUOUS_RESIDUE.
+        st = self._store()
+        st.write_initial(self.config)  # record intends worker=GnosisWkrS2CB
+        st.mark_acquired({self.config.worker_username})
+        ops = DryOperations(existing_accounts=(self.config.worker_username,))  # present
+        other = Stage2CBConfig(**{**self.config.__dict__,
+                                  "worker_username": "GnosisWkrDIFFERENT"})
+        status, targets = recover(st, other, ops)
+        self.assertEqual(status, "AMBIGUOUS_RESIDUE")
+        self.assertEqual(targets, [])
+
+    def test_record_location_outside_owned_roots(self) -> None:
+        rp = str(self.config.residue_record_path())
+        for owned in self.config.owned_roots():
+            self.assertFalse(rp.startswith((owned + "\\", owned + "/")))
+
+    def test_atomic_write_leaves_no_temp(self) -> None:
+        st = self._store()
+        st.write_initial(self.config)
+        st.mark_acquired({self.config.worker_username})
+        leftovers = list(self.config.residue_record_path().parent.glob(".residue_*.tmp"))
+        self.assertEqual(leftovers, [])
 
 
 class TestGuardsAndJournal(unittest.TestCase):

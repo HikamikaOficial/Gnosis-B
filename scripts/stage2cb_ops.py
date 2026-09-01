@@ -70,6 +70,10 @@ class DryOperations:
         self._rec("run", tuple(argv))
         if argv[:2] == ["sc.exe", "query"]:
             return (0 if argv[2] in self._services else 1060), ""
+        if argv[:2] == ["sc.exe", "create"]:
+            self._services.add(argv[2])   # service now exists (created by F-17)
+        if argv[:2] == ["sc.exe", "delete"]:
+            self._services.discard(argv[2])  # service removed (F-17 uninstall)
         return 0, ""
 
     def mkdir(self, path: str) -> None:
