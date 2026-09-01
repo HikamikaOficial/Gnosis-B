@@ -115,5 +115,56 @@ class TestMainCli(unittest.TestCase):
         self.assertEqual(proc.returncode, dw.EXIT_CASSETTE_UNREADABLE)
 
 
+class TestClosedSchemaHardening(unittest.TestCase):
+    """H2 closed cassette schema + H3 duplicate-key rejection + bounds."""
+
+    def test_unknown_top_level_key_rejected(self) -> None:
+        bad = _valid_cassette()
+        bad["extra"] = "nope"
+        with self.assertRaises(dw.CassetteInvalid):
+            dw.validate_cassette(bad)
+
+    def test_unknown_nested_turn_key_rejected(self) -> None:
+        # Authority-shaped data cannot ride in through a nested turn field.
+        with self.assertRaises(dw.CassetteInvalid):
+            dw.validate_cassette({
+                "schema": dw.CASSETTE_SCHEMA,
+                "turns": [{"message": "x", "executable": "C:/evil.exe"}],
+            })
+
+    def test_nested_non_string_message_rejected(self) -> None:
+        with self.assertRaises(dw.CassetteInvalid):
+            dw.validate_cassette({
+                "schema": dw.CASSETTE_SCHEMA,
+                "turns": [{"message": {"nested": "object"}}],
+            })
+
+    def test_too_many_turns_rejected(self) -> None:
+        with self.assertRaises(dw.CassetteInvalid):
+            dw.validate_cassette({
+                "schema": dw.CASSETTE_SCHEMA,
+                "turns": [{"message": "x"}] * (dw.MAX_TURNS + 1),
+            })
+
+    def test_oversize_message_rejected(self) -> None:
+        with self.assertRaises(dw.CassetteInvalid):
+            dw.validate_cassette({
+                "schema": dw.CASSETTE_SCHEMA,
+                "turns": [{"message": "x" * (dw.MAX_MESSAGE_BYTES + 1)}],
+            })
+
+    def test_duplicate_json_key_rejected(self) -> None:
+        dup = ('{"schema":"' + dw.CASSETTE_SCHEMA
+               + '","schema":"other","turns":[{"message":"x"}]}').encode("utf-8")
+        with self.assertRaises(dw.CassetteInvalid):
+            dw._parse_cassette(dup)
+
+    def test_duplicate_nested_key_rejected(self) -> None:
+        dup = ('{"schema":"' + dw.CASSETTE_SCHEMA
+               + '","turns":[{"message":"a","message":"b"}]}').encode("utf-8")
+        with self.assertRaises(dw.CassetteInvalid):
+            dw._parse_cassette(dup)
+
+
 if __name__ == "__main__":
     unittest.main()

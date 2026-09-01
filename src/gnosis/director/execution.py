@@ -27,6 +27,7 @@ to any unqualified path.
 from __future__ import annotations
 
 import enum
+import hashlib
 import json
 import uuid
 from dataclasses import dataclass
@@ -35,6 +36,32 @@ from typing import Any, Protocol
 
 from gnosis.director import deterministic_worker
 from gnosis.trust.launch_spec import LaunchSpec
+
+# H1 — the Worker's stdout is UNTRUSTED. The deterministic result is a single
+# small JSON object; a compromised or buggy Worker must not be able to stream an
+# unbounded payload into trusted Director memory. Read at most this many bytes
+# and fail closed past it. Comfortably above a legitimate bounded result yet far
+# below anything that could exhaust memory.
+MAX_RESULT_BYTES = 1 << 16  # 64 KiB
+
+# The CLOSED result schema: exactly these keys, nothing else (a Worker cannot
+# smuggle extra fields the Director might later trust).
+_ALLOWED_RESULT_KEYS = frozenset({
+    "schema", "ok", "cassette_sha256", "turn_count", "final_message",
+    "provider_calls",
+})
+
+
+def _reject_dup_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """H3 — refuse duplicate keys in the Worker's result JSON rather than
+    silently keeping json's last-wins value, so a Worker cannot hide a second
+    value under a repeated key."""
+    seen: set[str] = set()
+    for key, _ in pairs:
+        if key in seen:
+            raise WorkerResultInvalid(f"duplicate key in Worker result: {key!r}")
+        seen.add(key)
+    return dict(pairs)
 
 
 class ExecutionMode(enum.Enum):
@@ -139,9 +166,32 @@ class TrustedExecutionPort:
             str(module_file), str(cassette_path.resolve()),
         )
 
+    def _expected_cassette_digest(self, cassette_path: Path) -> str:
+        """H4 — the trusted Director digest of the EXACT bytes it is sealing.
+
+        Computed here, before launch, over the cassette the port itself will
+        name in the sealed argv. The Worker independently digests the bytes it
+        reads and reports that hash; the result reader then requires the two to
+        be equal. If anyone replaces the cassette between this read and the
+        Worker's open (a TOCTOU), the Worker's bytes differ, the digests will
+        not match, and the run fails closed — the self-reported hash is never
+        trusted on its own."""
+        try:
+            with open(cassette_path, "rb") as handle:
+                blob = handle.read(deterministic_worker.MAX_CASSETTE_BYTES + 1)
+        except OSError as exc:
+            raise TrustedExecutionError(
+                f"could not read cassette to bind its digest: {exc}") from exc
+        if len(blob) > deterministic_worker.MAX_CASSETTE_BYTES:
+            raise TrustedExecutionError(
+                "cassette exceeds the deterministic bound; refusing to launch")
+        return hashlib.sha256(blob).hexdigest()
+
     def _execute_deterministic(self, intent: DeterministicIntent,
                                *, timeout_s: float) -> ExecutionOutcome:
-        argv = self._deterministic_argv(intent.cassette_path)
+        cassette_path = intent.cassette_path.resolve()
+        expected_digest = self._expected_cassette_digest(cassette_path)
+        argv = self._deterministic_argv(cassette_path)
         spec = LaunchSpec(
             launch_id=intent.launch_id or f"det-{uuid.uuid4().hex[:16]}",
             executable=str(self._python),
@@ -163,7 +213,8 @@ class TrustedExecutionPort:
         if exit_code != 0:
             raise WorkerExecutionFailed(
                 f"deterministic Worker exited {exit_code} (fail closed)")
-        result = self._read_deterministic_result(intent.stdout_path)
+        result = self._read_deterministic_result(
+            intent.stdout_path, expected_digest=expected_digest)
         launch_summary: dict[str, Any] | None = None
         if identity is not None:
             launch_summary = _summarise_identity(identity)
@@ -171,19 +222,36 @@ class TrustedExecutionPort:
             exit_code=exit_code, result=result, launch=launch_summary)
 
     @staticmethod
-    def _read_deterministic_result(stdout_path: Path) -> dict[str, Any]:
+    def _read_deterministic_result(stdout_path: Path, *,
+                                   expected_digest: str) -> dict[str, Any]:
+        # H1 — bound the read: the Worker's stdout is untrusted; never read an
+        # unbounded payload into trusted Director memory.
         try:
-            text = Path(stdout_path).read_text(encoding="utf-8")
+            with open(stdout_path, "rb") as handle:
+                raw = handle.read(MAX_RESULT_BYTES + 1)
         except OSError as exc:
             raise WorkerResultInvalid(
                 f"could not read Worker result: {exc}") from exc
+        if len(raw) > MAX_RESULT_BYTES:
+            raise WorkerResultInvalid(
+                f"Worker result exceeds {MAX_RESULT_BYTES} bytes (fail closed)")
         try:
-            parsed = json.loads(text.strip())
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise WorkerResultInvalid(
+                f"Worker result is not valid UTF-8: {exc}") from exc
+        try:
+            parsed = json.loads(text.strip(), object_pairs_hook=_reject_dup_keys)
         except json.JSONDecodeError as exc:
             raise WorkerResultInvalid(
                 f"Worker result is not valid JSON: {exc}") from exc
         if not isinstance(parsed, dict):
             raise WorkerResultInvalid("Worker result must be a JSON object")
+        # Closed result schema: exactly the known keys, nothing else.
+        extra = set(parsed) - _ALLOWED_RESULT_KEYS
+        if extra:
+            raise WorkerResultInvalid(
+                f"Worker result carries unknown keys (closed schema): {sorted(extra)}")
         if parsed.get("schema") != deterministic_worker.RESULT_SCHEMA:
             raise WorkerResultInvalid(
                 "Worker result schema mismatch: "
@@ -193,6 +261,11 @@ class TrustedExecutionPort:
         digest = parsed.get("cassette_sha256")
         if not isinstance(digest, str) or len(digest) != 64:
             raise WorkerResultInvalid("Worker result carries no valid cassette digest")
+        # H4 — bind the self-reported digest to the Director-intended bytes.
+        if digest != expected_digest:
+            raise WorkerResultInvalid(
+                "Worker cassette digest does not match the sealed cassette "
+                "(fail closed): the executed bytes are not the intended bytes")
         return parsed
 
 

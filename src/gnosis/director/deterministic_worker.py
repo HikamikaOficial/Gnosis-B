@@ -41,6 +41,9 @@ from typing import Any
 
 # Bounded so a malformed or hostile cassette cannot exhaust memory in the Worker.
 MAX_CASSETTE_BYTES = 1 << 20  # 1 MiB
+# H2 bounds for the CLOSED schema: an intentionally narrow deterministic format.
+MAX_TURNS = 4096
+MAX_MESSAGE_BYTES = 1 << 16  # 64 KiB per turn message
 CASSETTE_SCHEMA = "gnosis.director.deterministic_cassette.v1"
 RESULT_SCHEMA = "gnosis.director.deterministic_result.v1"
 
@@ -52,14 +55,13 @@ EXIT_CASSETTE_UNREADABLE = 11
 EXIT_CASSETTE_TOO_LARGE = 12
 EXIT_CASSETTE_INVALID = 13
 
-# Keys a cassette may NEVER carry: it is data, not execution authority. Their
-# presence is a hard refusal rather than being ignored, so a cassette that tries
-# to reach past its role fails loudly instead of silently.
-_FORBIDDEN_KEYS = frozenset({
-    "executable", "argv", "command", "module", "backend", "mode",
-    "policy", "run_id", "launch_id", "deployment_digest", "worker_sid",
-    "authorize", "publish", "anchor", "env", "environment",
-})
+# H2 — CLOSED schema. The cassette is DATA, not execution authority. Rather than
+# blocklisting a fixed set of authority-shaped keys (which a nested dict or a
+# newly-invented key could slip past), the parser accepts ONLY these exact keys
+# at each level and rejects everything else. Nothing outside this closed shape —
+# at the top level or nested inside a turn — can be smuggled through.
+_ALLOWED_TOP_KEYS = frozenset({"schema", "turns"})
+_ALLOWED_TURN_KEYS = frozenset({"message"})
 
 
 class CassetteInvalid(Exception):
@@ -77,9 +79,22 @@ def _read_cassette_bytes(path: str) -> bytes:
     return blob
 
 
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """H3 — reject duplicate keys in ANY JSON object rather than silently
+    keeping the last (json's default), so a cassette cannot carry a shadow
+    value under a repeated key that a lenient reader would miss."""
+    seen: set[str] = set()
+    for key, _ in pairs:
+        if key in seen:
+            raise CassetteInvalid(f"duplicate JSON object key: {key!r}")
+        seen.add(key)
+    return dict(pairs)
+
+
 def _parse_cassette(blob: bytes) -> dict[str, Any]:
     try:
-        loaded = json.loads(blob.decode("utf-8"))
+        loaded = json.loads(blob.decode("utf-8"),
+                            object_pairs_hook=_reject_duplicate_keys)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise CassetteInvalid(f"cassette is not valid UTF-8 JSON: {exc}") from exc
     if not isinstance(loaded, dict):
@@ -88,29 +103,44 @@ def _parse_cassette(blob: bytes) -> dict[str, Any]:
 
 
 def validate_cassette(cassette: dict[str, Any]) -> dict[str, Any]:
-    """Validate the cassette contract and return its bounded ``turns``.
+    """Validate the CLOSED cassette contract and return the cassette.
 
     Raises ``CassetteInvalid`` for any deviation. This is the whole trust
-    boundary of the cassette: it may only describe deterministic output.
+    boundary of the cassette: it may only describe deterministic output, in an
+    intentionally narrow shape. Only ``{schema, turns}`` at the top level and
+    ``{message}`` per turn are accepted; every other key — top-level or nested —
+    is rejected, so authority-shaped data cannot ride in through an unexpected
+    or nested field.
     """
     schema = cassette.get("schema")
     if schema != CASSETTE_SCHEMA:
         raise CassetteInvalid(
             f"cassette schema must be {CASSETTE_SCHEMA!r}, got {schema!r}")
-    forbidden = _FORBIDDEN_KEYS & set(cassette)
-    if forbidden:
+    extra = set(cassette) - _ALLOWED_TOP_KEYS
+    if extra:
         raise CassetteInvalid(
-            "cassette carries authority-shaped keys it may never set: "
-            f"{sorted(forbidden)}")
+            f"cassette carries unexpected top-level keys (closed schema): "
+            f"{sorted(extra)}")
     turns = cassette.get("turns")
     if not isinstance(turns, list) or not turns:
         raise CassetteInvalid("cassette must carry a non-empty 'turns' list")
+    if len(turns) > MAX_TURNS:
+        raise CassetteInvalid(
+            f"cassette carries {len(turns)} turns; the ceiling is {MAX_TURNS}")
     for index, turn in enumerate(turns):
         if not isinstance(turn, dict):
             raise CassetteInvalid(f"turns[{index}] must be an object")
+        turn_extra = set(turn) - _ALLOWED_TURN_KEYS
+        if turn_extra:
+            raise CassetteInvalid(
+                f"turns[{index}] carries unexpected keys (closed schema): "
+                f"{sorted(turn_extra)}")
         message = turn.get("message")
         if not isinstance(message, str):
             raise CassetteInvalid(f"turns[{index}].message must be a string")
+        if len(message.encode("utf-8")) > MAX_MESSAGE_BYTES:
+            raise CassetteInvalid(
+                f"turns[{index}].message exceeds {MAX_MESSAGE_BYTES} bytes")
     return cassette
 
 
