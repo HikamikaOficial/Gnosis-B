@@ -36,8 +36,9 @@ before any code.
 policy/authority gate (`kernel.policy.PolicyEngine`) → schedule/lease
 (`kernel.scheduler.TaskScheduler`, `kernel.lease`, `kernel.claims`) → implement
 (via `scheduler.engine.cli_runner`) → verify (`Verifier`, **required at
-construction**) → independent review (a **distinct** runner;
-`pipeline.py:179` refuses `review_runner is scheduler.engine.cli_runner`) →
+construction**) → independent review (a **distinct** runner; the `GovernedPipeline`
+construction gate in `director/pipeline.py` refuses
+`review_runner is scheduler.engine.cli_runner`) →
 converge (`ConvergencePolicy`) → integrate (`WorkIntegrator` → `gnosis/<task_id>`)
 → `EngineerReport`.
 
@@ -226,7 +227,9 @@ transition.
 ## 16. Verifier-required contract
 
 `Verifier` is required at composition/construction (GovernedPipeline positional)
-and re-checked in the engine (`engine.py:457` for authority-governed tasks).
+and re-checked in the engine (`kernel/engine.py` — the verifier-required gate in
+`TaskEngine.execute_task`, "requires a verifier", inside the authority-governed
+branch).
 Startup **fails closed** if the verifier is absent; runtime **fails closed** if
 verification cannot run (never reaches work-complete). No optional production
 verifier mode.
@@ -236,7 +239,8 @@ verifier mode.
 **Currently accepted floor (do not overstate).** The current GovernedPipeline
 contract rejects exactly the case where the implementer runner object *is* the
 reviewer runner object — semantically `implementer_runner is reviewer_runner →
-fail closed` (`pipeline.py:179`, `is` comparison, raised at construction). This is
+fail closed` (the `GovernedPipeline` construction gate in `director/pipeline.py`,
+an `is` object-identity comparison raised at construction). This is
 the **currently accepted floor** under constitution rule 10. The repository does
 **not** currently prove separation of the underlying provider / account /
 execution principal: two distinct wrappers around one principal would pass this
@@ -247,12 +251,16 @@ different LLM vendors, different models, or different provider companies. F-33
 introduces no such requirement; provider/vendor diversity is a separate assurance
 property (a "weaker channel" note in DECISIONS.md/ADR-0022), not a gate.
 
-**Attribution identities (existing).** Production governed runs SHOULD additionally
+**Attribution identities (existing) — MANDATORY.** Production governed runs **MUST**
 use explicit, non-placeholder attribution over the existing identities — the
 authority/evidence-bound `reviewer_id` (default `"claude-cli"`, stamped by the
 review adapter and persisted into evidence) and the `policy_actor` / `agent://…`
-principal (default `"agent://unattributed"`) — rejecting the known anonymous
-placeholder forms. **Caveat — no unproven cross-namespace security claim:**
+principal (default `"agent://unattributed"`) — and **MUST reject** the known
+anonymous/unattributed placeholder forms (at least `"claude-cli"` and
+`"agent://unattributed"`). The canonical production composition is invalid if it
+runs with a known placeholder/unattributed identity — this is a **production
+attribution-hygiene gate** (uniform with the §25 Stage-2 Identity gate). **Caveat —
+no unproven cross-namespace security claim:**
 `reviewer_id` and `policy_actor` live in **different namespaces** and the
 repository defines **no** canonical normalization that maps them into one actor
 identity. Therefore this ADR does **not** assert `reviewer_id != policy_actor ⇒
@@ -351,6 +359,7 @@ No provider expansion; no F-35–F-40 repair.
 |---|---|---|
 | `src/gnosis/director/composition.py` | CREATE | HIGH |
 | `src/gnosis/director/cli.py` | CREATE | HIGH |
+| deterministic Worker entry module (e.g. `src/gnosis/…/<deterministic_worker_entry>.py`) | CREATE | TRUST-PLANE-ADJACENT — provider-free deterministic/replay execution INSIDE the real F-17 Worker boundary; planned, must be freshly qualified in Stage 2 (not yet qualified) |
 | `src/gnosis/director/pipeline.py` | MODIFY (seam hooks) | HIGH |
 | `src/gnosis/trust/**` | CONSUME ONLY | TRUST-PLANE-ADJACENT |
 | `pyproject.toml` | MODIFY (`[project.scripts]`) | MEDIUM |
