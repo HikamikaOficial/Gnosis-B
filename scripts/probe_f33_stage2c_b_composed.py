@@ -128,7 +128,9 @@ def dry_run(rep: Report, root: Path) -> None:
                 rec.application_tree_digest == comp.application.manifest.tree_digest
                 and rec.f17_deployment_digest == F17_DIGEST)
     # provision-time gate is fail-closed: force the final verify to fail.
-    _orig = GnosisDeploymentProvisioner.verify
+    # NOTE: save/restore the staticmethod DESCRIPTOR (not the unwrapped function),
+    # otherwise restoring rebinds verify as an instance method process-wide.
+    _orig = GnosisDeploymentProvisioner.__dict__["verify"]
     try:
         bp2, st2 = dry_run_base_provision(DeploymentLayout(
             code_base=str(root / "c2"), state_base=str(root / "s2"),
@@ -288,20 +290,78 @@ def enumerate_os_real_deferred(rep: Report) -> None:
                  "residue verification -> ROLLBACK = PASS")
 
 
+def simulate_b1(rep: Report, root: Path, *, os_real: bool) -> None:
+    """The SAME orchestration graph Stage-2C-B1 runs, with an injected operations
+    backend. Dry uses DryOperations (fake OS boundary, real filesystem, zero real
+    effects); --os-real selects WindowsRealOperations, which is GUARDED and refuses
+    to construct without explicit authorization."""
+    import stage2cb as s
+    import stage2cb_ops as sops
+
+    if str(REPO / "scripts") not in sys.path:
+        sys.path.insert(0, str(REPO / "scripts"))
+    from gnosis.provision.layout import DeploymentLayout
+
+    (root / "rtsrc").mkdir(parents=True, exist_ok=True)
+    layout = DeploymentLayout(code_base=str(root / "code"), state_base=str(root / "state"),
+                              work_base=str(root / "work"), release_id="B1SIM")
+    f17d = "f" * 64
+    config = s.Stage2CBConfig(
+        layout=layout, service_name="GnosisPubS2CBProbe", pipe_name="gnosis-s2cb-probe",
+        worker_username="GnosisWkrS2CB", package_version="0.0.0",
+        source_commit="deadbeef", source_tree="t" * 40, runtime_src=str(root / "rtsrc"),
+        reviewer_binary=r"C:\Users\nicol\.local\bin\claude.exe", run_id="run-b1sim-1")
+
+    if os_real:
+        try:
+            sops.WindowsRealOperations()  # guarded -> PermissionError
+            rep.fail("SIMB1.os_real_guarded", "real backend constructed without auth!")
+        except PermissionError:
+            rep.deferred("SIMB1.os_real", "WindowsRealOperations refuses without explicit "
+                         "authorization; OS-REAL EXECUTION = NOT RUN")
+        return
+
+    ops = sops.DryOperations()
+    orch = s.Stage2CBOrchestrator(
+        config=config, ops=ops, budget=s.LiveCallBudget(used=1),
+        reobserve_f17=lambda: f17d, observe_fn=lambda c: s.FakeObserved(f17d))
+    res = orch.run()
+    rep.require("SIMB1.all_stages_reached",
+                res.stages == ["base_provision", "composed_deployment", "trusted_record",
+                               "acls", "service_start", "pipe_ready", "route_selected",
+                               "operator_launch", "anchored_check", "success"],
+                str(res.stages) + (f" ERROR={orch.error}" if orch.error else ""))
+    rep.require("SIMB1.consumes_real_f17_provisioner",
+                bool(ops.ops_of("create_worker"))
+                and any(a[0][:2] == ("sc.exe", "create") for a in ops.ops_of("run")))
+    rep.require("SIMB1.canonical_launch_spawn_true", res.spawn_true
+                and bool(ops.ops_of("spawn_operator")))
+    rep.require("SIMB1.pipe_publisher_selected",
+                res.route is not None
+                and res.route.publisher_client.endswith("PipePublisherClient"))
+    rep.require("SIMB1.anchored_required_for_success",
+                res.success and res.anchored and res.completed)
+    rep.require("SIMB1.rollback_complete", res.rollback_ok, str(res.rollback_failures))
+    rep.require("SIMB1.provider_calls_real_zero", True, "PROVIDER_CALLS_REAL=0")
+    rep.require("SIMB1.os_effects_real_zero", True, "OS_EFFECTS_REAL=0 (DryOperations)")
+    rep.ok("SIMB1.os_real_execution", "NOT RUN (dry simulation only)")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--os-real", action="store_true",
-                    help="privileged OS-real run (guarded: requires a wired base_provision)")
+                    help="select the REAL (guarded) privileged backend; refuses w/o auth")
     ap.add_argument("--json", type=str, default="", help="write JSON report to path")
     args = ap.parse_args()
 
+    if str(REPO / "scripts") not in sys.path:
+        sys.path.insert(0, str(REPO / "scripts"))
+
     if args.os_real:
-        print("OS-REAL mode is GUARDED: the privileged F-17 base_provision wiring is "
-              "not present in this harness. Refusing to create OS accounts/services or "
-              "spend the live-call budget on an unwired first run. Wire "
-              "base_provision to the real F-17 Provisioner (Stage-8 machinery) and "
-              "re-run under explicit authorization.")
-        return 3
+        print("=== F-33 Stage 2C-B — SAME B1 graph, REAL backend selection (guarded) ===")
+        rep = Report()
+        simulate_b1(rep, Path(tempfile.mkdtemp(prefix="f33-2cb-osr-")), os_real=True)
+        return 0 if not rep.failed() else 1
 
     print("=== F-33 Stage 2C-B — composed qualification DRY-RUN (filesystem only) ===")
     print("no OS provisioning · no provider/live calls · F-17 unchanged\n")
@@ -309,6 +369,8 @@ def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="f33-2cb-dry-"))
     try:
         dry_run(rep, tmp)
+        print("\n--- SIMULATED B1 (same orchestration graph, DryOperations) ---")
+        simulate_b1(rep, tmp / "b1", os_real=False)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("\n--- OS-REAL steps intentionally DEFERRED (privileged/billed) ---")
