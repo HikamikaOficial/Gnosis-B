@@ -8,6 +8,7 @@ composed identity at provision time, pre-launch and startup.
 
 Enforcement matrix:
   E1-E4    provision-time gate            (TestProvisionGate)
+  E2/E4    provision-gate DIRECT assurance(TestProvisionGateAssurance)  [R2.1]
   E5-E10   pre-launch gate                (TestPreLaunchGate)
   E11-E13  coherent code+manifest tamper  (TestCoherentTamper)  [MANDATORY]
   E14-E18  startup self-verification      (TestStartupSelfVerify)
@@ -22,6 +23,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from gnosis.provision.gnosis_deployment import (
     BaseDeployment,
@@ -129,6 +131,59 @@ class TestProvisionGate(_Base):
                                   rollback=_rb)
         prov = GnosisDeploymentProvisioner(SRC, base_provision=_base_bad_rollback)
         with self.assertRaises(GnosisDeploymentError) as cm:
+            prov.provision()
+        self.assertIn("unknown state", str(cm.exception))
+
+
+class TestProvisionGateAssurance(_Base):
+    """DIRECT assurance that the PROVISION-TIME composed-identity gate is invoked
+    before provision() returns and that its failure fails closed. These observe the
+    provision gate SPECIFICALLY (patching the provisioner's own verify), NOT a
+    downstream canonical_launch / startup refusal. They are the assertions R2's
+    E1-E4 lacked, and they are what makes mutants E-M1/E-M2 catchable."""
+
+    def test_e4_final_verify_invoked_before_return_and_failure_blocks(self) -> None:
+        # Force the FINAL provision-time verify to fail (a sentinel that only the
+        # provision gate would observe). base + application deployment succeed;
+        # the gate must run, provision() must NOT return, and rollback must fire.
+        with mock.patch.object(
+                GnosisDeploymentProvisioner, "verify",
+                side_effect=GnosisDeploymentError("SENTINEL provision-verify")) as mv, \
+                self.assertRaises(GnosisDeploymentError) as cm:
+            self._prov().provision()
+        self.assertEqual(mv.call_count, 1)              # the gate WAS invoked
+        self.assertEqual(self.base_calls, 1)            # we entered the composed flow
+        self.assertIn("SENTINEL provision-verify", str(cm.exception))  # propagated
+        self.assertEqual(self.rollback_calls, 1)        # fail-closed rollback
+        # the gate is on the ONLY return path: with it failing, no composed
+        # deployment object is obtainable (the assertRaises above proves no return).
+
+    def test_e2_composed_verify_failure_at_provision_fails_closed(self) -> None:
+        # E2: a composed-identity verification failure at provision time (the final
+        # verify is exactly the composed-identity check) prevents a valid result.
+        with mock.patch.object(
+                GnosisDeploymentProvisioner, "verify",
+                side_effect=GnosisDeploymentError("composed deployment identity mismatch")):
+            returned = None
+            with self.assertRaises(GnosisDeploymentError):
+                returned = self._prov().provision()
+        self.assertIsNone(returned)
+        self.assertEqual(self.rollback_calls, 1)
+
+    def test_final_verify_failure_with_failing_rollback_is_unknown_state(self) -> None:
+        # §8: final verify fails AND base rollback also fails -> fail closed as
+        # "unknown state"; still no valid composed result.
+        def _rb_boom() -> None:
+            raise RuntimeError("rollback boom")
+
+        def _base_bad_rollback() -> BaseDeployment:
+            return BaseDeployment(layout=self.layout, deployment_digest=F17_DIGEST,
+                                  rollback=_rb_boom)
+        prov = GnosisDeploymentProvisioner(SRC, base_provision=_base_bad_rollback)
+        with mock.patch.object(
+                GnosisDeploymentProvisioner, "verify",
+                side_effect=GnosisDeploymentError("SENTINEL")), \
+                self.assertRaises(GnosisDeploymentError) as cm:
             prov.provision()
         self.assertIn("unknown state", str(cm.exception))
 
