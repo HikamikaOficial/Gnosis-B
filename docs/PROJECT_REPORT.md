@@ -358,7 +358,7 @@ The ones most likely to generalise:
 
 ### Improvements worth adding beyond the DoD
 
-- **A `verify()` probe per HARD matrix row.** Today they are labels nobody falsifies; `EnforcementMatrix.verify()` exists but no probes are registered. This converts honesty claims into machine-checked invariants (rule 20).
+- **A `verify()` probe per HARD matrix row.** `EnforcementMatrix.verify()` exists and a test probe exercises the mechanism (`tests/test_policy.py`), but no production probes are registered and no HARD matrix row is currently probe-backed — so today the HARD honesty labels are not independently falsified at runtime. The current HARD rows do not rely on probes for their underlying enforcement (locks, fencing, default-deny, integration ordering, credential selection); a production probe layer would add an additional runtime verification/falsification layer rather than supply the enforcement. Wiring `verify()` probes per HARD row remains future assurance work — it converts honesty claims into machine-checked invariants (rule 20).
 - **A wrapper-contract test** asserting every duck-typed runner forwards security state (`env`, `binary`, sandbox flags). That defect has now occurred twice.
 - **Redaction on the cassette and evidence paths**, plus patterns covering bare OAuth/session tokens.
 - **Typed park reasons**, enabling the "max same failure" breaker rule 8 requires.
