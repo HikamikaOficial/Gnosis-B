@@ -126,6 +126,12 @@ class ExecutionOutcome:
     exit_code: int
     result: dict[str, Any]
     launch: dict[str, Any] | None
+    # F-33 Stage 2B.2: the TYPED trusted-launch artefacts, surfaced additively so
+    # the publication seam can bind a RunIdentity (`create_trusted_run` needs the
+    # full `LaunchedWorkerIdentity` and the sealed `LaunchSpec`, not the bounded
+    # summary dict). `launch` above is retained unchanged for existing consumers.
+    launched: Any | None = None
+    spec: LaunchSpec | None = None
 
 
 class TrustedExecutionPort:
@@ -219,7 +225,8 @@ class TrustedExecutionPort:
         if identity is not None:
             launch_summary = _summarise_identity(identity)
         return ExecutionOutcome(
-            exit_code=exit_code, result=result, launch=launch_summary)
+            exit_code=exit_code, result=result, launch=launch_summary,
+            launched=identity, spec=spec)
 
     @staticmethod
     def _read_deterministic_result(stdout_path: Path, *,

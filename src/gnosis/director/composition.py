@@ -34,8 +34,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from gnosis.contracts.director_brief import DirectorBrief
+from gnosis.contracts.engineer_report import ReportStatus
 from gnosis.director.execution import ExecutionMode, TrustedExecutionPort
-from gnosis.director.pipeline import GovernedPipeline
+from gnosis.director.pipeline import GovernedPipeline, PipelineOutcome
+from gnosis.director.publication import (
+    PublicationError,
+    PublicationInputs,
+    capture_publishable_bundle,
+    observe_git_tree,
+    publish_governed_run,
+)
 from gnosis.director.trusted_runner import TrustedExecutionRunner
 from gnosis.kernel.convergence import ConvergencePolicy
 from gnosis.kernel.engine import TaskEngine
@@ -45,7 +54,7 @@ from gnosis.kernel.scheduler import HoldStore, TaskScheduler
 from gnosis.kernel.verification import Verifier
 from gnosis.kernel.worktree import WorktreeManager
 from gnosis.provision.layout import DeploymentLayout
-from gnosis.trust.deployment import observe_runtime
+from gnosis.trust.deployment import TrustPlaneDeploymentIdentity, observe_runtime
 from gnosis.trust.launch import AuthorityUnavailable
 from gnosis.trust.publisher_service import ServiceConfig
 from gnosis.trust.worker_launcher import TrustedWindowsWorkerLauncher, WorkerAccount
@@ -241,3 +250,117 @@ def build_production_composition(config: ProductionCompositionConfig) -> Governe
         convergence_policy=config.convergence_policy,
         worktrees=WorktreeManager(op.repo_path, op.director_root / "worktrees"))
     return pipeline
+
+
+# --------------------------------------------------------------------------- #
+# Stage 2B.2 — operator-reachable composition with the authoritative publication
+# seam. `build_production_composition` above still returns the canonical governed
+# GovernedPipeline unchanged; this wrapper adds the publication lifecycle and the
+# operator-success guarantee ON TOP, without a second orchestration engine.
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class PublicationCompositionInputs:
+    """TRUSTED (§22): the authoritative-publication plane for operator runs.
+
+    `deployment` is a measured V2 `TrustPlaneDeploymentIdentity` (binds the
+    runtime tree); the stores live under the trust state root. None is operator
+    input.
+    """
+
+    trust_state_root: Path
+    evidence_root: Path
+    deployment: TrustPlaneDeploymentIdentity
+    repository_id: str
+    epoch: int = 0
+
+
+@dataclass(frozen=True)
+class OperatorOutcome:
+    """The operator-visible result. `success` is TRUE only when governed work
+    COMPLETED **and** the evidence reached ANCHORED (ADR-0032 §14)."""
+
+    success: bool
+    task_id: str
+    run_id: str | None
+    work_status: str
+    publication_state: str | None
+    reason: str
+
+
+class ProductionComposition:
+    """The single operator-reachable production object. Governed work still runs
+    through the canonical `GovernedPipeline`; this adds the publication step and
+    the composite operator-success invariant. It builds no second orchestrator."""
+
+    def __init__(self, pipeline: GovernedPipeline,
+                 runner: TrustedExecutionRunner,
+                 publication: PublicationCompositionInputs,
+                 repo_path: Path) -> None:
+        self._pipeline = pipeline
+        self._runner = runner
+        self._publication = publication
+        self._repo_path = repo_path
+
+    @property
+    def pipeline(self) -> GovernedPipeline:
+        return self._pipeline
+
+    def run_brief(self, brief: DirectorBrief) -> OperatorOutcome:
+        work: PipelineOutcome = self._pipeline.run_brief(brief)
+        return self._finish(work)
+
+    def _finish(self, work: PipelineOutcome) -> OperatorOutcome:
+        # Governed work must succeed FIRST; a non-COMPLETED run is never published.
+        if work.status is not ReportStatus.COMPLETED:
+            return OperatorOutcome(
+                success=False, task_id=work.task_id, run_id=None,
+                work_status=work.status.value, publication_state=None,
+                reason=f"governed work not COMPLETED ({work.reason_code}); "
+                       "no publication attempted")
+        launched = self._runner.last_launched
+        spec = self._runner.last_spec
+        run_id = self._runner.last_run_id
+        if launched is None or spec is None or run_id is None:
+            return OperatorOutcome(
+                success=False, task_id=work.task_id, run_id=run_id,
+                work_status=work.status.value, publication_state=None,
+                reason="no trusted launch was recorded for the governed run")
+        try:
+            tree = observe_git_tree(self._repo_path)
+            bundle_dir = self._publication.evidence_root / run_id
+            capture_publishable_bundle(bundle_dir, tree)
+            result = publish_governed_run(
+                trust_state_root=self._publication.trust_state_root,
+                evidence_root=self._publication.evidence_root,
+                bundle_dir=bundle_dir,
+                inputs=PublicationInputs(
+                    task_id=work.task_id, run_id=run_id,
+                    repository_id=self._publication.repository_id,
+                    epoch=self._publication.epoch, exit_code=0,
+                    launched=launched, spec=spec,
+                    deployment=self._publication.deployment, tree=tree))
+        except PublicationError as exc:
+            return OperatorOutcome(
+                success=False, task_id=work.task_id, run_id=run_id,
+                work_status=work.status.value, publication_state=None,
+                reason=f"authoritative publication failed: {exc}")
+        # operator success = work COMPLETED AND publication ANCHORED (§14).
+        return OperatorOutcome(
+            success=True, task_id=work.task_id, run_id=run_id,
+            work_status=work.status.value,
+            publication_state=result.publication_state.value, reason="anchored")
+
+
+def build_production_deployment(config: ProductionCompositionConfig,
+                                publication: PublicationCompositionInputs
+                                ) -> ProductionComposition:
+    """Assemble the operator-reachable production composition (governed work +
+    authoritative publication). Reuses the canonical `build_production_composition`
+    for the governed graph, then binds the publication seam on top."""
+    pipeline = build_production_composition(config)
+    runner = pipeline.scheduler.engine.cli_runner
+    if not isinstance(runner, TrustedExecutionRunner):  # defence in depth
+        raise CompositionError(
+            "canonical implementer is not the trusted execution runner")
+    return ProductionComposition(pipeline, runner, publication,
+                                 config.operator.repo_path)

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -82,6 +83,12 @@ class TrustedExecutionRunner:
         self._cassette_source = cassette_source
         self._workspace = workspace
         self._default_timeout_s = default_timeout_s
+        # F-33 Stage 2B.2: the trusted-launch artefacts of the most recent
+        # SUCCESSFUL execution, read by the publication seam to bind a
+        # RunIdentity. UNTRUSTED Worker stdout is never among them.
+        self.last_launched: Any | None = None
+        self.last_spec: Any | None = None
+        self.last_run_id: str | None = None
 
     @property
     def binary(self) -> str:
@@ -108,9 +115,12 @@ class TrustedExecutionRunner:
         cassette_path = workspace / f"{stdout_path.stem}.cassette.json"
         cassette_path.write_bytes(self._cassette_source(prompt))
 
+        # A run id sealed into the LaunchSpec, so the publication seam can bind
+        # this exact sealed execution to a RunIdentity (spec.run_id == plan.run_id).
+        run_id = f"run-{uuid.uuid4().hex[:16]}"
         intent = DeterministicIntent(
             cassette_path=cassette_path, cwd=cwd,
-            stdout_path=stdout_path, stderr_path=stderr_path)
+            stdout_path=stdout_path, stderr_path=stderr_path, run_id=run_id)
 
         started = datetime.now(UTC)
         command = ("trusted-execution-port", "deterministic", str(cassette_path))
@@ -130,6 +140,10 @@ class TrustedExecutionRunner:
                                 timed_out=False)
 
         ended = datetime.now(UTC)
+        # Record the TYPED trusted-launch artefacts for the publication seam.
+        self.last_launched = outcome.launched
+        self.last_spec = outcome.spec
+        self.last_run_id = run_id
         return ExecutionResult(
             command=command, exit_code=outcome.exit_code, timed_out=False,
             cancelled=False, duration_s=(ended - started).total_seconds(),
