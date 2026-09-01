@@ -57,7 +57,7 @@ The rules that most shape the code:
 | Metric | Value |
 |---|---|
 | Tests | **760 collected, 760 passing** |
-| Source | 13,669 lines across 33 modules in `src/gnosis/` |
+| Source | At the 2026-08-21 report checkpoint: 13,669 lines across 55 tracked `.py` files under `src/gnosis/` (48 excluding `__init__.py`) |
 | Tests | 11,788 lines |
 | mypy strict | **clean, 55 files** |
 | ruff | 19 findings, all pre-existing, ratcheted against a baseline (build fails if it rises) |
