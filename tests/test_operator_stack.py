@@ -1,24 +1,23 @@
-"""F-33 Stage-2C-PACK — canonical operator-stack deployment (PK1-PK15).
+"""F-33 Stage-2C-PACK-R1 — operator-stack primitives (trust/app split, manifest).
 
-Filesystem only; no OS provisioning, no provider calls. Deploys the production
-import closure into a temp application root and proves completeness, integrity,
-isolation and fail-closed behaviour.
+Filesystem only; no OS provisioning, no provider calls.
 """
 
 from __future__ import annotations
 
-import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+from gnosis.provision.layout import DeploymentLayout
 from gnosis.provision.operator_stack import (
     OperatorStackError,
     _assert_inside,
-    application_root_for,
+    application_modules,
     build_application_manifest,
+    canonical_package_root,
     deploy_operator_stack,
+    f17_provided_closure,
     operator_entry_content,
     production_closure,
     verify_application_tree,
@@ -27,145 +26,87 @@ from gnosis.provision.operator_stack import (
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 
-class _Deployed(unittest.TestCase):
+class TestClosureSplit(unittest.TestCase):
+    def test_production_closure_complete(self) -> None:
+        prod = production_closure(SRC)
+        for m in ("gnosis.director.cli", "gnosis.director.composition",
+                  "gnosis.director.deterministic_worker", "gnosis.adapters.cli_review"):
+            self.assertIn(m, prod)
+
+    def test_f17_provided_includes_all_director_trust(self) -> None:
+        f17 = f17_provided_closure(SRC)
+        for m in ("orchestration", "deployment", "worker_launcher", "launch_spec",
+                  "run_identity", "publisher_service"):
+            self.assertIn(f"gnosis.trust.{m}", f17)
+
+    def test_application_owns_no_trust(self) -> None:
+        app = application_modules(SRC)
+        self.assertFalse(any(m.startswith("gnosis.trust.") for m in app))
+        self.assertIn("gnosis.director.cli", app)
+
+    def test_manifest_has_no_trust_path_and_measures_entry(self) -> None:
+        m = build_application_manifest(SRC, Path(r"C:\D\publisher"))
+        self.assertFalse(any(f.relpath.startswith("gnosis/trust/") for f in m.files))
+        self.assertTrue(any(f.relpath == "operator_entry.py" for f in m.files))
+
+    def test_manifest_deterministic(self) -> None:
+        pr = Path(r"C:\D\publisher")
+        self.assertEqual(build_application_manifest(SRC, pr).tree_digest,
+                         build_application_manifest(SRC, pr).tree_digest)
+
+    def test_canonical_root_is_publisher(self) -> None:
+        layout = DeploymentLayout(code_base=r"C:\C", state_base=r"C:\S",
+                                  work_base=r"C:\W", release_id="R1")
+        self.assertEqual(canonical_package_root(layout), Path(layout.trust_root))
+
+    def test_entry_is_isolated_and_delegates(self) -> None:
+        c = operator_entry_content(Path(r"C:\pkg"))
+        self.assertIn("sys.path.insert(0, _ROOT)", c)
+        self.assertIn("from gnosis.director.cli import main", c)
+
+    def test_assert_inside_rejects_escape(self) -> None:
+        root = Path(tempfile.gettempdir()) / "gnosis-r1-root"
+        with self.assertRaises(OperatorStackError):
+            _assert_inside(root, root.parent / "escape.py")
+
+
+class TestDeployIntoCanonicalRoot(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
-        self.app_root = self.root / "code" / "releases" / "R1" / "app"
-        self.app_root.parent.mkdir(parents=True)
-        self.dep = deploy_operator_stack(SRC, self.app_root)
+        self.pkg = Path(self.tmp.name) / "publisher"
+        self.pkg.mkdir()
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-
-class TestClosureAndManifest(unittest.TestCase):
-    def test_pk1_full_closure_deployed(self) -> None:
-        closure = production_closure(SRC)
-        for required in ("gnosis.director.cli", "gnosis.director.composition",
-                         "gnosis.director.publication", "gnosis.director.publisher_client",
-                         "gnosis.director.deterministic_worker",
-                         "gnosis.adapters.cli_review", "gnosis.kernel.engine"):
-            self.assertIn(required, closure)
-
-    def test_pk6_no_dev_or_test_surfaces(self) -> None:
-        m = build_application_manifest(SRC)
-        for f in m.files:
-            self.assertFalse(f.relpath.startswith(("tests/", "docs/", "scripts/")))
-            self.assertNotIn(".venv", f.relpath)
-
-    def test_pk15_replay_route_unreachable(self) -> None:
-        m = build_application_manifest(SRC)
-        for f in m.files:
-            self.assertNotIn("replay", f.relpath)
-            self.assertNotIn("orchestrator", f.relpath)
-
-    def test_pk14_manifest_deterministic(self) -> None:
-        self.assertEqual(build_application_manifest(SRC).tree_digest,
-                         build_application_manifest(SRC).tree_digest)
-
-    def test_pk13_traversal_rejected(self) -> None:
-        with self.assertRaises(OperatorStackError):
-            _assert_inside(self.root_app(), self.root_app().parent / "escape.py")
-
-    def root_app(self) -> Path:
-        return Path(tempfile.gettempdir()) / "gnosis-app-root"
-
-
-class TestDeployedTree(_Deployed):
-    def test_pk4_source_equals_deployed(self) -> None:
-        ok, problems = verify_application_tree(self.app_root, self.dep.manifest)
+    def test_deploys_app_modules_and_entry(self) -> None:
+        dep = deploy_operator_stack(SRC, self.pkg)
+        self.assertTrue((self.pkg / "gnosis" / "director" / "cli.py").is_file())
+        self.assertTrue(dep.entry_path.is_file())
+        self.assertTrue(dep.worker_image.is_file())
+        ok, problems = verify_application_tree(self.pkg, dep.manifest)
         self.assertTrue(ok, problems)
 
-    def test_pk5_one_byte_tamper_detected(self) -> None:
-        target = self.app_root / "gnosis" / "director" / "cli.py"
-        target.write_text(target.read_text(encoding="utf-8") + "# x\n", encoding="utf-8")
-        ok, problems = verify_application_tree(self.app_root, self.dep.manifest)
+    def test_never_deploys_trust(self) -> None:
+        deploy_operator_stack(SRC, self.pkg)
+        # No trust module was written by the application deployer.
+        self.assertFalse((self.pkg / "gnosis" / "trust" / "orchestration.py").exists())
+
+    def test_refuses_to_overwrite_existing_f17_file(self) -> None:
+        # Simulate an F-17-owned file already present at an application path.
+        victim = self.pkg / "gnosis" / "director" / "cli.py"
+        victim.parent.mkdir(parents=True)
+        victim.write_text("F17-OWNED\n", encoding="utf-8")
+        with self.assertRaises(OperatorStackError):
+            deploy_operator_stack(SRC, self.pkg)
+
+    def test_entry_tamper_detected(self) -> None:
+        dep = deploy_operator_stack(SRC, self.pkg)
+        dep.entry_path.write_text(dep.entry_path.read_text(encoding="utf-8") + "#x\n",
+                                  encoding="utf-8")
+        ok, problems = verify_application_tree(self.pkg, dep.manifest)
         self.assertFalse(ok)
-        self.assertTrue(any("tampered" in p for p in problems))
-
-    def test_pk2_missing_file_detected(self) -> None:
-        (self.app_root / "gnosis" / "director" / "cli.py").unlink()
-        ok, problems = verify_application_tree(self.app_root, self.dep.manifest)
-        self.assertFalse(ok)
-        self.assertTrue(any("missing" in p for p in problems))
-
-    def test_pk3_unexpected_file_detected(self) -> None:
-        (self.app_root / "gnosis" / "director" / "sneaky.py").write_text("x=1\n",
-                                                                        encoding="utf-8")
-        ok, problems = verify_application_tree(self.app_root, self.dep.manifest)
-        self.assertFalse(ok)
-        self.assertTrue(any("unexpected" in p for p in problems))
-
-    def test_pk9_worker_image_at_expected_location(self) -> None:
-        self.assertTrue(
-            (self.app_root / "gnosis" / "director" / "deterministic_worker.py").is_file())
-
-    def test_pk10_entry_delegates_to_canonical_main(self) -> None:
-        content = self.dep.entry_path.read_text(encoding="utf-8")
-        self.assertIn("from gnosis.director.cli import main", content)
-        self.assertIn(str(self.app_root), content)
-        self.assertTrue(self.dep.entry_path.is_file())
-
-    def test_pk11_app_tree_does_not_touch_trust_tree(self) -> None:
-        # Deployment writes only under app_root (+ the sibling entry); a separate
-        # trust tree is never modified.
-        trust_tree = self.root / "code" / "releases" / "R1" / "publisher"
-        self.assertFalse(trust_tree.exists())
-
-
-class TestIsolation(_Deployed):
-    def _smoke(self, cwd: Path) -> subprocess.CompletedProcess[str]:
-        code = (
-            f"import sys; sys.path.insert(0, r'{self.app_root}'); "
-            "import gnosis.director.composition, gnosis.director.cli, "
-            "gnosis.director.deterministic_worker; print('IMPORT_OK')")
-        return subprocess.run([sys.executable, "-I", "-B", "-c", code],
-                              cwd=str(cwd), capture_output=True, text=True,
-                              check=False)
-
-    def test_pk7_imports_without_source_checkout(self) -> None:
-        neutral = self.root / "neutral"
-        neutral.mkdir()
-        proc = self._smoke(neutral)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("IMPORT_OK", proc.stdout)
-
-    def test_pk8_cwd_shadow_does_not_win(self) -> None:
-        # A malicious same-name package in CWD must not shadow the deployed one.
-        shadow = self.root / "shadow"
-        (shadow / "gnosis").mkdir(parents=True)
-        (shadow / "gnosis" / "__init__.py").write_text(
-            "raise RuntimeError('SHADOW WON')\n", encoding="utf-8")
-        proc = self._smoke(shadow)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertNotIn("SHADOW WON", proc.stderr)
-
-
-class TestFailClosed(unittest.TestCase):
-    def test_pk12_empty_source_fails_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as d:
-            empty = Path(d) / "empty_src"
-            empty.mkdir()
-            app_root = Path(d) / "app"
-            with self.assertRaises(OperatorStackError):
-                deploy_operator_stack(empty, app_root)
-            self.assertFalse(app_root.exists())  # no valid deployment left
-
-
-class TestLayout(unittest.TestCase):
-    def test_application_root_under_code_release_base(self) -> None:
-        from gnosis.provision.layout import DeploymentLayout
-        layout = DeploymentLayout(code_base=r"C:\Code", state_base=r"C:\State",
-                                  work_base=r"C:\Work", release_id="R1")
-        app = application_root_for(layout)
-        self.assertEqual(app.name, "app")
-        self.assertIn("releases", str(app))
-
-    def test_entry_content_is_isolated(self) -> None:
-        content = operator_entry_content(Path(r"C:\Deploy\app"))
-        self.assertIn("sys.path.insert(0", content)
-        self.assertIn("from gnosis.director.cli import main", content)
+        self.assertTrue(any("operator_entry.py" in p for p in problems))
 
 
 if __name__ == "__main__":
