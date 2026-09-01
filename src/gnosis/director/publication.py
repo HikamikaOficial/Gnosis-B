@@ -26,7 +26,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from gnosis.trust.anchor import AnchorStore
+from gnosis.director.publisher_client import PublisherClient, PublisherClientError
 from gnosis.trust.bundle_verify import write_bundle_manifest
 from gnosis.trust.deployment import TrustPlaneDeploymentIdentity
 from gnosis.trust.launch import AuthorityUnavailable
@@ -38,8 +38,7 @@ from gnosis.trust.orchestration import (
     authorize_publishable,
     create_trusted_run,
 )
-from gnosis.trust.publication import PublicationCorrupt, durable_publish
-from gnosis.trust.publisher import Publisher, PublisherConfig
+from gnosis.trust.publication import PublicationCorrupt
 from gnosis.trust.run_identity import PublicationState, TrustedRunIdentityStore
 from gnosis.trust.worker_launcher import LaunchedWorkerIdentity
 
@@ -122,27 +121,20 @@ class PublicationResult:
     detail: str
 
 
-def publish_governed_run(*, trust_state_root: Path, evidence_root: Path,
-                         bundle_dir: Path,
-                         inputs: PublicationInputs) -> PublicationResult:
+def publish_governed_run(*, trust_state_root: Path, bundle_dir: Path,
+                         inputs: PublicationInputs,
+                         publisher_client: PublisherClient) -> PublicationResult:
     """Drive the completed run through the F-17 authoritative-publication path.
 
     Returns a `PublicationResult`; raises `PublicationError` (fail closed) if any
     trusted gate refuses. A successful result carries
     `publication_state == ANCHORED`.
     """
-    config = PublisherConfig(
-        trust_state_root=trust_state_root, evidence_root=evidence_root,
-        authorized_worker_sid=inputs.launched.observed_sid,
-        expected_deployment_digest=inputs.deployment.digest())
-    run_store = TrustedRunIdentityStore(config.runidentity_root)
-    anchor_store = AnchorStore(config.anchors_root, require_high=False)
+    run_store = TrustedRunIdentityStore(Path(trust_state_root) / "runidentity")
 
     try:
-        # Idempotency (§21): publication state is monotonic. Never re-create or
-        # re-mark a run that has already progressed; a run already ANCHORED is
-        # returned as-is, and F-17's durable_publish reconciles a PUBLISHABLE run
-        # left by a crash without fabricating a second anchor.
+        # Director-side trusted gates. Idempotency (§21): publication state is
+        # monotonic; never re-create or re-mark a run that already progressed.
         if run_store.exists(inputs.run_id):
             record = run_store.read(inputs.run_id)
             if record.publication_state is PublicationState.ANCHORED:
@@ -164,10 +156,12 @@ def publish_governed_run(*, trust_state_root: Path, evidence_root: Path,
                 run_store, record.identity,
                 CompletionEvidence(exit_code=inputs.exit_code, timed_out=False,
                                    cancelled=False, bundle_dir=bundle_dir))
-        # PUBLISHABLE -> anchor -> ANCHORED, the F-17 durable protocol (idempotent).
-        request = Publisher(config).publication_request(inputs.run_id, record.identity)
-        durable_publish(anchor_store, run_store, request, bundle_dir)
-    except (RunNotPublishable, AuthorityUnavailable, PublicationCorrupt) as exc:
+        # PUBLISHABLE -> anchor -> ANCHORED via the F-17 PUBLISHER SERVICE, through
+        # the client seam. The canonical operator route never calls durable_publish
+        # in-process; the response is NOT the authority — the persisted state is.
+        publisher_client.publish(inputs.run_id)
+    except (RunNotPublishable, AuthorityUnavailable, PublicationCorrupt,
+            PublisherClientError) as exc:
         raise PublicationError(
             f"run {inputs.run_id} could not be anchored: {exc}") from exc
 

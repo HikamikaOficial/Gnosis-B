@@ -45,6 +45,7 @@ from gnosis.director.publication import (
     observe_git_tree,
     publish_governed_run,
 )
+from gnosis.director.publisher_client import PipePublisherClient, PublisherClient
 from gnosis.director.trusted_runner import TrustedExecutionRunner
 from gnosis.kernel.convergence import ConvergencePolicy
 from gnosis.kernel.engine import TaskEngine
@@ -271,6 +272,7 @@ class PublicationCompositionInputs:
     evidence_root: Path
     deployment: TrustPlaneDeploymentIdentity
     repository_id: str
+    pipe_name: str          # trusted F-17 Publisher service endpoint (not operator input)
     epoch: int = 0
 
 
@@ -295,11 +297,13 @@ class ProductionComposition:
     def __init__(self, pipeline: GovernedPipeline,
                  runner: TrustedExecutionRunner,
                  publication: PublicationCompositionInputs,
-                 repo_path: Path) -> None:
+                 repo_path: Path,
+                 publisher_client: PublisherClient) -> None:
         self._pipeline = pipeline
         self._runner = runner
         self._publication = publication
         self._repo_path = repo_path
+        self._publisher_client = publisher_client
 
     @property
     def pipeline(self) -> GovernedPipeline:
@@ -331,14 +335,14 @@ class ProductionComposition:
             capture_publishable_bundle(bundle_dir, tree)
             result = publish_governed_run(
                 trust_state_root=self._publication.trust_state_root,
-                evidence_root=self._publication.evidence_root,
                 bundle_dir=bundle_dir,
                 inputs=PublicationInputs(
                     task_id=work.task_id, run_id=run_id,
                     repository_id=self._publication.repository_id,
                     epoch=self._publication.epoch, exit_code=0,
                     launched=launched, spec=spec,
-                    deployment=self._publication.deployment, tree=tree))
+                    deployment=self._publication.deployment, tree=tree),
+                publisher_client=self._publisher_client)
         except PublicationError as exc:
             return OperatorOutcome(
                 success=False, task_id=work.task_id, run_id=run_id,
@@ -362,5 +366,22 @@ def build_production_deployment(config: ProductionCompositionConfig,
     if not isinstance(runner, TrustedExecutionRunner):  # defence in depth
         raise CompositionError(
             "canonical implementer is not the trusted execution runner")
+    # Cross-binding (§18): the interpreter the trusted execution runs MUST be the
+    # same measured runtime bound into the publication deployment identity. One
+    # digest scheme (trust.deployment); mismatch fails closed before any run.
+    try:
+        exec_runtime_digest = observe_runtime(
+            config.deployment.runtime_executable).executable_digest
+    except Exception as exc:
+        raise CompositionError(
+            f"could not measure the execution runtime for cross-binding: {exc}") from exc
+    if exec_runtime_digest != publication.deployment.runtime.executable_digest:
+        raise CompositionError(
+            "execution runtime does not match the publication deployment runtime "
+            "(digest mismatch); refusing to compose a run whose worker interpreter "
+            "is not the anchored deployment's interpreter")
+    # Canonical production publication goes through the F-17 Publisher SERVICE via
+    # the pipe client (never in-process durable_publish on the operator route).
+    publisher_client = PipePublisherClient(publication.pipe_name)
     return ProductionComposition(pipeline, runner, publication,
-                                 config.operator.repo_path)
+                                 config.operator.repo_path, publisher_client)

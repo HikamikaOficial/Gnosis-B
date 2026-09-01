@@ -40,7 +40,8 @@ _FORBIDDEN_FLAGS = (
     "--worker-account", "--credential-blob", "--launch-root", "--reviewer-id",
     "--policy-actor", "--publisher", "--service-sid", "--deployment-digest",
     "--skip-review", "--no-verify", "--unsafe-direct", "--direct-runner",
-    "--worker-executable", "--worker-module",
+    "--worker-executable", "--worker-module", "--reviewer-executable",
+    "--reviewer-binary", "--pipe", "--replay", "--reviewer-mode",
 )
 
 
@@ -63,26 +64,65 @@ def _reject_forbidden_flags(argv: Sequence[str]) -> None:
 
 
 _REQUIRED_CONFIG = ("deployment", "attribution", "operator", "publication",
-                    "verifier")
+                    "verifier", "reviewer")
+
+
+def build_reviewer(reviewer_cfg: dict[str, Any]) -> Any:
+    """Construct the REAL production reviewer runner from TRUSTED config.
+
+    The reviewer is a provider-backed `ClaudeCodeCLIRunner` (a distinct runner
+    object from the trusted-execution implementer). Its executable is
+    deployment/trusted configuration — an ABSOLUTE path that must exist — never a
+    PATH lookup and never operator work input. It is NEVER a replay runner and
+    NEVER an always-pass fake. This constructs; it does not invoke the reviewer.
+    """
+    from gnosis.runner.claude_cli_runner import ClaudeCodeCLIRunner
+
+    binary = reviewer_cfg.get("binary")
+    if not isinstance(binary, str) or not binary.strip():
+        raise OperatorError("trusted reviewer config missing 'binary'", EXIT_USAGE)
+    path = Path(binary)
+    if not path.is_absolute():
+        raise OperatorError(
+            f"reviewer executable {binary!r} must be an absolute deployment path "
+            "(never a PATH lookup or operator input)", EXIT_USAGE)
+    if not path.is_file():
+        raise OperatorError(
+            f"reviewer executable {binary} not found; reviewer unavailable "
+            "(fail closed)", EXIT_EXECUTION)
+    return ClaudeCodeCLIRunner(binary=str(path))
 
 
 def build_operator_composition(config_path: Path) -> Any:
     """Build the canonical operator composition from a TRUSTED config file.
 
-    Isolated so tests can substitute a controlled composition; production always
-    reaches the one `build_production_deployment`. Imported lazily so arg parsing
-    and flag rejection never require the trust plane.
-
-    STAGE 2B.2 SCOPE (honest): the production operator run additionally requires a
-    provider-backed INDEPENDENT reviewer to reach COMPLETED, and provider-backed
-    execution is explicitly deferred (ADR-0032 §11; Stage 2C). Rather than run a
-    fake always-PASS reviewer in the operator path — which would defeat governance
-    — this fails closed until the provider-backed reviewer lands. The publication
-    seam, the operator-success invariant and the composition are qualified
-    separately against the real trust code (see tests/test_publication_seam.py,
-    tests/test_operator_composition.py). The CLI's own logic (delegation, flag
-    rejection, exit codes) is qualified with a substituted composition.
+    Wires the REAL production reviewer (a provider-backed runner, distinct object)
+    and the F-17 Publisher-service publication path. Isolated so tests can
+    substitute a controlled composition; production always reaches the one
+    `build_production_deployment`. Imported lazily so arg parsing and flag
+    rejection never require the trust plane. Construction performs NO provider
+    call and NO OS provisioning; a real deployment (config.json, deployment
+    identity) is required and, when absent, this fails closed.
     """
+    from gnosis.director.composition import (
+        AttributionInputs,
+        OperatorInputs,
+        ProductionCompositionConfig,
+        PublicationCompositionInputs,
+        build_production_deployment,
+        trusted_deployment_from_layout,
+    )
+    from gnosis.kernel.engine import AGENT_RUN_INTERVENTION_POINT
+    from gnosis.kernel.policy import (
+        InterventionPoint,
+        PolicyEngine,
+        RuleOutcome,
+        Verdict,
+    )
+    from gnosis.kernel.verification import CommandVerifier
+    from gnosis.provision.layout import DeploymentLayout
+    from gnosis.trust.deployment import DesiredDeploymentConfig, observe_deployment
+
     try:
         raw = json.loads(Path(config_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -94,11 +134,49 @@ def build_operator_composition(config_path: Path) -> Any:
     if missing:
         raise OperatorError(
             f"trusted config missing sections: {', '.join(missing)}", EXIT_USAGE)
-    raise OperatorError(
-        "the canonical operator run requires a provider-backed independent "
-        "reviewer to reach COMPLETED; provider-backed execution is deferred to "
-        "Stage 2C. gnosis run fails closed rather than running an unsafe "
-        "always-pass reviewer.", EXIT_EXECUTION)
+
+    review_runner = build_reviewer(raw["reviewer"])  # REAL reviewer, never replay
+    try:
+        dep = raw["deployment"]
+        layout = DeploymentLayout(code_base=dep["code_base"],
+                                  state_base=dep["state_base"],
+                                  work_base=dep["work_base"])
+        trusted = trusted_deployment_from_layout(layout, dep["worker_username"])
+        attribution = AttributionInputs(
+            reviewer_id=raw["attribution"]["reviewer_id"],
+            policy_actor=raw["attribution"]["policy_actor"])
+        op = raw["operator"]
+        operator = OperatorInputs(director_root=Path(op["director_root"]),
+                                  repo_path=Path(op["repo_path"]))
+        pub = raw["publication"]
+        deployment_identity = observe_deployment(DesiredDeploymentConfig(
+            trust_root=Path(dep["trust_root"]),
+            runtime_executable=Path(layout.runtime_executable),
+            runtime_root=Path(layout.runtime_root),
+            runidentity_store=Path(pub["trust_state_root"]) / "runidentity",
+            anchorstore=Path(pub["trust_state_root"]) / "anchors",
+            service_name=pub["service_name"]))
+        verifier = CommandVerifier(raw["verifier"]["name"],
+                                   list(raw["verifier"]["command"]))
+        # Production policy matrix is TRUSTED configuration (ADR-0032 §22); the
+        # full matrix loader is a separate concern (finalized in the fresh-deploy
+        # qualification). This basic intent-gated allow keeps the graph valid.
+        policy = PolicyEngine([InterventionPoint(
+            name=AGENT_RUN_INTERVENTION_POINT,
+            declared_tools=frozenset({"claude_cli"}),
+            rules=(("production", lambda s: RuleOutcome(Verdict.ALLOW, "ok:production")),),
+            requires_intent=True)])
+        config = ProductionCompositionConfig(
+            deployment=trusted, attribution=attribution, operator=operator,
+            verifier=verifier, review_runner=review_runner, policy=policy)
+        publication = PublicationCompositionInputs(
+            trust_state_root=Path(pub["trust_state_root"]),
+            evidence_root=Path(pub["evidence_root"]),
+            deployment=deployment_identity, repository_id=pub["repository_id"],
+            pipe_name=pub["pipe_name"])
+    except KeyError as exc:
+        raise OperatorError(f"trusted config missing field {exc}", EXIT_USAGE) from exc
+    return build_production_deployment(config, publication)
 
 
 def _load_brief(brief_path: Path) -> Any:

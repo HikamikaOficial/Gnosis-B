@@ -78,6 +78,19 @@ def v2_deployment(*, runtime_files: tuple[FileIdentity, ...] = ()
                                       label="python-runtime", files=files))
 
 
+def v2_deployment_for_runtime(runtime_executable: Path) -> TrustPlaneDeploymentIdentity:
+    """A V2 deployment identity whose runtime is the REAL measured `runtime_executable`,
+    so composition's execution-runtime cross-binding digest matches."""
+    from gnosis.trust.deployment import observe_runtime
+    base = v2_deployment()
+    return TrustPlaneDeploymentIdentity(
+        schema=base.schema, package=base.package,
+        runtime=observe_runtime(runtime_executable), service=base.service,
+        trust_root=base.trust_root, runidentity_store=base.runidentity_store,
+        anchorstore=base.anchorstore, pipe_policy=base.pipe_policy,
+        runtime_tree=base.runtime_tree)
+
+
 def launched(sid: str = SID_OBSERVED,
              launch_digest: str = LAUNCH_DIGEST) -> LaunchedWorkerIdentity:
     return LaunchedWorkerIdentity(

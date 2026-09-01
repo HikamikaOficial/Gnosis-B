@@ -1,9 +1,9 @@
-"""F-33 Stage-2B.2 publication seam — drives the REAL trust chain in-process.
+"""F-33 publication seam — drives the REAL trust chain in-process via the client seam.
 
-create_trusted_run -> authorize_publishable -> durable_publish -> ANCHORED, using
-real local stores and a real sealed bundle. The Director-side identity inputs
-(deployment/launched/spec) are constructed via the qualified fixture pattern; the
-trust code exercised is the real thing.
+create_trusted_run -> authorize_publishable -> (PublisherClient) durable_publish ->
+ANCHORED, using real local stores and a real sealed bundle. The in-process client
+(InProcessPublisherClient) stands in for the F-17 Publisher SERVICE at component
+level (ADR-0032 §16); the production route uses the pipe client.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from gnosis.director.publication import (
     observe_git_tree,
     publish_governed_run,
 )
+from gnosis.director.publisher_client import InProcessPublisherClient
 from gnosis.trust.run_identity import PublicationState
 
 
@@ -32,8 +33,7 @@ class _Base(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.repo = tf.git_repo(self.root / "repo")
         self.trust_state_root = self.root / "trust_state"
-        self.evidence_root = self.root / "evidence"
-        self.bundle_dir = self.evidence_root / "run-1"
+        self.bundle_dir = self.trust_state_root / "evidence" / "run-1"
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -47,65 +47,52 @@ class _Base(unittest.TestCase):
             spec=tf.spec(spec_run_id or run_id), deployment=tf.v2_deployment(),
             tree=tree)
 
-    def _capture(self, inputs: PublicationInputs) -> Path:
-        return capture_publishable_bundle(self.bundle_dir, inputs.tree)
+    def _client(self, inputs: PublicationInputs) -> InProcessPublisherClient:
+        return InProcessPublisherClient(
+            trust_state_root=self.trust_state_root,
+            expected_deployment_digest=inputs.deployment.digest(),
+            authorized_worker_sid=inputs.launched.observed_sid)
+
+    def _publish(self, inputs: PublicationInputs) -> object:
+        capture_publishable_bundle(self.bundle_dir, inputs.tree)
+        return publish_governed_run(
+            trust_state_root=self.trust_state_root, bundle_dir=self.bundle_dir,
+            inputs=inputs, publisher_client=self._client(inputs))
 
 
 class TestPublishesToAnchored(_Base):
     def test_full_chain_reaches_anchored(self) -> None:
-        inputs = self._inputs()
-        self._capture(inputs)
-        result = publish_governed_run(
-            trust_state_root=self.trust_state_root, evidence_root=self.evidence_root,
-            bundle_dir=self.bundle_dir, inputs=inputs)
+        result = self._publish(self._inputs())
         self.assertTrue(result.anchored)
         self.assertIs(result.publication_state, PublicationState.ANCHORED)
 
     def test_idempotent_republish_stays_anchored(self) -> None:
         inputs = self._inputs()
-        self._capture(inputs)
-        publish_governed_run(trust_state_root=self.trust_state_root,
-                             evidence_root=self.evidence_root,
-                             bundle_dir=self.bundle_dir, inputs=inputs)
-        # A second publish of the same run must not fabricate a second anchor.
-        again = publish_governed_run(trust_state_root=self.trust_state_root,
-                                     evidence_root=self.evidence_root,
-                                     bundle_dir=self.bundle_dir, inputs=inputs)
+        self._publish(inputs)
+        again = self._publish(inputs)  # second publish must not double-anchor
         self.assertIs(again.publication_state, PublicationState.ANCHORED)
 
 
 class TestFailClosed(_Base):
     def test_nonzero_exit_is_not_publishable(self) -> None:
-        inputs = self._inputs(exit_code=13)
-        self._capture(inputs)
         with self.assertRaises(PublicationError):
-            publish_governed_run(trust_state_root=self.trust_state_root,
-                                 evidence_root=self.evidence_root,
-                                 bundle_dir=self.bundle_dir, inputs=inputs)
+            self._publish(self._inputs(exit_code=13))
 
     def test_run_id_seal_mismatch_fails_closed(self) -> None:
-        # The executed LaunchSpec was sealed for a different run than the plan.
-        inputs = self._inputs(run_id="run-1", spec_run_id="run-OTHER")
-        self._capture(inputs)
         with self.assertRaises(PublicationError):
-            publish_governed_run(trust_state_root=self.trust_state_root,
-                                 evidence_root=self.evidence_root,
-                                 bundle_dir=self.bundle_dir, inputs=inputs)
+            self._publish(self._inputs(run_id="run-1", spec_run_id="run-OTHER"))
 
     def test_tampered_bundle_fails_closed(self) -> None:
         inputs = self._inputs()
-        self._capture(inputs)
-        # Corrupt the sealed bundle after capture: verify_bundle must reject it.
+        capture_publishable_bundle(self.bundle_dir, inputs.tree)
         (self.bundle_dir / "SUMMARY.json").write_text('{"tampered": true}',
                                                       encoding="utf-8")
         with self.assertRaises(PublicationError):
-            publish_governed_run(trust_state_root=self.trust_state_root,
-                                 evidence_root=self.evidence_root,
-                                 bundle_dir=self.bundle_dir, inputs=inputs)
+            publish_governed_run(
+                trust_state_root=self.trust_state_root, bundle_dir=self.bundle_dir,
+                inputs=inputs, publisher_client=self._client(inputs))
 
     def test_worker_data_cannot_reach_publication_authority(self) -> None:
-        # P6 (structural): the publication seam takes only trusted inputs; there
-        # is no worker-result / parsed_json / final_message field anywhere in it.
         fields = set(PublicationInputs.__dataclass_fields__)
         for forbidden in ("result", "parsed_json", "final_message", "stdout",
                           "cassette", "worker_output"):

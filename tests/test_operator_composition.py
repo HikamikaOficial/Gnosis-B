@@ -22,6 +22,7 @@ from gnosis.director.composition import (
     ProductionComposition,
     PublicationCompositionInputs,
 )
+from gnosis.director.publisher_client import InProcessPublisherClient
 
 
 @dataclass
@@ -57,17 +58,25 @@ class _Base(unittest.TestCase):
         self.repo = tf.git_repo(self.root / "repo")
         self.pub = PublicationCompositionInputs(
             trust_state_root=self.root / "trust_state",
-            evidence_root=self.root / "evidence",
-            deployment=tf.v2_deployment(), repository_id="gnosis", epoch=0)
+            evidence_root=self.root / "trust_state" / "evidence",
+            deployment=tf.v2_deployment(), repository_id="gnosis",
+            pipe_name=r"\\.\pipe\gnosis-test", epoch=0)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def _comp(self, status: ReportStatus, *, run_id: str | None = "run-1"
-              ) -> ProductionComposition:
+    def _client(self) -> InProcessPublisherClient:
+        return InProcessPublisherClient(
+            trust_state_root=self.pub.trust_state_root,
+            expected_deployment_digest=self.pub.deployment.digest(),
+            authorized_worker_sid=tf.SID_OBSERVED)
+
+    def _comp(self, status: ReportStatus, *, run_id: str | None = "run-1",
+              repo: Path | None = None) -> ProductionComposition:
         return ProductionComposition(
             pipeline=_FakePipeline(status), runner=_RecordedRunner(run_id=run_id),
-            publication=self.pub, repo_path=self.repo)
+            publication=self.pub, repo_path=repo or self.repo,
+            publisher_client=self._client())
 
 
 class TestOperatorSuccessInvariant(_Base):
@@ -96,17 +105,12 @@ class TestOperatorSuccessInvariant(_Base):
     def test_publication_failure_is_not_success(self) -> None:
         # A second composition sharing the SAME trust_state_root + run_id but a
         # tampered bundle: publish fails -> operator failure (P3/P4).
-        comp = self._comp(ReportStatus.COMPLETED)
-        # Pre-tamper: run once to create the bundle dir, then corrupt it.
-        first = comp.run_brief(object())
+        first = self._comp(ReportStatus.COMPLETED).run_brief(object())
         self.assertTrue(first.success)
-        # New run, new run_id, but tamper its bundle before publish by pointing
-        # evidence_root at a file we corrupt via a fresh composition:
-        bad = ProductionComposition(
-            pipeline=_FakePipeline(ReportStatus.COMPLETED),
-            runner=_RecordedRunner(run_id="run-2"),
-            publication=self.pub, repo_path=self.root / "no-such-repo")
-        out = bad.run_brief(object())  # observe_git_tree fails on missing repo
+        # A fresh run whose repo cannot be observed → publication fails closed.
+        bad = self._comp(ReportStatus.COMPLETED, run_id="run-2",
+                         repo=self.root / "no-such-repo")
+        out = bad.run_brief(object())
         self.assertFalse(out.success)
 
 

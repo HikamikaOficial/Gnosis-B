@@ -33,8 +33,10 @@ def _config_file(root: Path, *, complete: bool = True) -> Path:
         "attribution": {"reviewer_id": "reviewer@team", "policy_actor": "agent://dir"},
         "operator": {"director_root": "C:/dir", "repo_path": "C:/repo"},
         "publication": {"trust_state_root": "C:/ts", "evidence_root": "C:/ev",
-                        "repository_id": "gnosis", "service_name": "GnosisPub"},
+                        "repository_id": "gnosis", "service_name": "GnosisPub",
+                        "pipe_name": r"\\.\pipe\gnosis"},
         "verifier": {"name": "check", "command": ["python", "-c", "raise SystemExit(0)"]},
+        "reviewer": {"binary": r"C:\nonexistent\claude.exe"},
     }
     if not complete:
         del body["publication"]
@@ -114,10 +116,11 @@ class TestDelegationAndExitCodes(_Base):
         self.assertEqual(code, cli.EXIT_PUBLICATION)
 
 
-class TestHonestDeferral(_Base):
-    def test_production_build_fails_closed_on_deferred_reviewer(self) -> None:
-        # No substitution: the real build_operator_composition must refuse to run
-        # an unsafe always-pass reviewer, failing closed (deferred to Stage 2C).
+class TestRealBuildFailsClosed(_Base):
+    def test_missing_reviewer_binary_fails_closed(self) -> None:
+        # No substitution: the real build_operator_composition constructs the REAL
+        # reviewer; a missing reviewer executable → fail closed (reviewer
+        # unavailable), NOT an always-pass fallback.
         code = cli.main(["run", "--config", str(self.config),
                          "--brief", str(self.brief)])
         self.assertEqual(code, cli.EXIT_EXECUTION)
