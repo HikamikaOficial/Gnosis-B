@@ -1,0 +1,48 @@
+F-33 STAGE 2A — OS-REAL TRUSTED WORKER QUALIFICATION PROBE
+==============================================================================
+
+SETUP — disposable infrastructure
+------------------------------------------------------------------------------
+   relocating the Python runtime into the tool root ...
+   relocating the full gnosis package into the tool root ...
+   deterministic_worker digest match: True
+   creating disposable non-admin account GnosisWkrF33 ...
+   worker SID: S-1-5-21-1160728320-3593568380-93362170-1036
+   DPAPI-protecting the credential (machine-bound) ...
+   applying probe-only ACLs ...
+
+CASSETTE — trusted, tiny, normal schema
+------------------------------------------------------------------------------
+   cassette bytes=131 sha256=437333051c0a0b26...
+
+EXECUTE — TrustedExecutionPort over the REAL Worker boundary
+------------------------------------------------------------------------------
+
+ASSERTIONS — real Worker boundary
+------------------------------------------------------------------------------
+   [PASS] identity: observed SID == disposable worker SID  (S-1-5-21-1160728320-3593568380-93362170-1036)
+   [PASS] separation: worker SID != director SID  (dir=S-1-5-21-1160728320-3593568380-93362170-1000)
+   [PASS] privilege: worker is non-admin  (is_admin=False)
+   [PASS] containment: worker contained in job object
+   [PASS] image: port named the RELOCATED deterministic_worker
+   [PASS] image: trusted relocated runtime used
+   [PASS] result: port validated deterministic result (schema+ok)
+   [PASS] result: worker digested the exact sealed cassette
+   [PASS] result: final message echoes the cassette
+   [PASS] provider calls == 0
+   [PASS] exit code == 0
+
+NEGATIVE — invalid cassette must fail closed through the port
+------------------------------------------------------------------------------
+   [PASS] negative: invalid cassette -> port fails closed  (WorkerExecutionFailed: deterministic Worker exited 13 (fail closed))
+
+   F-17 implementation diff: NONE
+
+ROLLBACK
+------------------------------------------------------------------------------
+   netuserdel_status: 0
+   profile_removed: True
+   probe_root_removed: True
+   account_absent: True
+   dpapi_blob_absent: True
+   rollback: PASS
