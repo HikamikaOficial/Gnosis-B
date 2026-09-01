@@ -1,6 +1,6 @@
 # ADR-0032 — Canonical production composition: wiring GovernedPipeline to the F-17 trust plane
 
-**Status:** proposed (F-33 Stage 1 — 2026-09-01); awaiting independent review. NOT accepted; Stage 2 (implementation) is NOT authorized by this document.
+**Status:** accepted (F-33 Stage 1 — 2026-09-01). Acceptance is of the **architecture only**; it does **NOT** close F-33, does not implement the composition root / CLI / deterministic Worker entry, and does **NOT** authorize Stage 2. **F-33 remains OPEN** (architecture accepted / implementation pending). Acceptance provenance: Stage-1 design independently reviewed; the first acceptance review found one blocking attribution-modality (SHOULD-vs-MUST) ambiguity; it was remediated (attribution made uniformly MUST with placeholder rejection); the final independent review returned **PASS WITH NON-BLOCKING NOTES — READY FOR ACCEPTANCE**. Two non-blocking Stage-2 notes recorded (§25 mutation symmetry for placeholder attribution; final deterministic-worker module path) — see §29.
 **Consumes** (does not reopen or modify) ADR-0017 (GovernedPipeline), ADR-0018 (integration), ADR-0028 (composed trust path), ADR-0030 (provisioning), ADR-0031 (F-17 CLOSED). **Does not reopen** F-14 or F-17.
 
 ## 1. Context
@@ -451,3 +451,12 @@ qualification.**
 No other new trust guarantee beyond F-17 is introduced, except the composition-level
 operator-success guarantee explicitly labelled in §14/§28 as a **NEW F-33
 COMPOSITION GUARANTEE** (not an F-17 guarantee).
+
+**Acceptance non-blocking notes (Stage-2, do not block this ADR):**
+- **Note A:** Stage 2 should add an explicit negative qualification test/mutation
+  "accept placeholder attribution → MUST be killed by the Identity-gate test," for
+  symmetry with the other mutations in §25. The §25 Identity gate already requires
+  non-placeholder attribution, so this is mutation-matrix completeness, not a gap.
+- **Note B:** the exact filesystem/module path of the planned deterministic Worker
+  entry (illustrated in §10/§24) may be finalized during Stage 2; its architectural
+  role is already fixed here.
