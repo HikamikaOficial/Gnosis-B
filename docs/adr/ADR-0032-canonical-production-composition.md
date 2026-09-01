@@ -84,11 +84,14 @@ internals, or verifier semantics.
 
 ## 7. Operator entry point
 
-**One** `[project.scripts]` console entry `gnosis = "gnosis.director.cli:main"`
-(a `python -m gnosis.director` shim may delegate to the same `main`). Intended
-semantics: `gnosis run [--once|--watch]` and `gnosis submit <brief.json>`. No
-co-equal alternative entry points; service wrappers delegate to
-`build_production_composition`.
+**One** `[project.scripts]` console entry `gnosis = "gnosis.director.cli:main"` is
+the **canonical operator entry**. If a `python -m gnosis.director` shim is retained
+it MUST delegate to `gnosis.director.cli:main` (and therefore to the exact same
+canonical composition factory `build_production_composition`); it MUST NOT create a
+second factory, a second dependency graph, a second orchestration root, or
+different startup semantics. Intended semantics: `gnosis run [--once|--watch]` and
+`gnosis submit <brief.json>`. No co-equal alternative entry points; service
+wrappers delegate to the same factory.
 
 ## 8. GovernedPipeline / DirectorOrchestrator relationship — **Decision: A**
 
@@ -120,18 +123,39 @@ qualified F-17 worker-launch boundary. No hidden `subprocess`, no
 `DirectCLIRunner` production escape hatch, no debug fallback on missing
 infrastructure.
 
-## 10. Deterministic (provider-free) qualification architecture — Correction 2
+## 10. Deterministic (provider-free) qualification architecture — RESOLVED (Stage 1.5)
 
-Provider-free qualification MUST still traverse the worker boundary. The chosen
-model (subject to §18 blocker check): **shape A** — the trusted worker is launched
-normally via `WorkerLauncher.launch(spec)`, and a **sealed deterministic/replay
-execution backend is selected inside the worker** (the launch identity/isolation/
-`LaunchSpec` boundary is unchanged; only the in-worker executor is the replay
-backend). **Unacceptable:** `composition → ReplayingCLIRunner` directly in the
-Director process (it would not exercise the production launch seam). **If current
-F-17 launch APIs cannot express an in-worker deterministic backend without
-modification, this is recorded as a STAGE-2 DESIGN BLOCKER** (see §18) rather than
-weakening qualification.
+Provider-free qualification MUST still traverse the worker boundary, and the
+existing F-17 launch mechanism **already provides the necessary extension point —
+no F-17 change is required.** The `bootstrap` execs exactly the sealed
+`LaunchSpec.executable`/`argv` under the Worker SID ("the image is decided by the
+sealed spec, NEVER by a PATH search"), so the flow is:
+
+trusted Director/composition → **bounded execution-mode selection** → sealed
+`LaunchSpec` → `WorkerLauncher.launch(spec)` → F-17 `bootstrap` → Worker SID →
+deterministic worker-entry/backend.
+
+**Bounded backend selection.** The operator MUST NOT supply arbitrary executable
+paths, arbitrary Python modules, or arbitrary shell commands. The canonical
+composition may select only from an explicitly **bounded, trusted set of execution
+modes**; `DETERMINISTIC` maps internally to the **repository-approved deterministic
+worker entry**, and the selected executable/argv is **sealed** into the LaunchSpec
+before Worker launch. **Unacceptable:** `composition → ReplayingCLIRunner` directly
+in the Director process (no Director-side bypass of `WorkerLauncher`).
+
+**The deterministic worker entry is not yet qualified.** It does not exist; it is a
+**planned deterministic worker-entry module that Stage 2 must create and qualify
+under the composed F-33 deployment**. It must NOT be described as already
+"qualified" / "F-17-qualified."
+
+**Python `-m` import isolation (Stage-2 requirement).** Because deterministic
+execution may use semantics equivalent to `qualified_python -m
+gnosis.<deterministic_worker_entry>`, Stage 2 MUST preserve the existing qualified
+import/runtime isolation: no current-working-directory module shadowing, no
+uncontrolled `PYTHONPATH`, no PATH-selected interpreter, no operator-supplied
+module. The existing F-17 Python/runtime isolation contracts (the sealed
+`LaunchSpec.environment`, absolute-`executable`, worker-profile/`child_environment`
+allowlist) are referenced and consumed, not redesigned.
 
 ## 11. Provider boundary
 
@@ -171,11 +195,17 @@ authoritative publication; a successful git integration does **not** imply
 `CompletionEvidence` payload/contracts establish, not arbitrary engineering
 semantics.
 
-## 14. Operator-success semantics
+## 14. Operator-success semantics — **NEW F-33 COMPOSITION GUARANTEE**
 
 `gnosis run` reports **final success only** when all mandatory governed-work
 conditions (A) hold **AND** the evidence reaches **ANCHORED** (B). Integration
-without ANCHORED = *integrated-but-unpublished* (not final success).
+without ANCHORED = *integrated-but-unpublished* (not final success). This
+composite condition — "mandatory governed-work success **AND** successful
+authoritative evidence publication / ANCHORED before final operator success" — is a
+**NEW F-33 COMPOSITION GUARANTEE**, introduced by this ADR. It is **NOT** an F-17
+guarantee: F-17 supplies the publication-side guarantee only (that the trusted
+plane authorizes the anchor). `ANCHORED` remains a **publication-state** value and
+is **not** a universal engineering-completion state (§13).
 
 ## 15. Authority ownership matrix (no state has two owners)
 
@@ -203,12 +233,42 @@ verifier mode.
 
 ## 17. Implementer≠reviewer identity semantics
 
-Current enforcement is **Python object inequality** (`pipeline.py:179`:
-`review_runner is scheduler.engine.cli_runner`). This ADR keeps that construction
-gate and flags as a **Stage-2 assurance question** (not silently broadened here)
-whether a stronger identity (provider/model/process identity, normalized equality,
-runtime revalidation) should replace object identity. The composition must pass
-two **distinct** runner objects; no fallback to one runner for both roles.
+**Currently accepted floor (do not overstate).** The current GovernedPipeline
+contract rejects exactly the case where the implementer runner object *is* the
+reviewer runner object — semantically `implementer_runner is reviewer_runner →
+fail closed` (`pipeline.py:179`, `is` comparison, raised at construction). This is
+the **currently accepted floor** under constitution rule 10. The repository does
+**not** currently prove separation of the underlying provider / account /
+execution principal: two distinct wrappers around one principal would pass this
+gate. This ADR keeps the floor and does not claim more.
+
+**No vendor-difference requirement.** No accepted current contract requires
+different LLM vendors, different models, or different provider companies. F-33
+introduces no such requirement; provider/vendor diversity is a separate assurance
+property (a "weaker channel" note in DECISIONS.md/ADR-0022), not a gate.
+
+**Attribution identities (existing).** Production governed runs SHOULD additionally
+use explicit, non-placeholder attribution over the existing identities — the
+authority/evidence-bound `reviewer_id` (default `"claude-cli"`, stamped by the
+review adapter and persisted into evidence) and the `policy_actor` / `agent://…`
+principal (default `"agent://unattributed"`) — rejecting the known anonymous
+placeholder forms. **Caveat — no unproven cross-namespace security claim:**
+`reviewer_id` and `policy_actor` live in **different namespaces** and the
+repository defines **no** canonical normalization that maps them into one actor
+identity. Therefore this ADR does **not** assert `reviewer_id != policy_actor ⇒
+implementer != reviewer` as a security guarantee. These identities **improve
+attribution and evidence**; they are **not** by themselves a cryptographic or
+authority-bound proof that two wrappers do not share one underlying execution
+principal.
+
+**Stronger identity = NEW IDENTITY CONTRACT (deferred).** A guarantee equivalent to
+"the implementation execution principal and the review execution principal are
+provably distinct even across different wrappers/objects" requires a **NEW IDENTITY
+CONTRACT**. That stronger binding is **NOT required** to prove F-33 production
+reachability under the currently accepted rule-10 contract; it remains a **Stage-2
+assurance/design item** and must not be presented as already existing. The
+composition must pass two **distinct** runner objects (floor) and non-placeholder
+attribution; no fallback to one runner for both roles.
 
 ## 18. F-35–F-40 dependency boundaries
 
@@ -298,11 +358,24 @@ No provider expansion; no F-35–F-40 repair.
 
 ## 25. Stage-2 qualification gates (tests) and mutation matrix
 
-Tests: entry reachability; canonical construction (strong-governance path);
-deterministic trusted-launch E2E (traverses F-17 boundary); missing verifier →
-fail closed; implementer/reviewer identity violation → fail closed; policy denial →
-no governed success; publication success via F-17 Publisher; publication failure →
-no final success, durable recoverable state; crash/restart; fresh isolated install.
+Required gates: **Composition** — the supported operator entry reaches the
+canonical composition. **Trusted launch** — both provider-backed and deterministic
+modes (where applicable) use the **same** F-17 worker-launch boundary. **Deterministic
+qualification** — proven with **no external provider**. **Deployment measurement** —
+the new composed runtime/tree receives a **fresh deployment identity/digest**
+(expected to differ from the historical F-17 tree; validated against the existing
+`trust.deployment` contract). **Import isolation** — the deterministic `-m` entry
+cannot resolve from an untrusted CWD / `PYTHONPATH` / module shadowing. **Publication**
+— only the existing F-17 route (`authorize_publishable` → `Publisher` → anchor) can
+produce authoritative historical-evidence publication. **Operator-success** — no
+final success before mandatory work conditions **and** publication conditions
+(§14). **Identity** — the same runner object is rejected; attribution is
+non-placeholder; a stronger underlying-principal binding remains **explicitly not
+yet guaranteed** unless separately implemented and reviewed (§17).
+
+Additional tests: canonical construction (strong-governance path); missing verifier
+→ fail closed; policy denial → no governed success; publication failure → no final
+success, durable recoverable state; crash/restart; fresh isolated install.
 
 Mutation → killer test → protected invariant:
 - delete verifier gate → missing-verifier/E2E → verify-required.
@@ -336,12 +409,36 @@ Consumes ADR-0017/0018 (GovernedPipeline/integration) and ADR-0028/0030/0031
 (F-17). Does not supersede or modify them. F-17 remains CLOSED; its bounded
 "authoritative historical-evidence publication" claim is preserved. Any guarantee
 the composition needs beyond F-17 is labelled a **NEW F-33 COMPOSITION GUARANTEE**,
-not attributed to F-17 (none identified in Stage 1).
+not attributed to F-17: the operator-success composite (§14) is the one such
+guarantee, and Stage 2's new composed deployment requires **fresh qualification**
+(§29) rather than inheriting the F-17 tree measurement.
 
-## 29. New-guarantee / blocker note
+## 29. New-guarantee / blocker note — RESOLVED (Stage 1.5)
 
-No new trust guarantee beyond F-17 is required for the design. **One potential
-Stage-2 design blocker** (§10): if current F-17 launch APIs cannot host an
-in-worker deterministic/replay backend while preserving identity/isolation, the
-provider-free E2E-through-the-boundary requirement cannot be met without extending
-the launch API — to be resolved in Stage 2 design before implementation.
+The Stage-1.5 feasibility review **cleared** the previously-recorded potential
+blocker: the sealed `LaunchSpec.executable`/`argv` already hosts a deterministic
+worker entry while preserving identity/isolation, so **no F-17 launch-API extension
+is required** (see §10, §11).
+
+**F-17 impact classification: ADDITIVE F-17-CONSUMER CHANGE.** No F-17 trust-plane
+implementation change is required by this design; no F-17 guarantee is broadened;
+**F-17 remains CLOSED**. This is not a contradiction.
+
+**But F-17 byte-level qualification does NOT transfer to new files.** Stage 2 will
+add new production/deployment bytes (the deterministic worker entry, the
+composition root, the CLI). The composed F-33 tree therefore MUST NOT claim those
+new bytes inherit the historical F-17 qualified deployment identity. Distinction:
+the **F-17 architectural/security contract remains closed and reusable**, while the
+**new F-33 composed deployment must receive a fresh deployment/tree measurement and
+qualification.** Any measured runtime/deployment artifact Stage 2 adds necessarily
+changes `deployment_digest` / tree identity vs the historical qualified F-17 tree.
+The Stage-2 qualification plan MUST therefore include: (1) a fresh composed
+deployment measurement; (2) an expected `deployment_digest` change; (3) validation
+that the new tree satisfies the existing F-17 deployment contract
+(`trust.deployment`); (4) fresh isolated qualification. **Do not reuse an old
+deployment digest; do not call a changed tree byte-identical to the previous
+qualification.**
+
+No other new trust guarantee beyond F-17 is introduced, except the composition-level
+operator-success guarantee explicitly labelled in §14/§28 as a **NEW F-33
+COMPOSITION GUARANTEE** (not an F-17 guarantee).
