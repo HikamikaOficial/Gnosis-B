@@ -1,0 +1,6 @@
+....                                                                     [100%]
+=========================== short test summary info ===========================
+SKIPPED [1] tests\test_worker_launcher.py:966: the refusal is the non-Windows path
+1599 passed, 1 skipped, 276 subtests passed in 542.00s (0:09:01)
+
+[exited with code 0]
