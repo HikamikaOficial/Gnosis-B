@@ -5,6 +5,11 @@ description = "GNOSIS autonomous multi-agent engineering system"
 requires-python = ">=3.12"
 dependencies = []
 
+# The ONE canonical operator entry (F-33 Stage 2B.2, ADR-0032 §7). No co-equal
+# entry points; any `python -m` shim must delegate to this exact main.
+[project.scripts]
+gnosis = "gnosis.director.cli:main"
+
 [project.optional-dependencies]
 dev = [
   "pytest>=8",
