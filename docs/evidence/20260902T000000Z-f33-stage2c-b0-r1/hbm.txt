@@ -1,0 +1,17 @@
+HBM1: CAUGHT  (dry OS guard removed)
+HBM2: CAUGHT  (reviewer env allowlist bypassed)
+HBM3: CAUGHT  (account rollback registration removed)
+HBM4: CAUGHT  (service rollback registration removed)
+HBM5: CAUGHT  (cleanup unrelated resource permitted)
+HBM6: CAUGHT  (rollback failure ignored)
+HBM7: CAUGHT  (provider ledger reset)
+HBM8: CAUGHT  (>5 calls permitted)
+HBM10: CAUGHT  (spawn=False selected)
+HBM11: CAUGHT  (InProcessPublisherClient selected)
+HBM12: CAUGHT  (worker env keeps provider secrets)
+HBM13: CAUGHT  (OSREAL bypasses F-17 Provisioner (fabricated digest))
+HBM14: CAUGHT  (unimplemented on live path)
+HBM16: CAUGHT  (worker path bypasses F-17 launcher)
+
+14/14 applied HBM mutants CAUGHT
+STRUCTURAL: HBM9 (canonical GnosisDeploymentProvisioner used), HBM15 (reviewer runs in operator subprocess; route selects production runner)
