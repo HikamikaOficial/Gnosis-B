@@ -143,8 +143,31 @@ class GateResult:
     real_ops_constructed: bool = False
 
 
+def _finalize_scaffold(dcfg: DriverConfig, trace: dict[str, Any],
+                       cleanup_scaffold: bool) -> None:
+    """Driver-owned scaffold cleanup on EVERY terminal path. The scaffold root is
+    the deployment root (the exactly-owned parent of code/state/work AND of the
+    recovery dir). Remove it ONLY after the residue record is retired (full
+    rollback); if a residue record remains (rollback failed / real residue), KEEP
+    the scaffold so recovery can act — never delete recovery metadata."""
+    import shutil as _sh
+    scaffold_root = Path(dcfg.stage.layout.code_base).parent
+    store = s.ResidueStore(dcfg.stage.residue_record_path(), dcfg.stage.run_id)
+    residue_present = store.path.is_file()
+    if residue_present:
+        trace["scaffold_cleanup"] = "RETAINED (residue record present; recover first)"
+        return
+    if not cleanup_scaffold:
+        trace["scaffold_cleanup"] = "left (caller-managed root)"
+        return
+    _sh.rmtree(scaffold_root, ignore_errors=True)
+    trace["scaffold_cleanup"] = ("removed" if not scaffold_root.exists()
+                                 else "FAILED (residue present)")
+
+
 def run_driver(dcfg: DriverConfig, *, execute_os_real: bool, confirm: str,
-               expected_head_sha: str, dry_ops: Any | None = None) -> dict[str, Any]:
+               expected_head_sha: str, dry_ops: Any | None = None,
+               cleanup_scaffold: bool = False) -> dict[str, Any]:
     """The single gated flow. With execute_os_real=False (default) it runs the
     orchestrator with a fake backend and proves ZERO real effects. With
     execute_os_real=True it requires the confirm token and passing gates before it
@@ -193,6 +216,7 @@ def run_driver(dcfg: DriverConfig, *, execute_os_real: bool, confirm: str,
         "error": orch.error}
     trace["real_ops_constructed"] = isinstance(ops, sops.WindowsRealOperations)
     trace["result"] = "DRY-TRACE-OK" if not execute_os_real else "OS-REAL-RAN"
+    _finalize_scaffold(dcfg, trace, cleanup_scaffold)
     return trace
 
 
@@ -257,6 +281,14 @@ def plan_trace(dcfg: DriverConfig) -> dict[str, Any]:
         "os_backend": "stage2cb_ops.WindowsRealOperations",
         "live_ledger": f"{dcfg.live_used} used / {s.MAX_LIVE_CALLS - dcfg.live_used} remaining",
         "operator_argv": list(dcfg.operator_args()),
+        "driver_owned_resources": {
+            # exactly-owned scaffold root (parent of code/state/work AND recovery dir);
+            # all nested driver artifacts covered by this one run-bound root.
+            "scaffold_root": str(Path(cfg.layout.code_base).parent),
+            "operator_config": str(dcfg.operator_config_path),
+            "operator_brief": str(dcfg.operator_brief_path),
+            "residue_record": str(cfg.residue_record_path()),
+        },
     }
 
 
@@ -267,7 +299,10 @@ def default_driver_config(root: Path, *, live_used: int = 1,
         code_base=str(root / "code"), state_base=str(root / "state"),
         work_base=str(root / "work"), release_id="B1")
     stage = s.Stage2CBConfig(
-        layout=layout, service_name="GnosisPubS2CBProbe", pipe_name="gnosis-s2cb-probe",
+        layout=layout, service_name="GnosisPubS2CBProbe",
+        # CANONICAL pipe identity: the FULL local pipe path the PipeServer creates
+        # and PipePublisherClient opens (Stage-8 form). A bare name is invalid.
+        pipe_name=r"\\.\pipe\gnosis-s2cb-probe",
         worker_username="GnosisWkrS2CB", package_version="0.0.0",
         source_commit="deadbeef", source_tree="t" * 40, runtime_src=QUALIFIED_RUNTIME_SRC,
         reviewer_binary=reviewer_binary, run_id="run-b1-1")
@@ -290,7 +325,10 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     import tempfile
-    root = Path(args.root) if args.root else Path(tempfile.mkdtemp(prefix="f33-b1-dry-"))
+    # Deterministic, run-bound scaffold root (NOT random mkdtemp) so an abrupt kill
+    # leaves a recoverable, exactly-owned root derivable from the run_id.
+    root = (Path(args.root) if args.root
+            else Path(tempfile.gettempdir()) / "gnosis-2cb-b1-run-b1-1")
     dcfg = default_driver_config(root)
 
     if args.recover_owned_residue:
@@ -302,7 +340,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if status in ("PLAN", "STALE_VERIFIED_ABSENT", "NO_RECORD") else 4
 
     trace = run_driver(dcfg, execute_os_real=args.execute_os_real, confirm=args.confirm,
-                       expected_head_sha=args.expected_head or expected_head())
+                       expected_head_sha=args.expected_head or expected_head(),
+                       cleanup_scaffold=True)  # driver owns + cleans its deterministic root
     print(json.dumps(trace, indent=2))
     return 0 if trace.get("result") in ("DRY-TRACE-OK", "OS-REAL-RAN") else 3
 

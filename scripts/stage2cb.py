@@ -49,6 +49,46 @@ MAX_LIVE_CALLS = 5
 RESIDUE_SCHEMA = "gnosis.stage2cb.residue.v1"
 
 
+@dataclass(frozen=True)
+class ReadinessResult:
+    ready: bool
+    reason: str        # "ready" | "service-died" | "timeout" | "observation-error"
+    polls: int
+    elapsed_s: float
+
+
+def wait_pipe_ready(pipe_name: str, *,
+                    pipe_exists: Callable[[], bool],
+                    service_alive: Callable[[], bool],
+                    now: Callable[[], float],
+                    timeout_s: float = 10.0,
+                    poll_s: float = 0.1,
+                    sleep: Callable[[float], None] | None = None,
+                    max_polls: int = 100_000) -> ReadinessResult:
+    """Bounded, monotonic-clock readiness for the EXACT expected pipe.
+
+    Poll the exact pipe; fail immediately if the Publisher service/process dies;
+    fail on a finite deadline. No blind fixed sleep as the sole strategy, no
+    service-restart loop, no unbounded retry. `timeout_s` is a fixed parameter and
+    never derived from operator/work input (§P7)."""
+    start = now()
+    polls = 0
+    while polls < max_polls:
+        polls += 1
+        try:
+            if pipe_exists():
+                return ReadinessResult(True, "ready", polls, now() - start)
+        except Exception:  # noqa: BLE001  (observation must fail closed)
+            return ReadinessResult(False, "observation-error", polls, now() - start)
+        if not service_alive():
+            return ReadinessResult(False, "service-died", polls, now() - start)
+        if now() - start >= timeout_s:
+            return ReadinessResult(False, "timeout", polls, now() - start)
+        if sleep is not None:
+            sleep(poll_s)
+    return ReadinessResult(False, "timeout", polls, now() - start)
+
+
 def _atomic_write_json(path: Path, obj: dict[str, Any]) -> None:
     """Transactional write: temp file in the same dir, flush + fsync, atomic
     replace. A partial/truncated record can never be observed; the prior valid
@@ -434,7 +474,9 @@ class OperationsBackend(Operations, Protocol):
     def utilities_present(self) -> bool: ...
     # service lifecycle (beyond F-17 create; F-17 creates, we start/stop/delete)
     def service_start(self, name: str) -> None: ...
-    def pipe_ready(self, pipe_name: str) -> bool: ...
+    # pipe_name is the FULL local path (\\.\pipe\<name>); service_name enables a
+    # liveness check during bounded readiness.
+    def pipe_ready(self, pipe_name: str, service_name: str) -> bool: ...
     def service_stop(self, name: str) -> None: ...
     # operator process: canonical_launch(spawn=True) intercept seam. Returns a
     # context manager; while active, process creation is faked (dry) or real
@@ -695,7 +737,7 @@ class Stage2CBOrchestrator:
             journal.register("service-stop",
                              lambda: self.ops.service_stop(self.config.service_name))
             self._stage(res, "service_start")
-            if not self.ops.pipe_ready(self.config.pipe_name):
+            if not self.ops.pipe_ready(self.config.pipe_name, self.config.service_name):
                 raise OrchestrationError("publisher pipe not ready")
             self._stage(res, "pipe_ready")
 

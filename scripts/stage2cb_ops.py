@@ -25,8 +25,11 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
-if str(REPO / "src") not in sys.path:
-    sys.path.insert(0, str(REPO / "src"))
+for _p in (REPO / "src", REPO / "scripts"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+import stage2cb
 
 import gnosis.provision.gnosis_deployment as _gd
 from gnosis.provision.provisioner import RealOperations
@@ -45,7 +48,7 @@ class DryOperations:
                  fail_op: str | None = None,
                  fail_cleanup: tuple[str, ...] = (),
                  utilities: bool = True, elevated: bool = True,
-                 anchored: bool = True) -> None:
+                 anchored: bool = True, pipe_not_ready: bool = False) -> None:
         self.log: list[tuple[str, tuple[Any, ...]]] = []
         self._accounts = set(existing_accounts)
         self._services = set(existing_services)
@@ -55,6 +58,7 @@ class DryOperations:
         self._utilities = utilities
         self._elevated = elevated
         self._anchored = anchored
+        self._pipe_not_ready = pipe_not_ready
         self._last_spawn: tuple[tuple[str, ...], int] | None = None
 
     def _rec(self, op: str, *args: Any) -> None:
@@ -140,9 +144,9 @@ class DryOperations:
         self._rec("service_start", name)
         self._services.add(name)
 
-    def pipe_ready(self, pipe_name: str) -> bool:
-        self._rec("pipe_ready", pipe_name)
-        return True
+    def pipe_ready(self, pipe_name: str, service_name: str) -> bool:
+        self._rec("pipe_ready", pipe_name, service_name)
+        return not self._pipe_not_ready
 
     def service_stop(self, name: str) -> None:
         self._rec("service_stop", name)
@@ -252,8 +256,20 @@ class WindowsRealOperations:
         if rc not in (0, 1056):  # already running
             raise RuntimeError(f"service start failed rc={rc}: {out[:160]}")
 
-    def pipe_ready(self, pipe_name: str) -> bool:
-        return Path(rf"\\.\pipe\{pipe_name}").exists()
+    def _service_running(self, name: str) -> bool:
+        rc, out = self._f17.run(["sc.exe", "query", name])
+        return rc == 0 and "RUNNING" in out.upper()
+
+    def pipe_ready(self, pipe_name: str, service_name: str) -> bool:
+        # pipe_name is the EXACT full local path (\\.\pipe\<name>) — checked as-is,
+        # never re-prefixed. Bounded readiness with Publisher liveness.
+        import time
+        result = stage2cb.wait_pipe_ready(
+            pipe_name,
+            pipe_exists=lambda: Path(pipe_name).exists(),
+            service_alive=lambda: self._service_running(service_name),
+            now=time.monotonic, timeout_s=15.0, poll_s=0.25, sleep=time.sleep)
+        return result.ready
 
     def service_stop(self, name: str) -> None:
         self._f17.run(["sc.exe", "stop", name])
