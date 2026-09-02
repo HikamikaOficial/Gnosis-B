@@ -557,6 +557,10 @@ class FakeObserved:
     def digest(self) -> str:
         return self._digest
 
+    def to_dict(self) -> dict[str, Any]:
+        # test-double identity (R3B): lets the identity recorder snapshot a dry run.
+        return {"schema": "fake", "digest_stub": self._digest}
+
 
 # ---------------------------------------------------------------------------
 # base_provision adapter — CONSUMES the real F-17 Provisioner through `ops`.
@@ -732,6 +736,11 @@ class Stage2CBOrchestrator:
     # DRY-ONLY placeholder is used; the real CLI contract is
     # `run --config <path> --brief <path>` (both required; --brief is a JSON path).
     operator_args: tuple[str, ...] | None = None
+    # R3B: harness-only identity-delta recorder (pure/read-only). When set, the
+    # orchestrator captures the AUTHORITATIVE provision-time observation; the driver
+    # wires the launch-time observation into the same recorder. Never touches the
+    # trusted digest or the gate.
+    identity_recorder: Any = None
     error: str | None = None
     _hardkill: bool = field(default=False, init=False)
 
@@ -770,6 +779,16 @@ class Stage2CBOrchestrator:
             base_provision, _handle = make_base_provision(
                 self.config, self.ops, observe_fn=self.observe_fn)
             base = base_provision()
+            # R3B: capture the AUTHORITATIVE provision-time identity — the exact
+            # InstallResult.observed whose digest became the trusted record's
+            # f17_deployment_digest. Best-effort; never affects provisioning.
+            if self.identity_recorder is not None:
+                try:
+                    _obs = getattr(_handle.get("install"), "observed", None)
+                    if _obs is not None:
+                        self.identity_recorder.record_provision(_obs)
+                except Exception:  # noqa: BLE001,S110  diagnostics never affect provisioning
+                    pass
             # (2) AMBIGUOUS WINDOW: the OS resources now exist but ACQUIRED is not
             #     yet persisted. A kill here leaves acquired=false while the worker/
             #     service exist — recovery must observe reality, not trust the flag.

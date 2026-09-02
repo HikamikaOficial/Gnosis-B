@@ -39,6 +39,7 @@ for _p in (REPO / "src", REPO / "scripts"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
+import identity_delta as idd
 import stage2cb as s
 import stage2cb_ops as sops
 
@@ -113,7 +114,8 @@ def write_operator_inputs(dcfg: DriverConfig) -> None:
 # ---------------------------------------------------------------------------
 # REAL F-17 re-observation binding (§6). Fresh observe_deployment -> digest.
 # ---------------------------------------------------------------------------
-def make_real_reobserve(cfg: s.Stage2CBConfig) -> Callable[[], str]:
+def make_real_reobserve(cfg: s.Stage2CBConfig,
+                        recorder: Any = None) -> Callable[[], str]:
     def _observe() -> str:
         from gnosis.trust.deployment import DesiredDeploymentConfig, observe_deployment
         lay = cfg.layout
@@ -124,6 +126,14 @@ def make_real_reobserve(cfg: s.Stage2CBConfig) -> Callable[[], str]:
             runidentity_store=Path(lay.runidentity_root),
             anchorstore=Path(lay.anchors_root),
             service_name=cfg.service_name))
+        # R3B: record the SAME identity whose digest is returned to the trust gate.
+        # Wrapped so that NOTHING the recorder does — even an exception — can break
+        # or bypass the gate: the authoritative digest is always what is returned.
+        if recorder is not None:
+            try:
+                recorder.record_launch(identity)
+            except Exception:  # noqa: BLE001,S110  diagnostics never break the gate
+                pass
         return identity.digest()
     return _observe
 
@@ -190,12 +200,17 @@ def run_driver(dcfg: DriverConfig, *, execute_os_real: bool, confirm: str,
         return trace
     trace["gates"].append("HEAD checked")
 
+    # R3B: harness-only identity-delta recorder (pure/read-only; in-memory only, so
+    # it lives strictly OUTSIDE every identity-observed root and cannot create a
+    # digest delta). Captures the authoritative provision + launch observations.
+    recorder = idd.IdentityDeltaRecorder()
+
     # backend selection: DRY unless explicitly executing os-real AND gates pass.
     if execute_os_real:
         ops = _construct_real_ops_after_gates(dcfg, trace)
         if ops is None:
             return trace  # a gate refused; real ops NOT constructed
-        reobserve = make_real_reobserve(dcfg.stage)
+        reobserve = make_real_reobserve(dcfg.stage, recorder)
         observe_fn = None  # -> Provisioner uses real observe_deployment (proven)
     else:
         ops = dry_ops if dry_ops is not None else sops.DryOperations()
@@ -207,7 +222,7 @@ def run_driver(dcfg: DriverConfig, *, execute_os_real: bool, confirm: str,
     orch = s.Stage2CBOrchestrator(
         config=dcfg.stage, ops=ops, budget=s.LiveCallBudget(used=dcfg.live_used),
         reobserve_f17=reobserve, observe_fn=observe_fn, residue_store=store,
-        operator_args=dcfg.operator_args())
+        operator_args=dcfg.operator_args(), identity_recorder=recorder)
     res = orch.run()
     trace["orchestration"] = {
         "stages": res.stages, "success": res.success,
@@ -219,6 +234,10 @@ def run_driver(dcfg: DriverConfig, *, execute_os_real: bool, confirm: str,
         "service_postmortem": res.service_postmortem,
         "publisher_failure_class": res.publisher_failure_class}
     trace["real_ops_constructed"] = isinstance(ops, sops.WindowsRealOperations)
+    # R3B: the authoritative provision/launch identity delta (in-memory only). On a
+    # digest mismatch this names the exact differing component(s); it NEVER changes
+    # the gate outcome above.
+    trace["identity_delta"] = recorder.result()
     trace["result"] = "DRY-TRACE-OK" if not execute_os_real else "OS-REAL-RAN"
     _finalize_scaffold(dcfg, trace, cleanup_scaffold)
     return trace
