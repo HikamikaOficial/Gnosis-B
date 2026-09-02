@@ -35,6 +35,82 @@ import gnosis.provision.gnosis_deployment as _gd
 from gnosis.provision.provisioner import RealOperations
 from gnosis.provision.provisioner import service_imagepath as _service_imagepath
 
+# -- R2C: Windows named-pipe readiness observation ---------------------------
+# The production client (gnosis.director.publisher_client.PipePublisherClient)
+# gates on WaitNamedPipeW(pipe_name, connect_timeout_ms) BEFORE CreateFileW, so
+# WaitNamedPipeW is the faithful, least-invasive readiness primitive: it never
+# opens a handle and therefore cannot consume the single-instance server. The old
+# harness observed the pipe with pathlib filesystem existence, which RAISES on a
+# \\.\pipe\ path (OS-real terminal_reason=observation-error) so the endpoint was
+# never actually observed.
+_ERROR_FILE_NOT_FOUND = 2      # pipe not created yet -> transient not-ready
+_ERROR_ACCESS_DENIED = 5       # abnormal for a provisioned deployment -> fail closed
+_ERROR_SEM_TIMEOUT = 121       # pipe exists but no free instance in the wait -> busy
+_ERROR_INVALID_NAME = 123      # malformed name -> observation-error
+_ERROR_BAD_PATHNAME = 161      # malformed path -> observation-error
+_ERROR_PIPE_BUSY = 231         # all instances busy -> busy (transient)
+_WIN32_NAME = {
+    0: "SUCCESS", _ERROR_FILE_NOT_FOUND: "ERROR_FILE_NOT_FOUND",
+    _ERROR_ACCESS_DENIED: "ERROR_ACCESS_DENIED", _ERROR_SEM_TIMEOUT: "ERROR_SEM_TIMEOUT",
+    _ERROR_INVALID_NAME: "ERROR_INVALID_NAME", _ERROR_BAD_PATHNAME: "ERROR_BAD_PATHNAME",
+    _ERROR_PIPE_BUSY: "ERROR_PIPE_BUSY"}
+# transient = the observation SUCCEEDED semantically; the endpoint is just not
+# connectable yet (absent or busy). Bounded polling continues. Everything else is
+# an unexpected/abnormal API outcome -> observation-error (fail closed).
+_TRANSIENT_NOT_READY = {_ERROR_FILE_NOT_FOUND, _ERROR_SEM_TIMEOUT, _ERROR_PIPE_BUSY}
+
+
+class PipeObservationError(RuntimeError):
+    """An unexpected/abnormal named-pipe observation outcome (access denied,
+    invalid name, or any unmapped Win32 error). Raised so the bounded readiness
+    loop fails closed with terminal_reason=observation-error — NEVER swallowed as
+    an ordinary not-ready."""
+
+
+class NamedPipeReadinessObserver:
+    """Observes a Windows named pipe with WaitNamedPipeW (the production client's
+    own availability gate). `observe()` returns True when an instance is available
+    (READY), False for a transient absent/busy endpoint (keep polling), and RAISES
+    PipeObservationError on an abnormal outcome (fail closed). Win32 detail is
+    stored on `.last` for the diagnostic bundle. A `wait_fn` seam lets tests script
+    Win32 outcomes without touching the OS; the default binds the real API."""
+
+    def __init__(self, pipe_name: str, *, probe_timeout_ms: int = 200,
+                 wait_fn: Any = None) -> None:
+        self._pipe_name = pipe_name          # passed to WaitNamedPipeW VERBATIM
+        self._probe_timeout_ms = probe_timeout_ms   # per-probe availability wait
+        self._wait_fn = wait_fn or self._real_wait  # (name, timeout_ms)->(ok, err)
+        self.last: dict[str, Any] = {
+            "observation_api": "WaitNamedPipeW", "expected_pipe": pipe_name,
+            "win32_error_code": None, "win32_error_name": None,
+            "endpoint_present": None, "connectable": None}
+
+    def _real_wait(self, name: str, timeout_ms: int) -> tuple[bool, int]:
+        import ctypes
+        from ctypes import wintypes as w
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.WaitNamedPipeW.argtypes = [w.LPCWSTR, w.DWORD]
+        k32.WaitNamedPipeW.restype = w.BOOL
+        ok = bool(k32.WaitNamedPipeW(name, timeout_ms))
+        return ok, (0 if ok else ctypes.get_last_error())
+
+    def observe(self) -> bool:
+        ok, err = self._wait_fn(self._pipe_name, self._probe_timeout_ms)
+        name = _WIN32_NAME.get(err, f"WIN32_{err}")
+        if ok:
+            self.last.update(win32_error_code=0, win32_error_name="SUCCESS",
+                             endpoint_present=True, connectable=True)
+            return True
+        if err in _TRANSIENT_NOT_READY:
+            present = err != _ERROR_FILE_NOT_FOUND  # busy => present; not-found => absent
+            self.last.update(win32_error_code=err, win32_error_name=name,
+                             endpoint_present=present, connectable=False)
+            return False
+        # access-denied / invalid-name / unexpected -> fail closed (observation-error)
+        self.last.update(win32_error_code=err, win32_error_name=name,
+                         endpoint_present=None, connectable=False)
+        raise PipeObservationError(f"WaitNamedPipeW failed: {name} ({err})")
+
 
 class _Fail(RuntimeError):
     pass
@@ -230,6 +306,8 @@ class WindowsRealOperations:
         self._f17 = RealOperations()
         self._runidentity_root = runidentity_root
         self._last_spawn: tuple[tuple[str, ...], int] | None = None
+        # R2C: WaitNamedPipeW seam. None -> the real Win32 API; tests inject a fake.
+        self._pipe_wait_fn: Any = None
 
     # F-17 Operations delegated to the qualified RealOperations
     def run(self, argv: list[str]) -> tuple[int, str]:
@@ -289,13 +367,16 @@ class WindowsRealOperations:
         return rc == 0 and "RUNNING" in out.upper()
 
     def pipe_ready(self, pipe_name: str, service_name: str) -> bool:
-        # pipe_name is the EXACT full local path (\\.\pipe\<name>) — checked as-is,
-        # never re-prefixed. Bounded readiness with Publisher liveness. Same
-        # decision as R1; only diagnostic capture is added (no behavior change).
+        # pipe_name is the EXACT full local path (\\.\pipe\<name>) passed VERBATIM
+        # to WaitNamedPipeW — never re-prefixed, never routed through pathlib. R2C:
+        # a Win32 named-pipe observer replaces the old pathlib existence probe
+        # (which raised on a \\.\pipe path). Bounds (15s / 0.25s) and R1 liveness
+        # are UNCHANGED — only HOW the pipe is observed changed.
         import time
+        observer = NamedPipeReadinessObserver(pipe_name, wait_fn=self._pipe_wait_fn)
         result = stage2cb.wait_pipe_ready(
             pipe_name,
-            pipe_exists=lambda: Path(pipe_name).exists(),
+            pipe_exists=observer.observe,
             service_alive=lambda: self._service_running(service_name),
             now=time.monotonic, timeout_s=15.0, poll_s=0.25, sleep=time.sleep)
         self._last_readiness = {
@@ -304,7 +385,13 @@ class WindowsRealOperations:
             "elapsed_s": result.elapsed_s,
             "service_running_observed": self._service_running(service_name),
             "pipe_seen": result.ready,
-            "observation_error": (result.reason == "observation-error") or None}
+            "observation_error": (result.reason == "observation-error") or None,
+            # R2C structured Win32 detail (last observation):
+            "observation_api": observer.last["observation_api"],
+            "win32_error_code": observer.last["win32_error_code"],
+            "win32_error_name": observer.last["win32_error_name"],
+            "endpoint_present": observer.last["endpoint_present"],
+            "connectable": observer.last["connectable"]}
         return result.ready
 
     def last_readiness(self) -> dict[str, Any]:

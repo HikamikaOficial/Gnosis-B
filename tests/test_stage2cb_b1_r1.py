@@ -107,10 +107,12 @@ class TestCanonicalPipeName(unittest.TestCase):
             PipePublisherClient("gnosis-s2cb-probe")          # bare -> rejected
 
     def test_real_pipe_ready_uses_exact_path_not_reprefixed(self) -> None:
-        # WindowsRealOperations.pipe_ready must check Path(pipe_name) as-is (no
-        # \\.\pipe\ prepend), so a full pipe_name is not double-prefixed.
+        # WindowsRealOperations.pipe_ready must observe the EXACT pipe_name (no
+        # \\.\pipe\ prepend), so a full pipe_name is not double-prefixed. R2C: the
+        # observation is a Win32 named-pipe probe, NOT pathlib existence.
         src = (REPO / "scripts" / "stage2cb_ops.py").read_text(encoding="utf-8")
-        self.assertIn("pipe_exists=lambda: Path(pipe_name).exists()", src)
+        self.assertIn("NamedPipeReadinessObserver(pipe_name", src)
+        self.assertNotIn("Path(pipe_name).exists()", src)          # R2C: removed
         self.assertNotIn('Path(rf"\\\\.\\pipe\\{pipe_name}")', src)
 
 
