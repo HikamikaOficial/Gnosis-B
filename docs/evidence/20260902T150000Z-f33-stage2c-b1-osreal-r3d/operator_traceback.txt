@@ -1,0 +1,23 @@
+Traceback (most recent call last):
+  File "C:\Users\nicol\AppData\Local\Temp\gnosis-2cb-b1-run-b1-1\code\releases\B1\publisher\operator_entry.py", line 110, in <module>
+    raise SystemExit(main(sys.argv[1:]))
+                     ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nicol\AppData\Local\Temp\gnosis-2cb-b1-run-b1-1\code\releases\B1\publisher\gnosis\director\cli.py", line 240, in main
+    code, record = _run(Path(ns.config), Path(ns.brief))
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nicol\AppData\Local\Temp\gnosis-2cb-b1-run-b1-1\code\releases\B1\publisher\gnosis\director\cli.py", line 200, in _run
+    composition = build_operator_composition(config_path)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nicol\AppData\Local\Temp\gnosis-2cb-b1-run-b1-1\code\releases\B1\publisher\gnosis\director\cli.py", line 152, in build_operator_composition
+    deployment_identity = observe_deployment(DesiredDeploymentConfig(
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nicol\AppData\Local\Temp\gnosis-2cb-b1-run-b1-1\code\releases\B1\publisher\gnosis\trust\deployment.py", line 1155, in observe_deployment
+    _assert_executable_inside_runtime_root(config)
+  File "C:\Users\nicol\AppData\Local\Temp\gnosis-2cb-b1-run-b1-1\code\releases\B1\publisher\gnosis\trust\deployment.py", line 1128, in _assert_executable_inside_runtime_root
+    resolved_root = observed_directory_path(config.runtime_root).rstrip("\\")
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\nicol\AppData\Local\Temp\gnosis-2cb-b1-run-b1-1\code\releases\B1\publisher\gnosis\trust\deployment.py", line 456, in observed_directory_path
+    _fail(f"CreateFileW({path})")
+  File "C:\Users\nicol\AppData\Local\Temp\gnosis-2cb-b1-run-b1-1\code\releases\B1\publisher\gnosis\trust\deployment.py", line 304, in _fail
+    raise DeploymentIdentityUnavailable(f"{call} failed (winerr {err})")
+gnosis.trust.deployment.DeploymentIdentityUnavailable: CreateFileW(C:\Users\nicol\AppData\Local\Temp\gnosis-2cb-b1-run-b1-1\code\releases\current\runtime) failed (winerr 3)
