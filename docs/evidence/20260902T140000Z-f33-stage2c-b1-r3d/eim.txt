@@ -1,0 +1,16 @@
+EIM1: APPLIED / CAUGHT  (omit effective from the composed binding formula)
+EIM2: APPLIED / CAUGHT  (reuse the pre-app base digest as the effective identity)
+EIM4: APPLIED / CAUGHT  (accept an old/unknown record schema)
+EIM6: APPLIED / CAUGHT  (skip the record application-digest check at launch)
+EIM7: APPLIED / CAUGHT  (skip the fresh effective whole-root check at launch)
+EIM9: APPLIED / CAUGHT  (skip the record composed-binding consistency check)
+EIM3: STRUCTURAL — measure effective before deploy — reorder, not a 1-line mutation; guarded by test_effective_measured_after_app_deploy (asserts app present)
+EIM5: STRUCTURAL — update trusted digest after mismatch — canonical_launch performs NO record write (grep: no write_text/_atomic_write_json in canonical_launch)
+EIM8: STRUCTURAL — ignore an extra file — an extra importable file changes the whole-root effective identity; identical mechanism to EIM7 (test_whole_root_change_refused)
+EIM10: STRUCTURAL — remove effective operand from composed — identical to EIM1 at the formula (test_binding_uses_all_three_identities)
+EIM11: STRUCTURAL — substrate mutation after record — changes the whole-root effective identity; caught by the effective check (EIM7 mechanism)
+EIM12: STRUCTURAL — application mutation after record — caught by measure() / the record app check (test_application_tamper_still_refused / EIM6)
+EIM13: STRUCTURAL — move verification after spawn — spawn is the final statement; the checks precede it structurally (canonical_launch source ordering)
+EIM14: STRUCTURAL — content-only effective observer — the observer is production observe_deployment (full canonical identity, incl. SDDL/paths), injected, not a gnosis_deployment mutation; the effective digest is whatever it returns
+
+6/6 applied behavioral effective-identity mutants CAUGHT; 8 structural (documented)
