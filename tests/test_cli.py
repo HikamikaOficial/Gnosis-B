@@ -29,7 +29,8 @@ def _brief_file(root: Path) -> Path:
 def _config_file(root: Path, *, complete: bool = True) -> Path:
     body = {
         "deployment": {"code_base": "C:/c", "state_base": "C:/s", "work_base": "C:/w",
-                       "worker_username": "Wkr", "trust_root": "C:/trust"},
+                       "release_id": "current", "worker_username": "Wkr",
+                       "trust_root": "C:/trust"},
         "attribution": {"reviewer_id": "reviewer@team", "policy_actor": "agent://dir"},
         "operator": {"director_root": "C:/dir", "repo_path": "C:/repo"},
         "publication": {"trust_state_root": "C:/ts", "evidence_root": "C:/ev",

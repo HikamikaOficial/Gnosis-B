@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,13 @@ def _reject_forbidden_flags(argv: Sequence[str]) -> None:
 
 _REQUIRED_CONFIG = ("deployment", "attribution", "operator", "publication",
                     "verifier", "reviewer")
+
+# The release identity selects the versioned code release
+# (`<code_base>\releases\<release_id>\...`), so it is a single trusted path
+# segment: alphanumeric start, then alphanumerics/`_`/`-`, no dot/separator/drive,
+# so it can never traverse or escape the deployment root. It is read ONLY from the
+# deployment-authority-owned trusted config — never a brief, env, cwd, or default.
+_RELEASE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 def build_reviewer(reviewer_cfg: dict[str, Any]) -> Any:
@@ -138,9 +146,20 @@ def build_operator_composition(config_path: Path) -> Any:
     review_runner = build_reviewer(raw["reviewer"])  # REAL reviewer, never replay
     try:
         dep = raw["deployment"]
+        # R3E: the ACTUAL qualified release identity, from the trusted config — the
+        # same authority that supplies code_base/state_base/work_base. Missing ->
+        # KeyError -> fail closed below; NO default to "current" on the production
+        # route (that default silently resolved the wrong release root). Validated
+        # as a safe path segment so it cannot traverse the deployment root.
+        release_id = dep["release_id"]
+        if not (isinstance(release_id, str) and _RELEASE_ID_RE.match(release_id)):
+            raise OperatorError(
+                f"trusted config deployment.release_id {release_id!r} is not a valid "
+                "release identity", EXIT_USAGE)
         layout = DeploymentLayout(code_base=dep["code_base"],
                                   state_base=dep["state_base"],
-                                  work_base=dep["work_base"])
+                                  work_base=dep["work_base"],
+                                  release_id=release_id)
         trusted = trusted_deployment_from_layout(layout, dep["worker_username"])
         attribution = AttributionInputs(
             reviewer_id=raw["attribution"]["reviewer_id"],

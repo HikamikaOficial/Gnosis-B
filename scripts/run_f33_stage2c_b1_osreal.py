@@ -78,7 +78,8 @@ def build_operator_config(cfg: s.Stage2CBConfig, reviewer_binary: str) -> dict[s
     return {
         "deployment": {
             "code_base": lay.code_base, "state_base": lay.state_base,
-            "work_base": lay.work_base, "worker_username": cfg.worker_username,
+            "work_base": lay.work_base, "release_id": lay.release_id,
+            "worker_username": cfg.worker_username,
             "trust_root": lay.trust_root},
         "attribution": {"reviewer_id": "claude-code-cli",
                         "policy_actor": "gnosis-director"},
