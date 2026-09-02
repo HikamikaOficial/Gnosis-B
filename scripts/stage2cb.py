@@ -89,12 +89,31 @@ def wait_pipe_ready(pipe_name: str, *,
     return ReadinessResult(False, "timeout", polls, now() - start)
 
 
+def _authoritative_access_failure(postmortem: dict[str, Any]) -> bool:
+    """True ONLY for an AUTHORITATIVE access denial (R2B). Requires the aggregate
+    access_contract == 'FAIL' AND, when the producer supplies an access_detail,
+    a verdict that genuinely proves denial (`deny_semantics_proven` or a
+    'DIRECTLY-DENIED' verdict). A weak/ACL-inferred signal, a missing friendly-name
+    substring, an 'UNKNOWN' contract, or a mere temp-path can NEVER reach the
+    access-failure branch. If no detail is supplied, the aggregate 'FAIL' is the
+    authoritative signal by contract (the R2B producer emits 'FAIL' only on a
+    proven deny)."""
+    if postmortem.get("access_contract") != "FAIL":
+        return False
+    detail = postmortem.get("access_detail")
+    if isinstance(detail, dict):
+        return bool(detail.get("deny_semantics_proven")
+                    or detail.get("verdict") == "DIRECTLY-DENIED")
+    return True
+
+
 def classify_publisher_failure(readiness: dict[str, Any],
                                postmortem: dict[str, Any]) -> str:
     """Map structured readiness + service post-mortem to a concrete root-cause
-    class. NEVER concludes a topology/path cause from a path string alone — it
-    requires an observed access-contract failure. Returns one of the fixed labels
-    or AMBIGUOUS."""
+    class. NEVER concludes a topology/path cause from a path string alone, and
+    (R2B) reaches DEPLOYMENT/ANCESTOR ACCESS FAILURE only from an AUTHORITATIVE
+    access denial — never from an UNKNOWN or weakly-inferred access signal.
+    Returns one of the fixed labels or AMBIGUOUS."""
     reason = readiness.get("terminal_reason")
     if reason == "ready":
         return "READY"
@@ -107,12 +126,17 @@ def classify_publisher_failure(readiness: dict[str, Any],
         if (postmortem.get("service_entry_exists") is False
                 or postmortem.get("config_path_exists") is False):
             return "PUBLISHER CONFIGURATION FAILURE"
-        if postmortem.get("access_contract") == "FAIL":
+        if _authoritative_access_failure(postmortem):
             return "DEPLOYMENT/ANCESTOR ACCESS FAILURE"
         exit_code = postmortem.get("service_exit_code")
         if isinstance(exit_code, int) and exit_code != 0:
             return "SERVICE PROCESS EARLY EXIT"
-        return "SERVICE PROCESS START FAILURE"
+        if isinstance(exit_code, int):
+            # authoritative clean exit code (0) but not serving -> start failure.
+            return "SERVICE PROCESS START FAILURE"
+        # exit code unknown AND access not authoritatively denied -> we genuinely
+        # cannot discriminate; refuse to invent a cause.
+        return "AMBIGUOUS"
     if reason == "timeout" and running:
         # service alive but the pipe never appeared -> pipe-server init failed.
         return "PIPE SERVER INITIALIZATION FAILURE"

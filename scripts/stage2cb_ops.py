@@ -326,29 +326,76 @@ class WindowsRealOperations:
                     exit_code = None
         return state, exit_code
 
-    def _access_contract(self, config: Any) -> str:
-        """Read-only: do the required objects grant the service identity R/RX?
-        PASS if all required objects show the service name/SID with an R grant;
-        FAIL if any required present object omits it; UNKNOWN if unparseable."""
+    def _access_contract(self, config: Any) -> tuple[str, dict[str, Any]]:
+        """Read-only, CONSERVATIVE access diagnostic (R2B). Emits an authoritative
+        aggregate label only when the evidence genuinely supports it:
+
+          FAIL    -> an explicit DENY ACE for the *intended* service principal
+                     (NT SERVICE\\<service> or its resolved SID) on a required
+                     object: a proven denial.
+          UNKNOWN -> everything else. Leaf `icacls` presence CANNOT prove grant
+                     semantics or ancestor traversal, so a positive access
+                     contract is NEVER asserted (no 'PASS').
+
+        This is ACL-BASED INFERENCE over leaf objects only; a generic
+        'NT SERVICE' substring (e.g. NT SERVICE\\TrustedInstaller) never satisfies
+        the intended principal, and a missing friendly name never forces FAIL.
+        All raw sub-signals are returned for the evidence bundle."""
         lay = config.layout
-        required = [Path(lay.runtime_executable), Path(lay.service_entry),
-                    Path(lay.config_path)]
         name = config.service_name
-        any_checked = False
-        for p in required:
+        principal = rf"NT SERVICE\{name}".upper()
+        resolved_sid: str | None = None
+        try:
+            resolved_sid = self._f17.resolve_sid(name)
+        except Exception:                    # noqa: BLE001  best-effort, read-only
+            resolved_sid = None
+        sid_up = resolved_sid.upper() if resolved_sid else None
+        required = {"runtime": Path(lay.runtime_executable),
+                    "service_entry": Path(lay.service_entry),
+                    "config": Path(lay.config_path)}
+        leaf_signals: dict[str, str] = {}
+        principal_rendered = False
+        directly_denied = False
+        for key, p in required.items():
             if not p.exists():
+                leaf_signals[key] = "absent"
                 continue
             rc, out = self._f17.run(["icacls", str(p)])
             if rc != 0:
-                return "UNKNOWN"
-            any_checked = True
-            if name not in out and "NT SERVICE" not in out.upper():
-                return "FAIL"
-        return "PASS" if any_checked else "UNKNOWN"
+                leaf_signals[key] = "icacls-error"
+                continue
+
+            def _hit(text: str) -> bool:
+                up = text.upper()
+                return principal in up or (sid_up is not None and sid_up in up)
+            found = _hit(out)
+            denied = any(_hit(ln) and "(DENY)" in ln.upper()
+                         for ln in out.splitlines())
+            principal_rendered = principal_rendered or found
+            directly_denied = directly_denied or denied
+            leaf_signals[key] = ("intended-principal-denied" if denied
+                                 else "intended-principal-present" if found
+                                 else "intended-principal-not-rendered")
+        detail: dict[str, Any] = {
+            "method": "ACL-BASED INFERENCE (leaf objects only)",
+            "intended_principal": rf"NT SERVICE\{name}",
+            "resolved_sid": resolved_sid,
+            "intended_principal_rendered": principal_rendered,
+            "leaf_acls_inspected": leaf_signals,
+            "ancestors_tested": False,          # R2B: leaf-only; never claim ancestors
+            "grant_semantics_proven": False,    # icacls presence != grant proof
+            "deny_semantics_proven": directly_denied,
+        }
+        if directly_denied:
+            detail["verdict"] = "DIRECTLY-DENIED"
+            return "FAIL", detail
+        detail["verdict"] = "UNKNOWN"
+        return "UNKNOWN", detail
 
     def service_postmortem(self, service_name: str, config: Any) -> dict[str, Any]:
         lay = config.layout
         state, exit_code = self._sc_state(service_name)
+        access, access_detail = self._access_contract(config)
         return {
             "scm_state": state, "service_running_observed": state == "RUNNING",
             "service_exit_code": exit_code,
@@ -358,7 +405,7 @@ class WindowsRealOperations:
             "service_entry_exists": Path(lay.service_entry).exists(),
             "config_path_exists": Path(lay.config_path).exists(),
             "deployment_root": lay.code_base,
-            "access_contract": self._access_contract(config)}
+            "access_contract": access, "access_detail": access_detail}
 
     def service_stop(self, name: str) -> None:
         self._f17.run(["sc.exe", "stop", name])

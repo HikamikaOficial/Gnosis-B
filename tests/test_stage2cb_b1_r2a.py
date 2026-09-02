@@ -24,9 +24,11 @@ F17D = "f" * 64
 
 
 def _pm(**over):
+    # default access_contract is UNKNOWN: the R2B producer never asserts a
+    # positive access contract from leaf icacls evidence (no false PASS).
     base = {"service_running_observed": False, "runtime_exe_exists": True,
             "service_entry_exists": True, "config_path_exists": True,
-            "access_contract": "PASS", "service_exit_code": 0,
+            "access_contract": "UNKNOWN", "service_exit_code": 0,
             "deployment_root": r"C:\Users\x\AppData\Local\Temp\gnosis-2cb-b1-run-b1-1"}
     base.update(over)
     return base
@@ -54,8 +56,14 @@ class TestPublisherFailureClassifier(unittest.TestCase):
             "RUNTIME EXECUTION FAILURE")
 
     def test_dia5_inaccessible_path(self) -> None:
+        # R2B: the access-failure branch requires an AUTHORITATIVE denial, so the
+        # fixture injects a proven deny (verdict DIRECTLY-DENIED), not a weak
+        # substring-negative. The semantic requirement is unchanged.
         self.assertEqual(s.classify_publisher_failure(
-            {"terminal_reason": "service-died"}, _pm(access_contract="FAIL")),
+            {"terminal_reason": "service-died"},
+            _pm(access_contract="FAIL",
+                access_detail={"verdict": "DIRECTLY-DENIED",
+                               "deny_semantics_proven": True})),
             "DEPLOYMENT/ANCESTOR ACCESS FAILURE")
 
     def test_dia6_config_inconsistency(self) -> None:
