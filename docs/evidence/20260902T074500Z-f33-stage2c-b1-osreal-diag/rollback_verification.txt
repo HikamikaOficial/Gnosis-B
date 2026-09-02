@@ -1,0 +1,17 @@
+F-33 B1 OS-REAL DIAGNOSTIC RUN — post-run OS verification (independent)
+=====================================================================
+Service GnosisPubS2CBProbe : sc query -> ERROR 1060 (does not exist) -> ABSENT
+Worker account GnosisWkrS2CB: net user -> "user name could not be found" -> ABSENT
+Deployment/scaffold root    : C:\Users\nicol\AppData\Local\Temp\gnosis-2cb-b1-run-b1-1 -> ABSENT
+Residue manifest            : run-b1-1.residue.json -> ABSENT
+RESIDUAL OS STATE           : NONE
+Automatic rollback          : PASS (rollback_ok=true, scaffold_cleanup=removed)
+Manual cleanup required     : NO
+
+Source freeze (post-run):
+  HEAD                      : 06b948a89ce73a0ebb76bdae3f6cb8e3dc6f483e (unchanged)
+  src/gnosis diff vs 609c25f: 0
+  scripts hashes (pre==post): run_f33_stage2c_b1_osreal.py 28522c7...
+                              stage2cb.py                  8c287b0...
+                              stage2cb_ops.py              6f48f9d...
+Live ledger                 : 1 used / 4 remaining (L2 NOT consumed)
