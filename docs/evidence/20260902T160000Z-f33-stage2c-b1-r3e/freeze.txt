@@ -1,0 +1,4 @@
+F-17 provisioner/layout/winapi/observer: 0
+R3D gnosis_deployment+operator_stack (unchanged since b2602ca): 0
+Publisher client/pipe_server: 0
+changed src/gnosis this slice (b2602ca..working): src/gnosis/director/cli.py 

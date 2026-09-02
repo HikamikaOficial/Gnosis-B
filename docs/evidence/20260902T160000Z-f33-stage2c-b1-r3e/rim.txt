@@ -1,0 +1,12 @@
+RIM1: APPLIED / CAUGHT  (omit release_id when constructing DeploymentLayout)
+RIM2: APPLIED / CAUGHT  (hardcode release_id="B1")
+RIM3: APPLIED / CAUGHT  (restore fallback "current" when release_id missing)
+RIM5: APPLIED / CAUGHT  (trust an environment override of release_id)
+RIM6: APPLIED / CAUGHT  (parse cwd instead of the authoritative config)
+RIM9: APPLIED / CAUGHT  (accept a traversal/path-like release id)
+RIM4: STRUCTURAL — trust release_id from the untrusted brief — build_operator_composition reads release_id ONLY from the trusted config's `dep`; the brief is not in scope, so there is no brief-reading path to mutate
+RIM7: STRUCTURAL — allow a wrong release and probe/fallback to another root — no directory-probing loop exists; a single authoritative release_id is used and a wrong one fails at observe_deployment (no fallback)
+RIM8: STRUCTURAL — skip operator self-observation — observe_deployment's result (deployment_identity) is consumed downstream; removing it breaks composition construction, and the capture tests require it to be called
+RIM10: STRUCTURAL — use source-checkout release metadata at runtime — release_id is read from the deployed trusted config only; no source/checkout read exists (checkout-independence is structural)
+
+6/6 applied behavioral release-id mutants CAUGHT; 4 structural (documented)
