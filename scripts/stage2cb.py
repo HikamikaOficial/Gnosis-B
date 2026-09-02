@@ -623,6 +623,10 @@ class Stage2CBOrchestrator:
     operator_exit_code: int = 0       # the (faked, in dry) operator process exit
     residue_store: ResidueStore | None = None
     inject_crash_at: str | None = None     # hard-kill simulation boundary label
+    # The real operator argv for `gnosis run` (driver-supplied for B1). When None a
+    # DRY-ONLY placeholder is used; the real CLI contract is
+    # `run --config <path> --brief <path>` (both required; --brief is a JSON path).
+    operator_args: tuple[str, ...] | None = None
     error: str | None = None
     _hardkill: bool = field(default=False, init=False)
 
@@ -704,11 +708,13 @@ class Stage2CBOrchestrator:
             if self.consume_live_review:
                 self.budget.consume("governed live reviewer (operator subprocess)")
             res.spawn_true = True
+            operator_args = (self.operator_args if self.operator_args is not None
+                             else ("run", "--brief", self.config.run_id))
             with self.ops.spawn_intercept(self.operator_exit_code):
                 try:
                     GnosisDeploymentProvisioner.canonical_launch(
                         comp, reobserve_f17=self.reobserve_f17, spawn=True,
-                        operator_args=("run", "--brief", self.config.run_id))
+                        operator_args=operator_args)
                     res.operator_exit = 0  # spawn=True normally raises SystemExit
                 except SystemExit as se:
                     res.operator_exit = int(se.code or 0)
