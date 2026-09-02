@@ -1,0 +1,33 @@
+{
+  "mode": "os-real",
+  "real_ops_constructed": true,
+  "gates": ["HEAD checked", "preflight PASS; real backend authorized"],
+  "orchestration": {
+    "stages": ["base_provision", "composed_deployment", "trusted_record", "acls",
+               "service_start", "pipe_ready", "route_selected"],
+    "success": false,
+    "operator_exit": null,
+    "anchored": false,
+    "rollback_ok": true,
+    "launch_argv": [],
+    "error": "re-observed F-17 deployment digest does not match the trusted record",
+    "pipe_readiness": null,
+    "service_postmortem": null,
+    "publisher_failure_class": null
+  },
+  "bindings": {
+    "expected_head": "9d9380b363a3b44f3a71ba390b6942c007d98ea5",
+    "runtime_src": "C:\\Users\\nicol\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none",
+    "reviewer_executable": "C:\\Users\\nicol\\.local\\bin\\claude.exe",
+    "worker_username": "GnosisWkrS2CB",
+    "service_name": "GnosisPubS2CBProbe",
+    "pipe_name": "\\\\.\\pipe\\gnosis-s2cb-probe",
+    "residue_record_path": "C:\\Users\\nicol\\AppData\\Local\\Temp\\gnosis-2cb-b1-run-b1-1\\GnosisStage2CBRecovery\\run-b1-1.residue.json",
+    "f17_observer": "gnosis.trust.deployment.observe_deployment",
+    "os_backend": "stage2cb_ops.WindowsRealOperations",
+    "live_ledger": "1 used / 4 remaining"
+  },
+  "result": "OS-REAL-RAN",
+  "scaffold_cleanup": "removed",
+  "note": "NAMED-PIPE READINESS PASSED (WaitNamedPipeW observer; pipe_readiness=null). New blocker at canonical_launch startup self-verification (gnosis_deployment.py:372-374): re-observed F-17 deployment digest != trusted record. Fail-closed; auto-rollback PASS; residual NONE; L2 not consumed."
+}

@@ -1,0 +1,35 @@
+F-33 B1 OS-REAL RUN (R2C baseline) — post-run verification (independent)
+========================================================================
+Baseline HEAD : 9d9380b363a3b44f3a71ba390b6942c007d98ea5
+Command       : PYTHONUTF8=1 .venv/Scripts/python.exe scripts/run_f33_stage2c_b1_osreal.py \
+                --execute-os-real --confirm EXECUTE-F33-2CB1-OS-REAL \
+                --expected-head 9d9380b363a3b44f3a71ba390b6942c007d98ea5
+
+STAGES REACHED: base_provision, composed_deployment, trusted_record, acls,
+                service_start, pipe_ready, route_selected
+NAMED-PIPE READINESS: PASS (WaitNamedPipeW observer; pipe_readiness=null =>
+                no failure captured; historical "pipe not ready" was the harness
+                observation defect, now fixed by R2C)
+NEW BLOCKER   : "re-observed F-17 deployment digest does not match the trusted
+                record" -> src/gnosis/provision/gnosis_deployment.py:372-374
+                (canonical_launch startup self-verification, step 2). Fail-closed.
+L2 CONSUMED   : NO (failed before operator/reviewer launch). Ledger 1 used / 4 remaining.
+
+Rollback verification:
+  service GnosisPubS2CBProbe : sc query -> ERROR 1060 -> ABSENT
+  worker  GnosisWkrS2CB      : net user -> not found -> ABSENT
+  deployment/scaffold root   : gnosis-2cb-b1-run-b1-1 -> ABSENT
+  residue manifest           : run-b1-1.residue.json -> ABSENT
+  RESIDUAL OS STATE          : NONE
+  AUTOMATED ROLLBACK         : PASS (rollback_ok=true, scaffold_cleanup=removed)
+  MANUAL CLEANUP REQUIRED    : NO
+
+Source freeze (post-run):
+  HEAD unchanged             : 9d9380b...
+  src/gnosis diff vs 609c25f : 0
+  hashes pre==post           : run_f33=28522c7  stage2cb_ops=368532b
+                               publisher_client=8dbf7e0  provisioner=3ed63e7
+No implementation change during the run.
+
+Regression: F-17 provisioner + layout + gnosis_deployment = 56 passed, exit 0
+(the digest-verification gate logic is sound; the mismatch is a runtime inconsistency).
