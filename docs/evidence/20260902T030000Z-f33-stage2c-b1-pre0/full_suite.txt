@@ -1,0 +1,6 @@
+full suite done ec=1
+FAILED tests/test_work_queue.py::TestOwnershipIsTheClaimsPlane::test_concurrent_workers_never_run_a_brief_twice
+1 failed, 1738 passed, 1 skipped, 307 subtests passed in 731.68s (0:12:11)
+PYTEST_EXIT_CODE=1
+
+[exited with code 0]

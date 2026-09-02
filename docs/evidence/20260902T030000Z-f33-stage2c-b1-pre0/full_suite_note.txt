@@ -1,0 +1,5 @@
+Full suite: 1 failed, 1738 passed, 1 skipped, 307 subtests; PYTEST_EXIT_CODE=1.
+Failure = KNOWN pre-existing work_queue concurrency flake:
+  tests/test_work_queue.py::TestOwnershipIsTheClaimsPlane::test_concurrent_workers_never_run_a_brief_twice
+(aggravated by concurrent pytest runs during capture). Isolated rerun: 3/3 pass (exit 0).
+PRE0 changes are scripts/+tests/ only; no src/gnosis change. Classification: RED - KNOWN PRE-EXISTING FLAKE.
