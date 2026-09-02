@@ -1,0 +1,8 @@
+ADM1: APPLIED / CAUGHT  (any NT SERVICE substring -> PASS)
+ADM2: APPLIED / CAUGHT  (friendly-name absence -> FAIL)
+ADM3: APPLIED / CAUGHT  (leaf grant -> full ancestor PASS)
+ADM4: APPLIED / CAUGHT  (UNKNOWN -> access root cause)
+ADM5: APPLIED / CAUGHT  (ignore explicit deny ACE)
+ADM6: APPLIED / CAUGHT  (temp-path presence -> access FAIL)
+
+6/6 applied access-producer mutants CAUGHT
