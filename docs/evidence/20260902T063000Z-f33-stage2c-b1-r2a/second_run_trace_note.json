@@ -1,0 +1,9 @@
+{
+  "note": "Second B1 OS-real run (pre-R2A) trace, captured from operator ! stdout.",
+  "result": "OS-REAL-RAN", "orchestration_error": "publisher pipe not ready",
+  "stages": ["base_provision","composed_deployment","trusted_record","acls","service_start"],
+  "canonical_pipe": "\\.\pipe\gnosis-s2cb-probe",
+  "rollback_ok": true, "scaffold_cleanup": "removed",
+  "residual_after": "NONE (worker/service/scaffold all absent)",
+  "note2": "This run predates R2A instrumentation, so it lacked structured readiness/postmortem; R2A adds them for the next OS-real diagnostic run."
+}
