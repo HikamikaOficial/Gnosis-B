@@ -47,7 +47,10 @@ _TRUST_PREFIX = "gnosis/trust/"
 _ENTRY_NAME = "operator_entry.py"
 _MANIFEST_NAME = "APPLICATION.json"
 _MANIFEST_SCHEMA = "gnosis.application_manifest.v1"
-_COMPOSED_RECORD_SCHEMA = "gnosis.composed_record.v1"
+# R3D: the trusted composed record is v2 (adds effective_deployment_digest). The
+# baked startup verifier still only consumes application_tree_digest (present in
+# both), but must accept the current record schema — v1 records fail closed.
+_COMPOSED_RECORD_SCHEMA = "gnosis.composed_record.v2"
 
 # Fail-closed parser bounds (defence in depth; a manifest/record far beyond the
 # real closure is refused rather than measured).

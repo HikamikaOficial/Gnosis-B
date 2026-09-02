@@ -726,6 +726,11 @@ class Stage2CBOrchestrator:
     ops: OperationsBackend
     budget: LiveCallBudget
     reobserve_f17: Callable[[], str]
+    # R3D: whole-root observer used at PROVISION time (post-application) to measure
+    # the effective deployment identity. Distinct from reobserve_f17 (which is R3B-
+    # recorder-wrapped for the launch snapshot) so provisioning never perturbs the
+    # identity-delta launch capture. Defaults to reobserve_f17 when unset.
+    observe_effective: Callable[[], str] | None = None
     observe_fn: Any = None            # injected deployment observer (dry stand-in)
     inject_fail_after: str | None = None   # failure-injection point label
     consume_live_review: bool = True  # the positive path uses one live reviewer call
@@ -802,8 +807,14 @@ class Stage2CBOrchestrator:
             self._stage(res, "base_provision")
 
             # -- composed deployment (provision-time gate inside) ---------------
+            # R3D: observe_effective measures the final whole-root identity AFTER the
+            # application tree is deployed. It uses the same canonical whole-root
+            # observer as canonical_launch, but a distinct (non-R3B-recording)
+            # binding so the identity-delta recorder's launch snapshot is untouched.
             comp: ComposedDeployment = GnosisDeploymentProvisioner(
-                _SRC(), base_provision=lambda: base).provision()
+                _SRC(), base_provision=lambda: base,
+                observe_effective=self.observe_effective or self.reobserve_f17
+                ).provision()
             journal.register("composed-cleanup",
                              lambda: GnosisDeploymentProvisioner.cleanup(comp))
             self._stage(res, "composed_deployment")

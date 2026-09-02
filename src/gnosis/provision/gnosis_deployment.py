@@ -65,8 +65,11 @@ from gnosis.provision.operator_stack import (
     verify_application_tree,
 )
 
-COMPOSED_IDENTITY_SCHEMA = "gnosis.composed_deployment.v1"
-COMPOSED_RECORD_SCHEMA = "gnosis.composed_record.v1"
+# R3D: v2 introduces the effective (post-application) whole-root deployment
+# identity as a first-class operand. v1 records/digests are NOT auto-upgraded — a
+# v1 record fails closed under the new production path (no silent migration).
+COMPOSED_IDENTITY_SCHEMA = "gnosis.composed_deployment.v2"
+COMPOSED_RECORD_SCHEMA = "gnosis.composed_record.v2"
 _COMPOSED_RECORD_NAME = "GNOSIS_COMPOSED.json"
 _WORKER_IMAGE_REL = "gnosis/director/deterministic_worker.py"
 _MAX_RECORD_BYTES = 65_536
@@ -94,6 +97,7 @@ class ComposedDeployment:
     worker_image: Path
     application: DeployedApplication
     f17_deployment_digest: str
+    effective_deployment_digest: str
     composed_deployment_digest: str
     composed_record_path: Path
     launch_argv: tuple[str, ...]
@@ -105,6 +109,7 @@ class ComposedDeployment:
             "worker_image": str(self.worker_image),
             "f17_deployment_digest": self.f17_deployment_digest,
             "application_tree_digest": self.application.manifest.tree_digest,
+            "effective_deployment_digest": self.effective_deployment_digest,
             "composed_deployment_digest": self.composed_deployment_digest,
             "composed_record_path": str(self.composed_record_path),
             "launch_argv": list(self.launch_argv),
@@ -112,13 +117,20 @@ class ComposedDeployment:
 
 
 def composed_deployment_digest(f17_deployment_digest: str,
-                               application_tree_digest: str) -> str:
-    """One deterministic digest binding both deployment surfaces (domain-separated;
-    no F-17 identity semantics changed — this is an additive composition digest)."""
+                               application_tree_digest: str,
+                               effective_deployment_digest: str) -> str:
+    """One deterministic digest binding ALL THREE deployment identities
+    (domain-separated by `COMPOSED_IDENTITY_SCHEMA`): the immutable base F-17
+    provenance, the closed-world application identity, and the effective whole-root
+    identity of the FINAL executable one-tree. No F-17 identity semantics changed —
+    `f17_deployment_digest` keeps its historical meaning as base provenance; the
+    effective identity is the additive R3D operand. A record that omits or mismatches
+    any operand cannot reproduce this digest (fail closed)."""
     canonical = json.dumps({
         "schema": COMPOSED_IDENTITY_SCHEMA,
         "f17_deployment_digest": f17_deployment_digest,
         "application_tree_digest": application_tree_digest,
+        "effective_deployment_digest": effective_deployment_digest,
     }, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -142,9 +154,10 @@ def f17_publisher_files(source_root: Path) -> list[tuple[str, str]]:
 @dataclass(frozen=True)
 class ComposedRecord:
     schema: str
-    f17_deployment_digest: str
-    application_tree_digest: str
-    composed_deployment_digest: str
+    f17_deployment_digest: str          # immutable base F-17 provenance (pre-app)
+    application_tree_digest: str        # closed-world F-33 application identity
+    effective_deployment_digest: str    # R3D: final whole-root identity (post-app)
+    composed_deployment_digest: str     # binds base + application + effective
     package_root: str
     operator_entry_relpath: str
     worker_image_relpath: str
@@ -154,6 +167,7 @@ class ComposedRecord:
             "schema": self.schema,
             "f17_deployment_digest": self.f17_deployment_digest,
             "application_tree_digest": self.application_tree_digest,
+            "effective_deployment_digest": self.effective_deployment_digest,
             "composed_deployment_digest": self.composed_deployment_digest,
             "package_root": self.package_root,
             "operator_entry_relpath": self.operator_entry_relpath,
@@ -163,8 +177,8 @@ class ComposedRecord:
 
 _RECORD_KEYS = frozenset({
     "schema", "f17_deployment_digest", "application_tree_digest",
-    "composed_deployment_digest", "package_root", "operator_entry_relpath",
-    "worker_image_relpath",
+    "effective_deployment_digest", "composed_deployment_digest", "package_root",
+    "operator_entry_relpath", "worker_image_relpath",
 })
 
 
@@ -223,16 +237,19 @@ def read_composed_record(path: Path) -> ComposedRecord:
     if data["schema"] != COMPOSED_RECORD_SCHEMA:
         raise GnosisDeploymentError(f"unexpected composed record schema {data['schema']!r}")
     for k in ("f17_deployment_digest", "application_tree_digest",
-              "composed_deployment_digest"):
+              "effective_deployment_digest", "composed_deployment_digest"):
         if not _is_hex64(data[k]):
             raise GnosisDeploymentError(f"composed record {k} is not a 64-hex digest")
     for k in ("package_root", "operator_entry_relpath", "worker_image_relpath"):
         if not isinstance(data[k], str) or not data[k]:
             raise GnosisDeploymentError(f"composed record {k} is not a non-empty string")
     # Internal consistency: the record's own composed digest must derive from its
-    # own two halves (a malformed record that lies about its composition fails).
+    # own THREE identities (base + application + effective). A record that lies
+    # about its composition — or mixes operands from different deployments — cannot
+    # reproduce the binding and fails closed.
     if composed_deployment_digest(data["f17_deployment_digest"],
-                                  data["application_tree_digest"]) != data[
+                                  data["application_tree_digest"],
+                                  data["effective_deployment_digest"]) != data[
             "composed_deployment_digest"]:
         raise GnosisDeploymentError("composed record composed digest is inconsistent")
     return ComposedRecord(**data)
@@ -243,9 +260,15 @@ class GnosisDeploymentProvisioner:
     F-17 Provisioner (privileged in production; a controlled fixture in tests)."""
 
     def __init__(self, source_root: Path, *,
-                 base_provision: Callable[[], BaseDeployment]) -> None:
+                 base_provision: Callable[[], BaseDeployment],
+                 observe_effective: Callable[[], str]) -> None:
         self._source_root = Path(source_root)
         self._base_provision = base_provision
+        # R3D: the canonical whole-root observer, called AFTER the application tree
+        # is deployed, to measure the effective (final executable) deployment
+        # identity. Production wires it to observe_deployment(...).digest() — the
+        # SAME observer canonical_launch re-runs before spawn.
+        self._observe_effective = observe_effective
 
     def provision(self) -> ComposedDeployment:
         base = self._base_provision()  # F-17: runtime + trust plane + service/account
@@ -266,11 +289,22 @@ class GnosisDeploymentProvisioner:
         except OperatorStackError as exc:
             self._rollback_or_unknown(base, exc)
 
-        digest = composed_deployment_digest(base.deployment_digest, measured)
+        # R3D: measure the EFFECTIVE whole-root identity AFTER the application tree
+        # is deployed and verified — the identity of the final executable one-tree.
+        try:
+            effective = self._observe_effective()
+        except Exception as exc:  # noqa: BLE001
+            self._rollback_or_unknown(base, exc)
+        if not _is_hex64(effective):
+            self._rollback_or_unknown(
+                base, GnosisDeploymentError("effective deployment digest is invalid"))
+
+        digest = composed_deployment_digest(base.deployment_digest, measured, effective)
         record = ComposedRecord(
             schema=COMPOSED_RECORD_SCHEMA,
             f17_deployment_digest=base.deployment_digest,
             application_tree_digest=measured,
+            effective_deployment_digest=effective,
             composed_deployment_digest=digest,
             package_root=str(package_root),
             operator_entry_relpath=app.entry_path.name,
@@ -288,6 +322,7 @@ class GnosisDeploymentProvisioner:
             layout=base.layout, package_root=package_root,
             operator_entry=app.entry_path, worker_image=app.worker_image,
             application=app, f17_deployment_digest=base.deployment_digest,
+            effective_deployment_digest=effective,
             composed_deployment_digest=digest, composed_record_path=record_path,
             launch_argv=launch_argv)
 
@@ -295,7 +330,8 @@ class GnosisDeploymentProvisioner:
         # re-verify the whole composition. Only a fully verified deployment is
         # returned usable.
         try:
-            self.verify(comp, expect_f17_digest=base.deployment_digest)
+            self.verify(comp, expect_f17_digest=base.deployment_digest,
+                        expect_effective=effective)
         except GnosisDeploymentError as exc:
             self._rollback_or_unknown(base, exc)
         return comp
@@ -312,12 +348,14 @@ class GnosisDeploymentProvisioner:
             f"composed provisioning failed; base rolled back: {exc}") from exc
 
     @staticmethod
-    def verify(comp: ComposedDeployment, *, expect_f17_digest: str | None = None) -> None:
+    def verify(comp: ComposedDeployment, *, expect_f17_digest: str | None = None,
+               expect_effective: str | None = None) -> None:
         """Fail closed unless: the deployed application matches its manifest; the
         re-measured tree digest matches; the trusted record (read from disk) agrees
-        on the application digest, the F-17 digest and the composed digest; and the
-        launch is isolated. `expect_f17_digest`, when given, is the freshly observed
-        F-17 deployment digest that must equal the record's."""
+        on the application digest, the base F-17 provenance, the effective whole-root
+        identity and the composed binding of all three; and the launch is isolated.
+        `expect_f17_digest` is the base F-17 provenance; `expect_effective` is the
+        freshly observed effective whole-root identity that must equal the record's."""
         ok, problems = verify_application_tree(comp.package_root,
                                                comp.application.manifest)
         if not ok:
@@ -336,8 +374,13 @@ class GnosisDeploymentProvisioner:
             comp.f17_deployment_digest
         if record.f17_deployment_digest != f17_digest:
             raise GnosisDeploymentError(
-                "F-17 deployment digest does not match the trusted record")
-        redigest = composed_deployment_digest(f17_digest, measured)
+                "F-17 base provenance does not match the trusted record")
+        effective = expect_effective if expect_effective is not None else \
+            comp.effective_deployment_digest
+        if record.effective_deployment_digest != effective:
+            raise GnosisDeploymentError(
+                "effective deployment identity does not match the trusted record")
+        redigest = composed_deployment_digest(f17_digest, measured, effective)
         if redigest != record.composed_deployment_digest:
             raise GnosisDeploymentError("composed deployment identity mismatch")
         if record.worker_image_relpath != _WORKER_IMAGE_REL:
@@ -365,13 +408,18 @@ class GnosisDeploymentProvisioner:
         and verification cannot be disabled.
         """
         record = read_composed_record(comp.composed_record_path)
-        # (2) fresh F-17 re-observation.
-        observed_f17 = reobserve_f17()
-        if not _is_hex64(observed_f17):
-            raise GnosisDeploymentError("re-observed F-17 deployment digest is invalid")
-        if observed_f17 != record.f17_deployment_digest:
+        # (2) fresh EFFECTIVE whole-root re-observation. `reobserve_f17` is the
+        # canonical whole-root observer; because the application tree is co-located
+        # under trust_root (one-tree), what it observes at launch is the EFFECTIVE
+        # final deployment identity — which must equal the record's effective digest
+        # (NOT the pre-application base provenance: that was the R3A/R3C collision).
+        observed_effective = reobserve_f17()
+        if not _is_hex64(observed_effective):
+            raise GnosisDeploymentError("re-observed effective deployment digest is invalid")
+        if observed_effective != record.effective_deployment_digest:
             raise GnosisDeploymentError(
-                "re-observed F-17 deployment digest does not match the trusted record")
+                "re-observed effective deployment identity does not match the trusted "
+                "record")
         # (3) re-load the deployed manifest fail-closed and re-measure from bytes.
         try:
             manifest = load_application_manifest(comp.package_root)
@@ -389,8 +437,13 @@ class GnosisDeploymentProvisioner:
             raise GnosisDeploymentError("worker image is not a measured manifest file")
         if not (comp.package_root / record.worker_image_relpath).is_file():
             raise GnosisDeploymentError("canonical worker image is not deployed")
-        # (5)+(6) recompute and compare the composed digest against the trusted one.
-        redigest = composed_deployment_digest(observed_f17, measured)
+        # (5)+(6) recompute the composed binding from ALL THREE identities — the
+        # record's immutable base F-17 provenance, the freshly re-measured
+        # application identity and the freshly observed effective identity — and
+        # compare against the trusted composed digest. Any substrate/app/injected-
+        # file mutation or record operand mix fails closed here or above.
+        redigest = composed_deployment_digest(record.f17_deployment_digest, measured,
+                                              observed_effective)
         if redigest != record.composed_deployment_digest:
             raise GnosisDeploymentError("composed deployment identity mismatch")
         # (8) canonical isolated launch of the MEASURED entry only.

@@ -41,7 +41,8 @@ from gnosis.provision.operator_stack import (
 )
 
 SRC = Path(__file__).resolve().parents[1] / "src"
-F17_DIGEST = "f" * 64
+F17_DIGEST = "f" * 64        # base F-17 provenance (pre-application)
+EFFECTIVE = "e" * 64         # R3D effective whole-root identity (post-application)
 
 
 class _Base(unittest.TestCase):
@@ -73,9 +74,13 @@ class _Base(unittest.TestCase):
                               rollback=_rb)
 
     def _prov(self) -> GnosisDeploymentProvisioner:
-        return GnosisDeploymentProvisioner(SRC, base_provision=self._base_provision)
+        return GnosisDeploymentProvisioner(
+            SRC, base_provision=self._base_provision,
+            observe_effective=self._observer(EFFECTIVE))
 
-    def _observer(self, digest: str = F17_DIGEST):
+    def _observer(self, digest: str = EFFECTIVE):
+        # the injected whole-root observer; defaults to the effective identity so
+        # canonical_launch's fresh effective check passes on an unchanged tree.
         return lambda: digest
 
 
@@ -92,7 +97,9 @@ class TestProvisionGate(_Base):
         rec = read_composed_record(comp.composed_record_path)
         self.assertEqual(rec.application_tree_digest, comp.application.manifest.tree_digest)
         self.assertEqual(rec.f17_deployment_digest, F17_DIGEST)
-        GnosisDeploymentProvisioner.verify(comp, expect_f17_digest=F17_DIGEST)
+        self.assertEqual(rec.effective_deployment_digest, EFFECTIVE)
+        GnosisDeploymentProvisioner.verify(comp, expect_f17_digest=F17_DIGEST,
+                                           expect_effective=EFFECTIVE)
 
     def test_only_one_trust_copy(self) -> None:
         comp = self._prov().provision()
@@ -129,7 +136,8 @@ class TestProvisionGate(_Base):
                 raise RuntimeError("rollback boom")
             return BaseDeployment(layout=self.layout, deployment_digest=F17_DIGEST,
                                   rollback=_rb)
-        prov = GnosisDeploymentProvisioner(SRC, base_provision=_base_bad_rollback)
+        prov = GnosisDeploymentProvisioner(SRC, base_provision=_base_bad_rollback,
+                                          observe_effective=self._observer(EFFECTIVE))
         with self.assertRaises(GnosisDeploymentError) as cm:
             prov.provision()
         self.assertIn("unknown state", str(cm.exception))
@@ -179,7 +187,8 @@ class TestProvisionGateAssurance(_Base):
         def _base_bad_rollback() -> BaseDeployment:
             return BaseDeployment(layout=self.layout, deployment_digest=F17_DIGEST,
                                   rollback=_rb_boom)
-        prov = GnosisDeploymentProvisioner(SRC, base_provision=_base_bad_rollback)
+        prov = GnosisDeploymentProvisioner(SRC, base_provision=_base_bad_rollback,
+                                          observe_effective=self._observer(EFFECTIVE))
         with mock.patch.object(
                 GnosisDeploymentProvisioner, "verify",
                 side_effect=GnosisDeploymentError("SENTINEL")), \
@@ -193,15 +202,16 @@ class TestComposedIdentity(_Base):
         comp = self._prov().provision()
         self.assertEqual(
             comp.composed_deployment_digest,
-            composed_deployment_digest(F17_DIGEST, comp.application.manifest.tree_digest))
+            composed_deployment_digest(F17_DIGEST, comp.application.manifest.tree_digest,
+                                       EFFECTIVE))
 
     def test_changes_if_application_changes(self) -> None:
-        self.assertNotEqual(composed_deployment_digest(F17_DIGEST, "a" * 64),
-                            composed_deployment_digest(F17_DIGEST, "b" * 64))
+        self.assertNotEqual(composed_deployment_digest(F17_DIGEST, "a" * 64, EFFECTIVE),
+                            composed_deployment_digest(F17_DIGEST, "b" * 64, EFFECTIVE))
 
     def test_changes_if_f17_digest_changes(self) -> None:
-        self.assertNotEqual(composed_deployment_digest("d" * 64, "x" * 64),
-                            composed_deployment_digest("e" * 64, "x" * 64))
+        self.assertNotEqual(composed_deployment_digest("d" * 64, "x" * 64, EFFECTIVE),
+                            composed_deployment_digest("a" * 64, "x" * 64, EFFECTIVE))
 
     def test_record_reader_rejects_malformed(self) -> None:
         comp = self._prov().provision()
@@ -255,7 +265,7 @@ class TestPreLaunchGate(_Base):
         comp = self._comp()
         with self.assertRaises(GnosisDeploymentError):
             GnosisDeploymentProvisioner.canonical_launch(
-                comp, reobserve_f17=self._observer("e" * 64))
+                comp, reobserve_f17=self._observer("d" * 64))
 
     def test_e9_application_digest_change_refused(self) -> None:
         comp = self._comp()
@@ -271,10 +281,12 @@ class TestPreLaunchGate(_Base):
         # what is actually deployed.
         other_app = "a" * 64
         rec = {
-            "schema": "gnosis.composed_record.v1",
+            "schema": "gnosis.composed_record.v2",
             "f17_deployment_digest": F17_DIGEST,
             "application_tree_digest": other_app,
-            "composed_deployment_digest": composed_deployment_digest(F17_DIGEST, other_app),
+            "effective_deployment_digest": EFFECTIVE,
+            "composed_deployment_digest": composed_deployment_digest(
+                F17_DIGEST, other_app, EFFECTIVE),
             "package_root": str(self.pkg),
             "operator_entry_relpath": "operator_entry.py",
             "worker_image_relpath": "gnosis/director/deterministic_worker.py",
@@ -371,10 +383,12 @@ class TestStartupSelfVerify(_Base):
         comp = self._provisioned()
         other = "a" * 64
         rec = {
-            "schema": "gnosis.composed_record.v1",
+            "schema": "gnosis.composed_record.v2",
             "f17_deployment_digest": F17_DIGEST,
             "application_tree_digest": other,
-            "composed_deployment_digest": composed_deployment_digest(F17_DIGEST, other),
+            "effective_deployment_digest": EFFECTIVE,
+            "composed_deployment_digest": composed_deployment_digest(
+                F17_DIGEST, other, EFFECTIVE),
             "package_root": str(self.pkg),
             "operator_entry_relpath": "operator_entry.py",
             "worker_image_relpath": "gnosis/director/deterministic_worker.py",

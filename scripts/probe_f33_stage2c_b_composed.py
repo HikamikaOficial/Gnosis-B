@@ -54,7 +54,8 @@ from gnosis.provision.layout import DeploymentLayout
 from gnosis.provision.operator_stack import canonical_package_root
 
 SRC = REPO / "src"
-F17_DIGEST = "f" * 64  # DRY-RUN stand-in for the observed F-17 deployment digest
+F17_DIGEST = "f" * 64  # DRY-RUN stand-in for the base F-17 provenance
+EFFECTIVE = "e" * 64   # R3D DRY-RUN stand-in for the effective whole-root identity
 
 
 class Report:
@@ -115,7 +116,8 @@ def dry_run(rep: Report, root: Path) -> None:
     base_provision, _base_state = dry_run_base_provision(layout)
 
     # -- PROVISION-TIME GATE ------------------------------------------------
-    prov = GnosisDeploymentProvisioner(SRC, base_provision=base_provision)
+    prov = GnosisDeploymentProvisioner(SRC, base_provision=base_provision,
+                                       observe_effective=lambda: EFFECTIVE)
     comp = prov.provision()
     rep.require("PROVISION.returns_verified_composed",
                 isinstance(comp, ComposedDeployment))
@@ -136,12 +138,13 @@ def dry_run(rep: Report, root: Path) -> None:
             code_base=str(root / "c2"), state_base=str(root / "s2"),
             work_base=str(root / "w2"), release_id="S2CB2"))
 
-        def _boom(comp_, *, expect_f17_digest=None):  # type: ignore[no-untyped-def]
+        def _boom(comp_, *, expect_f17_digest=None, expect_effective=None):  # type: ignore[no-untyped-def]
             raise GnosisDeploymentError("INJECTED provision-verify failure")
         GnosisDeploymentProvisioner.verify = staticmethod(_boom)  # type: ignore[assignment]
         raised = False
         try:
-            GnosisDeploymentProvisioner(SRC, base_provision=bp2).provision()
+            GnosisDeploymentProvisioner(SRC, base_provision=bp2,
+                                        observe_effective=lambda: EFFECTIVE).provision()
         except GnosisDeploymentError:
             raised = True
         rep.require("PROVISION.gate_fail_closed_and_rollback",
@@ -151,7 +154,7 @@ def dry_run(rep: Report, root: Path) -> None:
 
     # -- PRE-LAUNCH GATE ----------------------------------------------------
     def observe_ok() -> str:
-        return F17_DIGEST
+        return EFFECTIVE   # launch observes the effective whole-root identity
 
     argv = GnosisDeploymentProvisioner.canonical_launch(
         comp, reobserve_f17=observe_ok, spawn=False,
@@ -175,8 +178,8 @@ def dry_run(rep: Report, root: Path) -> None:
     # negative: F-17 re-observation mismatch
     try:
         GnosisDeploymentProvisioner.canonical_launch(
-            comp, reobserve_f17=lambda: "e" * 64)
-        rep.fail("PRELAUNCH.f17_mismatch_refused", "launch did not refuse f17 mismatch")
+            comp, reobserve_f17=lambda: "d" * 64)
+        rep.fail("PRELAUNCH.f17_mismatch_refused", "launch did not refuse effective mismatch")
     except GnosisDeploymentError:
         rep.ok("PRELAUNCH.f17_mismatch_refused")
 

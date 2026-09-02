@@ -211,17 +211,27 @@ def run_driver(dcfg: DriverConfig, *, execute_os_real: bool, confirm: str,
         if ops is None:
             return trace  # a gate refused; real ops NOT constructed
         reobserve = make_real_reobserve(dcfg.stage, recorder)
+        # R3D: a distinct (non-recording) whole-root observer for the provision-time
+        # effective measurement — same observation, but it must not write the R3B
+        # launch snapshot.
+        observe_effective = make_real_reobserve(dcfg.stage)
         observe_fn = None  # -> Provisioner uses real observe_deployment (proven)
     else:
         ops = dry_ops if dry_ops is not None else sops.DryOperations()
-        reobserve = (lambda: "f" * 64)   # dry stand-in (no real deployment exists)
+        # dry stand-ins (no real deployment exists). base provenance "f", effective
+        # whole-root "e" (post-app, distinct from base) — and the launch observer
+        # returns the SAME effective so the canonical-launch gate passes on the
+        # unchanged dry deployment.
+        reobserve = (lambda: "e" * 64)
+        observe_effective = (lambda: "e" * 64)
         observe_fn = (lambda c: s.FakeObserved("f" * 64))
 
     write_operator_inputs(dcfg)
     store = s.ResidueStore(dcfg.stage.residue_record_path(), dcfg.stage.run_id)
     orch = s.Stage2CBOrchestrator(
         config=dcfg.stage, ops=ops, budget=s.LiveCallBudget(used=dcfg.live_used),
-        reobserve_f17=reobserve, observe_fn=observe_fn, residue_store=store,
+        reobserve_f17=reobserve, observe_effective=observe_effective,
+        observe_fn=observe_fn, residue_store=store,
         operator_args=dcfg.operator_args(), identity_recorder=recorder)
     res = orch.run()
     trace["orchestration"] = {
