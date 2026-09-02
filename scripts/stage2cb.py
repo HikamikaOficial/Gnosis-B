@@ -89,6 +89,36 @@ def wait_pipe_ready(pipe_name: str, *,
     return ReadinessResult(False, "timeout", polls, now() - start)
 
 
+def classify_publisher_failure(readiness: dict[str, Any],
+                               postmortem: dict[str, Any]) -> str:
+    """Map structured readiness + service post-mortem to a concrete root-cause
+    class. NEVER concludes a topology/path cause from a path string alone — it
+    requires an observed access-contract failure. Returns one of the fixed labels
+    or AMBIGUOUS."""
+    reason = readiness.get("terminal_reason")
+    if reason == "ready":
+        return "READY"
+    if reason == "observation-error":
+        return "READINESS OBSERVATION FAILURE"
+    running = bool(postmortem.get("service_running_observed"))
+    if reason == "service-died" or not running:
+        if postmortem.get("runtime_exe_exists") is False:
+            return "RUNTIME EXECUTION FAILURE"
+        if (postmortem.get("service_entry_exists") is False
+                or postmortem.get("config_path_exists") is False):
+            return "PUBLISHER CONFIGURATION FAILURE"
+        if postmortem.get("access_contract") == "FAIL":
+            return "DEPLOYMENT/ANCESTOR ACCESS FAILURE"
+        exit_code = postmortem.get("service_exit_code")
+        if isinstance(exit_code, int) and exit_code != 0:
+            return "SERVICE PROCESS EARLY EXIT"
+        return "SERVICE PROCESS START FAILURE"
+    if reason == "timeout" and running:
+        # service alive but the pipe never appeared -> pipe-server init failed.
+        return "PIPE SERVER INITIALIZATION FAILURE"
+    return "AMBIGUOUS"
+
+
 def _atomic_write_json(path: Path, obj: dict[str, Any]) -> None:
     """Transactional write: temp file in the same dir, flush + fsync, atomic
     replace. A partial/truncated record can never be observed; the prior valid
@@ -477,6 +507,11 @@ class OperationsBackend(Operations, Protocol):
     # pipe_name is the FULL local path (\\.\pipe\<name>); service_name enables a
     # liveness check during bounded readiness.
     def pipe_ready(self, pipe_name: str, service_name: str) -> bool: ...
+    # R2A diagnostics (read-only): the structured readiness result of the last
+    # pipe_ready call, and a service post-mortem gathered on failure.
+    def last_readiness(self) -> dict[str, Any]: ...
+    def service_postmortem(self, service_name: str,
+                           config: Stage2CBConfig) -> dict[str, Any]: ...
     def service_stop(self, name: str) -> None: ...
     # operator process: canonical_launch(spawn=True) intercept seam. Returns a
     # context manager; while active, process creation is faked (dry) or real
@@ -651,6 +686,10 @@ class OrchestrationResult:
     route: OperatorRouteSelection | None
     launch_argv: tuple[str, ...] | None
     spawn_true: bool
+    # R2A diagnostics: populated on a publisher-pipe failure (before rollback).
+    pipe_readiness: dict[str, Any] | None = None
+    service_postmortem: dict[str, Any] | None = None
+    publisher_failure_class: str | None = None
 
 
 @dataclass
@@ -738,7 +777,15 @@ class Stage2CBOrchestrator:
                              lambda: self.ops.service_stop(self.config.service_name))
             self._stage(res, "service_start")
             if not self.ops.pipe_ready(self.config.pipe_name, self.config.service_name):
-                raise OrchestrationError("publisher pipe not ready")
+                # R2A: capture structured diagnostics + a service post-mortem BEFORE
+                # rollback so the failure mechanism is establishable, not guessed.
+                res.pipe_readiness = self.ops.last_readiness()
+                res.service_postmortem = self.ops.service_postmortem(
+                    self.config.service_name, self.config)
+                res.publisher_failure_class = classify_publisher_failure(
+                    res.pipe_readiness, res.service_postmortem)
+                raise OrchestrationError(
+                    f"publisher pipe not ready [{res.publisher_failure_class}]")
             self._stage(res, "pipe_ready")
 
             # -- route selection: real reviewer/publisher/worker, no replay -----

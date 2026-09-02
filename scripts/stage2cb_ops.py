@@ -33,6 +33,7 @@ import stage2cb
 
 import gnosis.provision.gnosis_deployment as _gd
 from gnosis.provision.provisioner import RealOperations
+from gnosis.provision.provisioner import service_imagepath as _service_imagepath
 
 
 class _Fail(RuntimeError):
@@ -48,7 +49,9 @@ class DryOperations:
                  fail_op: str | None = None,
                  fail_cleanup: tuple[str, ...] = (),
                  utilities: bool = True, elevated: bool = True,
-                 anchored: bool = True, pipe_not_ready: bool = False) -> None:
+                 anchored: bool = True, pipe_not_ready: bool = False,
+                 readiness_reason: str = "timeout",
+                 postmortem: dict[str, Any] | None = None) -> None:
         self.log: list[tuple[str, tuple[Any, ...]]] = []
         self._accounts = set(existing_accounts)
         self._services = set(existing_services)
@@ -59,6 +62,9 @@ class DryOperations:
         self._elevated = elevated
         self._anchored = anchored
         self._pipe_not_ready = pipe_not_ready
+        self._readiness_reason = readiness_reason
+        self._postmortem = postmortem
+        self._last_readiness: dict[str, Any] = {}
         self._last_spawn: tuple[tuple[str, ...], int] | None = None
 
     def _rec(self, op: str, *args: Any) -> None:
@@ -146,7 +152,29 @@ class DryOperations:
 
     def pipe_ready(self, pipe_name: str, service_name: str) -> bool:
         self._rec("pipe_ready", pipe_name, service_name)
-        return not self._pipe_not_ready
+        ready = not self._pipe_not_ready
+        reason = "ready" if ready else self._readiness_reason
+        self._last_readiness = {
+            "terminal_reason": reason, "expected_pipe": pipe_name,
+            "timeout_s": 15.0, "poll_interval_s": 0.25,
+            "poll_count": 1 if ready else 60, "elapsed_s": 0.0 if ready else 15.0,
+            "service_running_observed": service_name in self._services,
+            "pipe_seen": ready,
+            "observation_error": (reason == "observation-error") or None}
+        return ready
+
+    def last_readiness(self) -> dict[str, Any]:
+        return self._last_readiness
+
+    def service_postmortem(self, service_name: str, config: Any) -> dict[str, Any]:
+        self._rec("service_postmortem", service_name)
+        if self._postmortem is not None:
+            return self._postmortem
+        return {"scm_state": "RUNNING" if service_name in self._services else "ABSENT",
+                "service_running_observed": service_name in self._services,
+                "service_exit_code": None, "runtime_exe_exists": True,
+                "service_entry_exists": True, "config_path_exists": True,
+                "access_contract": "UNKNOWN"}
 
     def service_stop(self, name: str) -> None:
         self._rec("service_stop", name)
@@ -262,14 +290,75 @@ class WindowsRealOperations:
 
     def pipe_ready(self, pipe_name: str, service_name: str) -> bool:
         # pipe_name is the EXACT full local path (\\.\pipe\<name>) — checked as-is,
-        # never re-prefixed. Bounded readiness with Publisher liveness.
+        # never re-prefixed. Bounded readiness with Publisher liveness. Same
+        # decision as R1; only diagnostic capture is added (no behavior change).
         import time
         result = stage2cb.wait_pipe_ready(
             pipe_name,
             pipe_exists=lambda: Path(pipe_name).exists(),
             service_alive=lambda: self._service_running(service_name),
             now=time.monotonic, timeout_s=15.0, poll_s=0.25, sleep=time.sleep)
+        self._last_readiness = {
+            "terminal_reason": result.reason, "expected_pipe": pipe_name,
+            "timeout_s": 15.0, "poll_interval_s": 0.25, "poll_count": result.polls,
+            "elapsed_s": result.elapsed_s,
+            "service_running_observed": self._service_running(service_name),
+            "pipe_seen": result.ready,
+            "observation_error": (result.reason == "observation-error") or None}
         return result.ready
+
+    def last_readiness(self) -> dict[str, Any]:
+        return getattr(self, "_last_readiness", {})
+
+    def _sc_state(self, name: str) -> tuple[str, int | None]:
+        rc, out = self._f17.run(["sc.exe", "query", name])
+        if rc != 0:
+            return "ABSENT", None
+        up = out.upper()
+        state = ("RUNNING" if "RUNNING" in up else "START_PENDING"
+                 if "START_PENDING" in up else "STOPPED" if "STOPPED" in up else "UNKNOWN")
+        exit_code: int | None = None
+        for line in out.splitlines():
+            if "WIN32_EXIT_CODE" in line.upper():
+                try:
+                    exit_code = int(line.split(":")[1].strip().split()[0])
+                except (IndexError, ValueError):
+                    exit_code = None
+        return state, exit_code
+
+    def _access_contract(self, config: Any) -> str:
+        """Read-only: do the required objects grant the service identity R/RX?
+        PASS if all required objects show the service name/SID with an R grant;
+        FAIL if any required present object omits it; UNKNOWN if unparseable."""
+        lay = config.layout
+        required = [Path(lay.runtime_executable), Path(lay.service_entry),
+                    Path(lay.config_path)]
+        name = config.service_name
+        any_checked = False
+        for p in required:
+            if not p.exists():
+                continue
+            rc, out = self._f17.run(["icacls", str(p)])
+            if rc != 0:
+                return "UNKNOWN"
+            any_checked = True
+            if name not in out and "NT SERVICE" not in out.upper():
+                return "FAIL"
+        return "PASS" if any_checked else "UNKNOWN"
+
+    def service_postmortem(self, service_name: str, config: Any) -> dict[str, Any]:
+        lay = config.layout
+        state, exit_code = self._sc_state(service_name)
+        return {
+            "scm_state": state, "service_running_observed": state == "RUNNING",
+            "service_exit_code": exit_code,
+            "effective_command": _service_imagepath(
+                lay.runtime_executable, lay.service_entry, lay.config_path),
+            "runtime_exe_exists": Path(lay.runtime_executable).exists(),
+            "service_entry_exists": Path(lay.service_entry).exists(),
+            "config_path_exists": Path(lay.config_path).exists(),
+            "deployment_root": lay.code_base,
+            "access_contract": self._access_contract(config)}
 
     def service_stop(self, name: str) -> None:
         self._f17.run(["sc.exe", "stop", name])

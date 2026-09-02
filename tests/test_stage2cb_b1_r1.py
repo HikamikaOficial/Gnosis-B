@@ -139,7 +139,8 @@ class TestDriverScaffoldCleanup(unittest.TestCase):
         # rollback retires the residue record, driver removes its scaffold.
         t = self._run(sops.DryOperations(pipe_not_ready=True))
         self.assertFalse(t["orchestration"]["success"])
-        self.assertEqual(t["orchestration"]["error"], "publisher pipe not ready")
+        # R2A enriches the message with the failure class; behavior is unchanged.
+        self.assertIn("publisher pipe not ready", t["orchestration"]["error"])
         self.assertTrue(t["orchestration"]["rollback_ok"])
         self.assertEqual(t["scaffold_cleanup"], "removed")
         self.assertFalse(Path(self.dcfg.stage.layout.code_base).parent.exists())

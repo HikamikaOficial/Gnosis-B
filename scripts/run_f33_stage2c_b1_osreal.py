@@ -213,7 +213,11 @@ def run_driver(dcfg: DriverConfig, *, execute_os_real: bool, confirm: str,
         "stages": res.stages, "success": res.success,
         "operator_exit": res.operator_exit, "anchored": res.anchored,
         "rollback_ok": res.rollback_ok, "launch_argv": list(res.launch_argv or ()),
-        "error": orch.error}
+        "error": orch.error,
+        # R2A: structured publisher-failure diagnostics (populated on pipe failure).
+        "pipe_readiness": res.pipe_readiness,
+        "service_postmortem": res.service_postmortem,
+        "publisher_failure_class": res.publisher_failure_class}
     trace["real_ops_constructed"] = isinstance(ops, sops.WindowsRealOperations)
     trace["result"] = "DRY-TRACE-OK" if not execute_os_real else "OS-REAL-RAN"
     _finalize_scaffold(dcfg, trace, cleanup_scaffold)
