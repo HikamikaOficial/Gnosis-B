@@ -164,6 +164,27 @@ class TestDriverScaffoldCleanup(unittest.TestCase):
         for nested in ("operator_config", "operator_brief", "residue_record"):
             self.assertTrue(str(inv[nested]).startswith(str(root)))
 
+    def test_cleanup_failure_reports_failed_not_removed(self) -> None:
+        # RBM4 assurance: when scaffold rmtree FAILS (root remains), the reported
+        # status must NOT be "removed" — it must reflect the failure. Compares
+        # actual filesystem truth against the reported cleanup state.
+        from unittest import mock
+        scaffold_root = Path(self.dcfg.stage.layout.code_base).parent
+        (scaffold_root / "GnosisStage2CBRecovery" / "inputs").mkdir(parents=True,
+                                                                    exist_ok=True)
+        # no residue record present -> reaches the rmtree branch
+        self.assertFalse(self.dcfg.stage.residue_record_path().is_file())
+        trace: dict = {}
+        # force rmtree to be a no-op so the scaffold REMAINS after "cleanup"
+        with mock.patch("shutil.rmtree", side_effect=lambda *a, **k: None) as m:
+            drv._finalize_scaffold(self.dcfg, trace, cleanup_scaffold=True)
+        self.assertTrue(m.called)                              # cleanup attempted
+        self.assertTrue(scaffold_root.exists())               # deletion failed (fs truth)
+        self.assertNotEqual(trace["scaffold_cleanup"], "removed")   # not falsely clean
+        self.assertIn("FAILED", trace["scaffold_cleanup"])    # honest failure report
+        # recovery ownership remains derivable (deterministic run-bound root)
+        self.assertTrue(str(scaffold_root).endswith("gnosis-2cb-b1-run-b1-1"))
+
 
 if __name__ == "__main__":
     unittest.main()
