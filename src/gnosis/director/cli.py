@@ -228,10 +228,10 @@ def _run(config_path: Path, brief_path: Path) -> tuple[int, dict[str, Any]]:
         "work_status": outcome.work_status,
         "publication_state": outcome.publication_state,
         "success": outcome.success, "detail": outcome.reason,
-        # R4A: surface the governed report's problems (e.g. a WorkerLaunchFailed's
-        # native winerr + failing call) so a BLOCKED run is attributable. This adds
-        # only evidence; success/exit-code semantics are unchanged.
-        "problems": list(outcome.problems),
+        # R4A.1: expose ONLY the dedicated, reason-scoped worker-launch attribution
+        # (failing WinAPI call + native winerr), never the general problems channel.
+        # null for success and for reviewer/governance/evidence failures.
+        "worker_launch_diagnostic": outcome.worker_launch_diagnostic,
     }
     if outcome.success:
         return EXIT_OK, record

@@ -341,6 +341,51 @@ class PublicationCompositionInputs:
     epoch: int = 0
 
 
+# R4A.1: worker-launch pipeline-error reasons whose preserved `problems_encountered`
+# line is a SAFE launcher attribution — the failing WinAPI call/stage + native winerr
+# from the F-17 `WorkerLaunchFailed` message — and NEVER reviewer/provider/evidence
+# content. `WorkerIdentityMismatch` is a `WorkerLaunchFailed` subclass raised on the
+# same launch path; the pipeline records the reason as `pipeline_error:<type name>`.
+_WORKER_LAUNCH_REASONS = frozenset({
+    "pipeline_error:WorkerLaunchFailed",
+    "pipeline_error:WorkerIdentityMismatch",
+})
+# Bound the exposed diagnostic so it can never become an unbounded reflection channel.
+# Every legitimate launcher message is short: the winerr forms (`"<Api> failed (winerr
+# N)"`) are ~55 chars, and the longest legitimate case — a `WorkerIdentityMismatch`
+# listing the full dangerous-privilege set — stays well under this ceiling. The cap is
+# defense-in-depth against an anomalous/injected over-long line; an over-cap line is
+# rejected (returns None) rather than truncated, so a native winerr is never silently
+# dropped (§8).
+_WORKER_LAUNCH_DIAG_MAX = 512
+
+
+def _worker_launch_diagnostic(work: PipelineOutcome) -> str | None:
+    """Return ONLY the authoritative worker-launch attribution line, else None.
+
+    ACTIVATION is bound to the typed pipeline-error reason — not the status, not a
+    `pipeline_error:` prefix, not a substring of any problem text: the field is
+    populated exclusively when the governed failure reason is a worker-launch
+    exception class (`_WORKER_LAUNCH_REASONS`). SELECTION then takes the single
+    `problems_encountered` line the pipeline recorded for that exception
+    (`f"{type(exc).__name__}: {exc}"`, which starts with the reason's type name) —
+    never the whole list, never a convergence finding, evidence-failure message, or
+    reviewer/provider string. The launcher messages carry only the failing WinAPI
+    call and native winerr (audited SAFE); this forwards that one line unchanged
+    (bounded), reconstructing nothing.
+    """
+    if work.reason_code not in _WORKER_LAUNCH_REASONS:
+        return None
+    prefix = work.reason_code.split(":", 1)[1] + ": "   # e.g. "WorkerLaunchFailed: "
+    for line in work.report.problems_encountered:
+        if line.startswith(prefix):
+            # Bounded: a real launcher line is short (API + "failed (winerr N)"). An
+            # over-long line is anomalous; prefer an UNAVAILABLE diagnostic over a
+            # truncation that could silently drop the trailing native winerr (§8).
+            return line if len(line) <= _WORKER_LAUNCH_DIAG_MAX else None
+    return None
+
+
 @dataclass(frozen=True)
 class OperatorOutcome:
     """The operator-visible result. `success` is TRUE only when governed work
@@ -352,11 +397,14 @@ class OperatorOutcome:
     work_status: str
     publication_state: str | None
     reason: str
-    # R4A: the governed report's `problems_encountered`, surfaced verbatim so a
-    # BLOCKED run's underlying detail (e.g. a WorkerLaunchFailed's native winerr and
-    # failing call, already present in the F-17 exception message) is OBSERVABLE
-    # without changing F-17, the pipeline, or the governed BLOCKED decision.
-    problems: tuple[str, ...] = ()
+    # R4A.1: the SINGLE authoritative worker-launch attribution line (failing WinAPI
+    # call/stage + native winerr from the F-17 `WorkerLaunchFailed`), and ONLY that —
+    # populated exclusively for the worker-launch pipeline-error class, never the
+    # general `problems_encountered` channel (which can carry reviewer, provider, or
+    # evidence content). None for success and for every other (reviewer/governance/
+    # evidence) failure. Evidence only: it never affects success/work_status/exit/
+    # verifier/reviewer/publication/retry.
+    worker_launch_diagnostic: str | None = None
 
 
 class ProductionComposition:
@@ -391,7 +439,7 @@ class ProductionComposition:
                 work_status=work.status.value, publication_state=None,
                 reason=f"governed work not COMPLETED ({work.reason_code}); "
                        "no publication attempted",
-                problems=work.report.problems_encountered)
+                worker_launch_diagnostic=_worker_launch_diagnostic(work))
         launched = self._runner.last_launched
         spec = self._runner.last_spec
         run_id = self._runner.last_run_id
@@ -399,8 +447,7 @@ class ProductionComposition:
             return OperatorOutcome(
                 success=False, task_id=work.task_id, run_id=run_id,
                 work_status=work.status.value, publication_state=None,
-                reason="no trusted launch was recorded for the governed run",
-                problems=work.report.problems_encountered)
+                reason="no trusted launch was recorded for the governed run")
         try:
             tree = observe_git_tree(self._repo_path)
             bundle_dir = self._publication.evidence_root / run_id
