@@ -1,0 +1,12 @@
+WDM1: APPLIED / CAUGHT  (drop the native code/message from the diagnostic extraction)
+WDM2: APPLIED / CAUGHT  (transform/truncate the message (corrupt stage/winerr))
+WDM4: APPLIED / CAUGHT  (hide the winerr in the operator record)
+WDM8: APPLIED / CAUGHT  (skip the governed BLOCKED mapping (claim success))
+WDM3: STRUCTURAL — always claim process_created=false — the diagnostic surfaces the F-17 message which ENCODES the failing call (CreateProcessWithLogonW = not created; AssignProcessToJobObject = created-then-failed); no separate boolean to falsify
+WDM5: STRUCTURAL — diagnostic failure suppresses WorkerLaunchFailed — the BLOCKED decision is computed from work.status; `problems` is a pure attr read that cannot alter success/work_status (test_governed_blocked_preserved)
+WDM6: STRUCTURAL — log secret credential material — the diagnostic forwards problems verbatim and adds no new source; it cannot introduce secrets the report lacked (test_secret_safety_passthrough_only)
+WDM7: STRUCTURAL — retry/fallback after launch failure — no retry/fallback code added; the outcome is a single OperatorOutcome
+WDM9: STRUCTURAL — alter the LaunchSpec while observing — the diagnostic never touches the LaunchSpec/runner (BLOCKED branch returns before runner access)
+WDM10: STRUCTURAL — modify historical F-17 launcher to obtain PASS — caught by the F-17 freeze: worker_launcher.py diff = NONE (F-17 unchanged)
+
+4/4 applied behavioral worker-diagnostic mutants CAUGHT; 6 structural (documented)

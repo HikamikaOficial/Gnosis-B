@@ -1,0 +1,4 @@
+== mypy ==
+Success: no issues found in 88 source files
+== ruff ==
+[*] 1 fixable with the `--fix` option.
