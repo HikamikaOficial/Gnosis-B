@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -26,10 +26,17 @@ from gnosis.director.publisher_client import InProcessPublisherClient
 
 
 @dataclass
+class _Report:
+    # minimal stand-in for EngineerReport (R4A surfaces problems_encountered).
+    problems_encountered: tuple[str, ...] = ()
+
+
+@dataclass
 class _Work:
     status: ReportStatus
     task_id: str = "T-1"
     reason_code: str = "ok"
+    report: _Report = field(default_factory=_Report)
 
 
 class _FakePipeline:

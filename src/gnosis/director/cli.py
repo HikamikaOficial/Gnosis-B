@@ -228,6 +228,10 @@ def _run(config_path: Path, brief_path: Path) -> tuple[int, dict[str, Any]]:
         "work_status": outcome.work_status,
         "publication_state": outcome.publication_state,
         "success": outcome.success, "detail": outcome.reason,
+        # R4A: surface the governed report's problems (e.g. a WorkerLaunchFailed's
+        # native winerr + failing call) so a BLOCKED run is attributable. This adds
+        # only evidence; success/exit-code semantics are unchanged.
+        "problems": list(outcome.problems),
     }
     if outcome.success:
         return EXIT_OK, record

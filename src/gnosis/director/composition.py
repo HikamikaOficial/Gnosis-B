@@ -352,6 +352,11 @@ class OperatorOutcome:
     work_status: str
     publication_state: str | None
     reason: str
+    # R4A: the governed report's `problems_encountered`, surfaced verbatim so a
+    # BLOCKED run's underlying detail (e.g. a WorkerLaunchFailed's native winerr and
+    # failing call, already present in the F-17 exception message) is OBSERVABLE
+    # without changing F-17, the pipeline, or the governed BLOCKED decision.
+    problems: tuple[str, ...] = ()
 
 
 class ProductionComposition:
@@ -385,7 +390,8 @@ class ProductionComposition:
                 success=False, task_id=work.task_id, run_id=None,
                 work_status=work.status.value, publication_state=None,
                 reason=f"governed work not COMPLETED ({work.reason_code}); "
-                       "no publication attempted")
+                       "no publication attempted",
+                problems=work.report.problems_encountered)
         launched = self._runner.last_launched
         spec = self._runner.last_spec
         run_id = self._runner.last_run_id
@@ -393,7 +399,8 @@ class ProductionComposition:
             return OperatorOutcome(
                 success=False, task_id=work.task_id, run_id=run_id,
                 work_status=work.status.value, publication_state=None,
-                reason="no trusted launch was recorded for the governed run")
+                reason="no trusted launch was recorded for the governed run",
+                problems=work.report.problems_encountered)
         try:
             tree = observe_git_tree(self._repo_path)
             bundle_dir = self._publication.evidence_root / run_id
