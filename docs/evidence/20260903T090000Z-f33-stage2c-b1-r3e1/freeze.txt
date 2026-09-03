@@ -1,0 +1,3 @@
+F-17: 0
+R3D: 0
+Publisher/pipe: 0
