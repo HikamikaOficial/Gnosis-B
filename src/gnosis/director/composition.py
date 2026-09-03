@@ -124,6 +124,71 @@ class ProductionCompositionConfig:
     convergence_policy: ConvergencePolicy | None = None
 
 
+# --------------------------------------------------------------------------- #
+# Canonical operator-configuration writer (F-33 Stage 2C-B1-R3E.1).
+# The ONE production surface that constructs the operator configuration the deployed
+# `gnosis.director.cli.build_operator_composition` consumes. Production-equivalent
+# qualification (the B1 OS-real driver) and any future production entrypoint import
+# THIS writer — no second, independently-maintained schema. A future production
+# caller can build the config using only `gnosis.director.composition` (no scripts/).
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class OperatorConfigInputs:
+    """TRUSTED structured inputs for the operator configuration. Every value is
+    deployment-authority / trusted-config sourced — never operator work/brief input.
+    `release_id` is carried ONLY from the authoritative `DeploymentLayout.release_id`
+    (no fallback, hardcode, environment, cwd, or checkout lookup)."""
+
+    layout: DeploymentLayout
+    worker_username: str
+    trust_root: str
+    reviewer_binary: str
+    reviewer_id: str
+    policy_actor: str
+    director_root: str
+    repo_path: str
+    trust_state_root: str
+    evidence_root: str
+    repository_id: str
+    service_name: str
+    pipe_name: str
+    verifier_name: str
+    verifier_command: tuple[str, ...]
+
+
+# The mandatory production config contract (sections consumed by the reader
+# `gnosis.director.cli`). Kept here so the writer and any drift test share one source.
+OPERATOR_CONFIG_SECTIONS = ("deployment", "attribution", "operator", "publication",
+                            "verifier", "reviewer")
+
+
+def build_operator_config(inputs: OperatorConfigInputs) -> dict[str, Any]:
+    """THE canonical production writer of the operator configuration. It SERIALIZES
+    trusted values (it establishes no trust itself); the deployment section carries
+    the authoritative `release_id` verbatim from `inputs.layout.release_id`, so the
+    deployed operator reconstructs the EXACT release layout it was staged under."""
+    lay = inputs.layout
+    return {
+        "deployment": {
+            "code_base": lay.code_base, "state_base": lay.state_base,
+            "work_base": lay.work_base, "release_id": lay.release_id,
+            "worker_username": inputs.worker_username,
+            "trust_root": inputs.trust_root},
+        "attribution": {"reviewer_id": inputs.reviewer_id,
+                        "policy_actor": inputs.policy_actor},
+        "operator": {"director_root": inputs.director_root,
+                     "repo_path": inputs.repo_path},
+        "publication": {
+            "trust_state_root": inputs.trust_state_root,
+            "evidence_root": inputs.evidence_root,
+            "repository_id": inputs.repository_id,
+            "service_name": inputs.service_name, "pipe_name": inputs.pipe_name},
+        "verifier": {"name": inputs.verifier_name,
+                     "command": list(inputs.verifier_command)},
+        "reviewer": {"binary": inputs.reviewer_binary},
+    }
+
+
 def trusted_deployment_from_layout(layout: DeploymentLayout, worker_username: str,
                                    *, worker_integrity: str = "Medium"
                                    ) -> TrustedDeploymentInputs:

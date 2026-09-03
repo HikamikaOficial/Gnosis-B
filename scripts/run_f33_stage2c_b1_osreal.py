@@ -72,27 +72,28 @@ class DriverConfig:
 # Configuration loading (driver bootstrap; no production semantics).
 # ---------------------------------------------------------------------------
 def build_operator_config(cfg: s.Stage2CBConfig, reviewer_binary: str) -> dict[str, Any]:
-    """The trusted operator config `gnosis.director.cli` requires (exact sections:
-    deployment, attribution, operator, publication, verifier, reviewer)."""
+    """DELEGATES to the canonical production writer
+    (`gnosis.director.composition.build_operator_config`). The driver owns NO
+    operator-config schema of its own (R3E.1): it only maps its trusted Stage-2C-B
+    values into `OperatorConfigInputs`. release_id flows from the authoritative
+    `cfg.layout.release_id` — never redefined here."""
+    from gnosis.director.composition import (
+        OperatorConfigInputs,
+    )
+    from gnosis.director.composition import (
+        build_operator_config as _canonical_build_operator_config,
+    )
     lay = cfg.layout
-    return {
-        "deployment": {
-            "code_base": lay.code_base, "state_base": lay.state_base,
-            "work_base": lay.work_base, "release_id": lay.release_id,
-            "worker_username": cfg.worker_username,
-            "trust_root": lay.trust_root},
-        "attribution": {"reviewer_id": "claude-code-cli",
-                        "policy_actor": "gnosis-director"},
-        "operator": {"director_root": lay.state_base, "repo_path": str(REPO)},
-        "publication": {
-            "trust_state_root": lay.state_base, "evidence_root": lay.bundles_root,
-            "repository_id": "gnosis", "pipe_name": cfg.pipe_name,
-            "service_name": cfg.service_name},
-        "verifier": {"name": "gnosis-verify",
-                     "command": [str(Path(lay.runtime_executable)), "-I", "-B", "-c",
-                                 "raise SystemExit(0)"]},
-        "reviewer": {"binary": reviewer_binary},
-    }
+    return _canonical_build_operator_config(OperatorConfigInputs(
+        layout=lay, worker_username=cfg.worker_username, trust_root=lay.trust_root,
+        reviewer_binary=reviewer_binary, reviewer_id="claude-code-cli",
+        policy_actor="gnosis-director", director_root=lay.state_base,
+        repo_path=str(REPO), trust_state_root=lay.state_base,
+        evidence_root=lay.bundles_root, repository_id="gnosis",
+        service_name=cfg.service_name, pipe_name=cfg.pipe_name,
+        verifier_name="gnosis-verify",
+        verifier_command=(str(Path(lay.runtime_executable)), "-I", "-B", "-c",
+                          "raise SystemExit(0)")))
 
 
 def build_operator_brief(cfg: s.Stage2CBConfig) -> dict[str, Any]:
