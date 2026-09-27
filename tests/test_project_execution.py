@@ -31,7 +31,7 @@ from gnosis.trust.anchor import AnchorStore
 from gnosis.trust.worker_launcher import WorkerAccount
 from tests import trust_fixtures as tf
 from tests.test_cli_review_adapters import _PASS_REVIEW, _ScriptedAgent
-from tests.test_pipeline_trusted_execution import _SpyLauncher
+from tests.test_pipeline_trusted_execution import _SpyLaunched, _SpyLauncher
 
 
 @pytest.mark.skipif(os.name != "nt", reason="real Windows proof capture")
@@ -44,9 +44,23 @@ def test_project_dependencies_use_published_landed_parent(tmp_path: Path,
     target = subprocess.run(["git", "branch", "--show-current"], cwd=repo,
                             capture_output=True, text=True, check=True).stdout.strip()
     seen = []
+    check_workspaces = []
 
     class EditingLauncher(_SpyLauncher):
         def launch(self, spec):
+            if spec.run_id.startswith("check-"):
+                # Verification is now launched as a Worker too. Execute its real
+                # command instead of impersonating another provider edit. Only
+                # the Windows identity transition is replaced by this fixture.
+                workspace = Path(spec.cwd)
+                before = (workspace / "code.py").read_bytes()
+                with (Path(spec.stdout_path).open("wb") as out,
+                      Path(spec.stderr_path).open("wb") as err):
+                    checked = subprocess.run(spec.argv, cwd=workspace, stdout=out,
+                                             stderr=err, timeout=20, check=False)
+                assert (workspace / "code.py").read_bytes() == before
+                check_workspaces.append(workspace)
+                return _SpyLaunched(checked.returncode, False)
             path = Path(spec.cwd) / "code.py"
             seen.append(path.read_text())
             path.write_text(f"x = {self.launch_count + 2}\n")
@@ -145,6 +159,8 @@ def test_project_dependencies_use_published_landed_parent(tmp_path: Path,
             due = max(item[1] for item in waiting)
             restored.queue.clock = lambda: due + 1
             resumed = restored.run("replacement")
+    assert len(check_workspaces) >= 3
+    assert all(path.is_relative_to(tmp_path / "launch") for path in check_workspaces)
     if allow_integration:
         if takeover_during_reply:
             assert resumed.completed == ("P--parent", "P--child"), resumed.to_dict()
