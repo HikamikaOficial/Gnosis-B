@@ -12,9 +12,9 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
+from gnosis.director.check_recovery import ATTEMPT_SCHEMA, recover_check_outputs
 from gnosis.kernel.check_execution import CheckExecutionUnavailable
 from gnosis.kernel.file_lock import FileLock
-from gnosis.trust.check_recovery import ATTEMPT_SCHEMA, recover_check_outputs
 from gnosis.trust.launch_spec import LaunchSpec
 from gnosis.trust.worker_launcher import WorkerLauncher
 from gnosis.trust.worker_output import read_worker_output, retain_worker_output

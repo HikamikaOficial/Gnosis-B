@@ -127,7 +127,7 @@ class TestPositiveComposition(_Base):
         self.assertNotIn("ClaudeCodeCLIRunner", type(runner).__name__)
 
     def test_verification_uses_worker_boundary_and_protected_evidence(self) -> None:
-        from gnosis.trust.check_executor import WorkerCheckExecutor
+        from gnosis.director.check_executor import WorkerCheckExecutor
 
         config = self._config()
         pipeline = build_production_composition(config)

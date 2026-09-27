@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from gnosis.director.check_recovery import ATTEMPT_SCHEMA, recover_check_outputs
 from gnosis.kernel.check_execution import CheckExecutionUnavailable
 from gnosis.kernel.file_lock import FileLock
-from gnosis.trust.check_recovery import ATTEMPT_SCHEMA, recover_check_outputs
 from gnosis.trust.launch_spec import LaunchSpec
 
 
@@ -95,7 +95,7 @@ def test_hard_process_exit_leaves_recoverable_attributed_output(tmp_path):
     code = '''
 import os,sys
 from pathlib import Path
-from gnosis.trust.check_executor import WorkerCheckExecutor
+from gnosis.director.check_executor import WorkerCheckExecutor
 root=Path(sys.argv[1])
 class Launcher:
     def launch(self,spec):

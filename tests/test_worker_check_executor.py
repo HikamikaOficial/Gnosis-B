@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gnosis.trust.check_executor import CheckExecutionUnavailable, WorkerCheckExecutor
+from gnosis.director.check_executor import CheckExecutionUnavailable, WorkerCheckExecutor
 
 
 class Launcher:
@@ -105,7 +105,7 @@ def test_transport_wrapper_preserves_argv_and_cache_settings(tmp_path):
 
 
 def test_recovery_cannot_capture_an_active_executor(tmp_path):
-    from gnosis.trust.check_recovery import recover_check_outputs
+    from gnosis.director.check_recovery import recover_check_outputs
 
     class ActiveLauncher(Launcher):
         def launch(self, spec):

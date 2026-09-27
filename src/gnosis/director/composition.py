@@ -407,7 +407,7 @@ def build_production_composition(config: ProductionCompositionConfig, *,
 
     # Every candidate check crosses the same identity boundary as implementation.
     # Never reuse an operator-supplied local executor in the production graph.
-    from gnosis.trust.check_executor import WorkerCheckExecutor
+    from gnosis.director.check_executor import WorkerCheckExecutor
 
     _require(isinstance(config.verifier, CommandVerifier),
              "production verification requires a reproducible command verifier")
