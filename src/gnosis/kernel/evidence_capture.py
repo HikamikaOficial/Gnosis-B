@@ -123,6 +123,7 @@ from gnosis.trust.bundle_verify import (  # noqa: F401
 )
 
 from .canonical import hash_canonical
+from .check_execution import CheckExecutor
 from .git_evidence import (
     content_fingerprint,
     git_backend_and_version_qualified,
@@ -1058,13 +1059,18 @@ def check_environment(scratch: Path) -> dict[str, str]:
 
 
 def _run_check(repo: Path, command: CheckCommand, staging: Path,
-               lint_baseline: int, env: Mapping[str, str] | None = None) -> CheckResult:
+               lint_baseline: int, env: Mapping[str, str] | None = None,
+               executor: CheckExecutor | None = None) -> CheckResult:
     started = time.monotonic()
     try:
-        proc = subprocess.run(
-            list(command.argv), cwd=repo, capture_output=True, text=True, check=False,
-            env=dict(env) if env is not None else None, timeout=command.timeout_s,
-        )
+        if executor is None:
+            proc = subprocess.run(
+                list(command.argv), cwd=repo, capture_output=True, text=True, check=False,
+                env=dict(env) if env is not None else None, timeout=command.timeout_s,
+            )
+        else:
+            proc = executor.execute(command.argv, cwd=repo,
+                                    timeout_s=command.timeout_s, env=env)
     except subprocess.TimeoutExpired as exc:
         # Preserve a typed failing check; never turn timeout into an absent
         # result which could accidentally qualify under an empty check set.
@@ -1362,6 +1368,7 @@ def run_capture(
     allowed_writes: Sequence[str] = (),
     scratch: Path | None = None,
     now: Callable[[], str] = _utc_now,
+    executor: CheckExecutor | None = None,
 ) -> Capture:
     """Run the checks inside an observed interval, between two fingerprints.
 
@@ -1450,7 +1457,8 @@ def run_capture(
                         # worse than discovering it before.
                         for command in commands:
                             results.append(
-                                _run_check(repo, command, staging, lint_baseline, env))
+                                _run_check(repo, command, staging, lint_baseline, env,
+                                           executor=executor))
                         # Still inside the lock: a comparison taken after
                         # the handles are gone would have a window in it.
                         after_streams, failures = stream_inventory(

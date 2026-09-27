@@ -228,6 +228,7 @@ class WorkIntegrator:
         convergence_policy: ConvergencePolicy | None = None,
         scope: ExecutionScope | None = None,
         on_prepared: Callable[[PreparedIntegration], None] | None = None,
+        staging_root: Path | None = None,
     ) -> None:
         self.source_repo = Path(source_repo)
         self.worktrees = worktrees
@@ -247,6 +248,9 @@ class WorkIntegrator:
         self.target_branch = target_branch or self._current_branch()
         self.integration_root = Path(
             integration_root or (self.source_repo.parent / ".gnosis-integration"))
+        # Keep the coordination lock protected even when candidate verification
+        # needs a Worker-readable/writable scratch worktree.
+        self.staging_root = Path(staging_root) if staging_root is not None else self.integration_root
         self.lock_timeout_s = lock_timeout_s
         # Integration is the most sensitive action in this system: it
         # moves the branch everyone else builds on. Rule 13 is
@@ -456,7 +460,8 @@ class WorkIntegrator:
             )
 
         self._sweep_stale_staging()
-        staging = self.integration_root / f"merge-{task_id}-{uuid.uuid4().hex[:8]}"
+        self.staging_root.mkdir(parents=True, exist_ok=True)
+        staging = self.staging_root / f"merge-{task_id}-{uuid.uuid4().hex[:8]}"
         try:
             return self._merge_and_verify(
                 task_id, branch, base_sha, checkpoint_ref, changed, staging,
@@ -823,9 +828,9 @@ class WorkIntegrator:
         sweep: recovery is reconcile, and it runs under the integration
         lock so it cannot race a live one.
         """
-        if not self.integration_root.exists():
+        if not self.staging_root.exists():
             return
-        for candidate in self.integration_root.glob("merge-*"):
+        for candidate in self.staging_root.glob("merge-*"):
             if candidate.is_dir():
                 self._discard(candidate)
         _git(self.source_repo, ["worktree", "prune"])
@@ -842,7 +847,7 @@ class WorkIntegrator:
         """
         try:
             resolved = staging.resolve()
-            root = self.integration_root.resolve()
+            root = self.staging_root.resolve()
         except OSError:
             return
         if not staging.name.startswith("merge-") or root not in resolved.parents:

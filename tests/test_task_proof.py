@@ -118,6 +118,17 @@ def test_edits_after_review_refuse_copy(tmp_path: Path) -> None:
     assert not inputs["bundle_dir"].exists()
 
 
+def test_proof_reuses_assigned_verifier_execution_boundary(tmp_path: Path) -> None:
+    inputs = _inputs(tmp_path)
+    boundary = object()
+    inputs["verifier"].executor = boundary
+    with patch("gnosis.director.proof.run_capture",
+               side_effect=RuntimeError("boundary reached")) as capture:
+        with pytest.raises(RuntimeError, match="boundary reached"):
+            capture_task_proof(**inputs)
+    assert capture.call_args.kwargs["executor"] is boundary
+
+
 def test_unbounded_verifier_is_refused_before_copy(tmp_path: Path) -> None:
     inputs = _inputs(tmp_path)
     inputs["verifier"].timeout_s = None
@@ -188,6 +199,16 @@ def test_canonical_pipeline_to_proof_and_anchor_with_fake_worker(tmp_path: Path,
 
     class EditingLauncher(_SpyLauncher):
         def launch(self, spec):
+            if spec.run_id.startswith("check-"):
+                # Exercise the real verifier wrapper in this component test.
+                # Only the OS identity transition is replaced by this fake.
+                from test_pipeline_trusted_execution import _SpyLaunched
+
+                with (Path(spec.stdout_path).open("wb") as out,
+                      Path(spec.stderr_path).open("wb") as err):
+                    checked = subprocess.run(spec.argv, cwd=spec.cwd, stdout=out, stderr=err,
+                                             timeout=20, check=False)
+                return _SpyLaunched(checked.returncode, False)
             value = 1 if needs_fix and self.launch_count == 0 else 2
             (Path(spec.cwd) / "code.py").write_text(f"x = {value}\n")
             Path(spec.stderr_path).write_text("")

@@ -5,6 +5,19 @@
 Control. This document records evidence and gaps; it does not redefine acceptance.
 Progress percentages communicated to the operator are estimates, not this audit.
 
+**Verifier isolation update:** the b02f1cb installation candidate executes checks
+under the Director identity and is not ready for privileged candidate execution.
+The managed worktree now binds normal verification, proof recapture and merged
+tree verification to WorkerCheckExecutor. Two complete component paths passed;
+the wider regression passed 117 tests as session 23305. This does not establish actual
+Windows account separation. See V1_VERIFIER_ISOLATION_2026-09-27.md for current
+implementation and evidence. Original pinned-source full suite 47975 finished
+with 2188 passed, 72 skipped and two failed untracked-directory subtests caused by
+the preserved generated embedded test repositories. All 252 pinned file hashes
+matched. This full run is not a pass; the current candidate requires its own full
+run in the managed checkout. Subsequent recovery wiring passed 41 focused tests
+and 22 packaging/restart tests, with no real Worker-account qualification yet.
+
 Regression session 18197 passed: 2096 passed, 72 skipped, 389 subtests, 1687.98s.
 The 206-file frozen manifest matched afterward; JUnit is in
 .gnosis/evidence/v1-regression-final-candidate-20260927. Subsequent native-package

@@ -55,6 +55,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from .check_execution import CheckExecutionUnavailable, CheckExecutor
 from .redaction import redact
 
 
@@ -251,19 +252,24 @@ class CommandVerifier(Verifier):
     """Runs a shell command and treats a zero exit code as passing."""
 
     def __init__(self, name: str, command: Sequence[str] | str, timeout_s: float = 300.0,
-                 excerpt_chars: int = 2000):
+                 excerpt_chars: int = 2000, *, executor: CheckExecutor | None = None):
         self.name = name
         self.command = command
         self.timeout_s = timeout_s
         self.excerpt_chars = excerpt_chars
+        self.executor = executor
 
-    def run(self, cwd: Path) -> VerificationResult:
+    def run(self, cwd: Path) -> Evidence:
         argv = shlex.split(self.command) if isinstance(self.command, str) else list(self.command)
         started = time.monotonic()
         try:
-            proc = subprocess.run(
-                argv, cwd=str(cwd), capture_output=True, text=True, timeout=self.timeout_s,
-            )
+            if self.executor is None:
+                proc = subprocess.run(
+                    argv, cwd=str(cwd), capture_output=True, text=True, timeout=self.timeout_s,
+                    check=False,
+                )
+            else:
+                proc = self.executor.execute(argv, cwd=cwd, timeout_s=self.timeout_s)
             duration = time.monotonic() - started
             return VerificationResult(
                 name=self.name, passed=proc.returncode == 0, exit_code=proc.returncode,
@@ -271,9 +277,12 @@ class CommandVerifier(Verifier):
                 stdout_excerpt=redact(proc.stdout)[-self.excerpt_chars:],
                 stderr_excerpt=redact(proc.stderr)[-self.excerpt_chars:],
             )
+        except CheckExecutionUnavailable as exc:
+            return MalformedEvidence(self.name, f"verification infrastructure unavailable: {exc}")
         except subprocess.TimeoutExpired as exc:
             duration = time.monotonic() - started
-            captured = exc.stdout if isinstance(exc.stdout, str) else ""
+            captured = (exc.stdout.decode("utf-8", "replace") if isinstance(exc.stdout, bytes)
+                        else exc.stdout if isinstance(exc.stdout, str) else "")
             return VerificationResult(
                 name=self.name, passed=False, exit_code=None, duration_s=duration,
                 stdout_excerpt=redact(captured)[-self.excerpt_chars:],

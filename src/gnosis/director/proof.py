@@ -16,6 +16,7 @@ from gnosis.contracts.engineer_report import ReportStatus
 from gnosis.director.pipeline import PipelineOutcome, converged_on_valid_evidence
 from gnosis.director.publication import GitTreeEvidence, PublicationError
 from gnosis.kernel.canonical import hash_canonical
+from gnosis.kernel.check_execution import CheckExecutionUnavailable
 from gnosis.kernel.convergence import ReviewVerdict
 from gnosis.kernel.evidence_capture import CheckCommand, ChecksVerdict, run_capture
 from gnosis.kernel.subject import SubjectUnavailable, copy_subject, observe_subject
@@ -46,7 +47,8 @@ def _copy_artifact(source: Path, target: Path) -> None:
 
 def capture_task_proof(*, bundle_dir: Path, source: Path, brief: DirectorBrief,
                        work: PipelineOutcome, run_id: str, spec: LaunchSpec,
-                       verifier: Verifier, convergence_dir: Path) -> GitTreeEvidence:
+                       verifier: Verifier, convergence_dir: Path,
+                       snapshot_root: Path | None = None) -> GitTreeEvidence:
     """Create a fresh proof packet or fail closed, retaining failed evidence.
 
     This proves the reviewed filesystem content, not that it was merged into the
@@ -92,7 +94,10 @@ def capture_task_proof(*, bundle_dir: Path, source: Path, brief: DirectorBrief,
         if not argv:
             raise PublicationError("publication requires a nonempty verifier command")
         command = CheckCommand("verification", argv, timeout_s=timeout)
-        snapshot = copy_subject(source, bundle_dir.parent / f".{bundle_dir.name}-subject", subject)
+        snapshot_parent = snapshot_root if snapshot_root is not None else bundle_dir.parent
+        snapshot_name = (f".{bundle_dir.name}-subject" if snapshot_root is None else
+                         hash_canonical({"bundle": str(bundle_dir.absolute())})[:32])
+        snapshot = copy_subject(source, snapshot_parent / snapshot_name, subject)
         bundle_dir.mkdir(parents=True, exist_ok=False)
         # Raw output is forensic data. It cannot set any authority-bearing field.
         _copy_artifact(Path(final_result.stdout_path), bundle_dir / "raw" / "worker.stdout")
@@ -117,7 +122,11 @@ def capture_task_proof(*, bundle_dir: Path, source: Path, brief: DirectorBrief,
             _copy_artifact(item, bundle_dir / "raw" / "convergence" / item.name)
         if not artifacts:
             raise PublicationError("raw convergence evidence is empty")
-        capture = run_capture(snapshot, [command], bundle_dir)
+        if verifier.executor is None:
+            capture = run_capture(snapshot, [command], bundle_dir)
+        else:
+            capture = run_capture(snapshot, [command], bundle_dir, executor=verifier.executor,
+                                  scratch=snapshot.parent / f"{snapshot.name}-scratch")
         if (not capture.evidence_valid or capture.checks_verdict is not ChecksVerdict.ALL_CLEAN
                 or capture.exit_code != 0):
             raise PublicationError(
@@ -149,5 +158,5 @@ def capture_task_proof(*, bundle_dir: Path, source: Path, brief: DirectorBrief,
         if not verify_bundle(bundle_dir).verified:
             raise PublicationError("completed proof packet failed its integrity check")
         return GitTreeEvidence(subject.head_sha, str(digest))
-    except (OSError, ValueError, SubjectUnavailable) as exc:
+    except (OSError, ValueError, SubjectUnavailable, CheckExecutionUnavailable) as exc:
         raise PublicationError(f"task proof could not be captured: {exc}") from exc

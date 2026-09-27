@@ -126,6 +126,45 @@ class TestPositiveComposition(_Base):
         self.assertIsInstance(runner, TrustedExecutionRunner)
         self.assertNotIn("ClaudeCodeCLIRunner", type(runner).__name__)
 
+    def test_verification_uses_worker_boundary_and_protected_evidence(self) -> None:
+        from gnosis.trust.check_executor import WorkerCheckExecutor
+
+        config = self._config()
+        pipeline = build_production_composition(config)
+        executor = pipeline.verifier.executor
+        self.assertIsInstance(executor, WorkerCheckExecutor)
+        self.assertIs(executor.launcher, pipeline.scheduler.engine.cli_runner._port._launcher)
+        self.assertTrue(executor.output_root.is_relative_to(self.root / "launch"))
+        self.assertTrue(executor.evidence_root.is_relative_to(self.root / "director"))
+        self.assertIsNot(pipeline.verifier, config.verifier)
+        self.assertIsNone(config.verifier.executor)
+
+    def test_startup_recovers_verifier_output_without_launching_again(self) -> None:
+        config = self._config()
+        pipeline = build_production_composition(config)
+        executor = pipeline.verifier.executor
+        worker = mock.Mock()
+        worker.wait.return_value = (0, False, False)
+
+        def launch(spec):
+            Path(spec.stdout_path).write_bytes(b"recorded check output")
+            Path(spec.stderr_path).write_bytes(b"")
+            return worker
+
+        with mock.patch.object(executor.launcher, "launch", side_effect=launch):
+            result = executor.execute([sys.executable], cwd=self.repo, timeout_s=3)
+        self.assertEqual(result.returncode, 0)
+        records = list(executor.evidence_root.glob("check-*"))
+        self.assertEqual(len(records), 1)
+        retained = records[0] / "stdout"
+        # Model interruption before protected retention; staged bytes survive.
+        retained.unlink()
+        with mock.patch.object(TrustedWindowsWorkerLauncher, "launch",
+                               side_effect=AssertionError("recovery relaunched code")):
+            rebuilt = build_production_composition(config)
+        self.assertEqual(retained.read_bytes(), b"recorded check output")
+        self.assertEqual(rebuilt.verifier.executor.recover_outputs(), ())
+
 
 class TestFailClosedMatrix(_Base):
     def test_c1_invalid_deployment_runtime(self) -> None:

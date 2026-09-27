@@ -405,6 +405,24 @@ def build_production_composition(config: ProductionCompositionConfig, *,
                                              output_workspace=dep.launch_root / "outputs",
                                             mode=config.execution_mode)
 
+    # Every candidate check crosses the same identity boundary as implementation.
+    # Never reuse an operator-supplied local executor in the production graph.
+    from gnosis.trust.check_executor import WorkerCheckExecutor
+
+    _require(isinstance(config.verifier, CommandVerifier),
+             "production verification requires a reproducible command verifier")
+    assert isinstance(config.verifier, CommandVerifier)
+    verification_executor = WorkerCheckExecutor(
+        launcher=launcher, runtime=python_executable,
+        output_root=dep.launch_root / "verification-output",
+        evidence_root=op.director_root / "verification-evidence",
+        guard=scope.check if scope is not None else lambda: None,
+        is_cancelled=scope.cancellation.is_cancelled if scope is not None else lambda: False)
+    verification_executor.recover_outputs()
+    verifier = CommandVerifier(config.verifier.name, config.verifier.command,
+                               config.verifier.timeout_s, config.verifier.excerpt_chars,
+                               executor=verification_executor)
+
     # --- engine/scheduler: the trusted runner is the EXPLICIT implementer ------
     run_store = RunStore(op.director_root / "runs")
     engine = TaskEngine(run_store=run_store, cli_runner=trusted_runner)
@@ -424,7 +442,7 @@ def build_production_composition(config: ProductionCompositionConfig, *,
 
     pipeline = GovernedPipeline(
         director_root=op.director_root, scheduler=scheduler, repo_path=op.repo_path,
-        verifier=config.verifier, policy=config.policy,
+        verifier=verifier, policy=config.policy,
         review_runner=config.review_runner,
         fix_runner=trusted_runner,
         policy_actor=config.attribution.policy_actor,
@@ -542,7 +560,8 @@ class ProductionComposition:
                  repo_path: Path,
                  publisher_client: PublisherClient,
                  scope: ExecutionScope | None = None,
-                 integration_target: str | None = None) -> None:
+                 integration_target: str | None = None,
+                 verification_workspace: Path | None = None) -> None:
         self._pipeline = pipeline
         self._runner = runner
         self._publication = publication
@@ -550,6 +569,7 @@ class ProductionComposition:
         self._publisher_client = publisher_client
         self.scope = scope
         self.integration_target = integration_target
+        self.verification_workspace = verification_workspace
 
     def _guard(self) -> None:
         if self.scope is not None:
@@ -717,6 +737,8 @@ class ProductionComposition:
             integrator = WorkIntegrator(self._repo_path, self._pipeline.worktrees,
                 self._pipeline.verifier, target_branch=self.integration_target,
                 integration_root=self._pipeline.inbox.layout.root / "integration",
+                staging_root=(self.verification_workspace / "integration"
+                              if self.verification_workspace is not None else None),
                 policy=self._pipeline.policy, approvals=self._pipeline.approvals,
                 policy_actor=self._pipeline.policy_actor, scope=self.scope,
                 on_prepared=prepared, convergence_policy=self._pipeline.convergence_policy)
@@ -764,6 +786,8 @@ class ProductionComposition:
                 bundle_dir=target, source=self._pipeline._exec_root(work.task_id),
                 brief=brief, work=work, run_id=run_id, spec=spec,
                 verifier=self._pipeline.verifier,
+                snapshot_root=(self.verification_workspace / "proof"
+                               if self.verification_workspace is not None else None),
                 convergence_dir=self._pipeline.inbox.layout.outbox / f"{work.task_id}-convergence")
 
         phases = getattr(self._pipeline, "checkpoints", None)
@@ -893,4 +917,7 @@ def build_production_deployment(config: ProductionCompositionConfig,
     publisher_client = PipePublisherClient(publication.pipe_name)
     return ProductionComposition(pipeline, runner, publication,
                                  config.operator.repo_path, publisher_client, scope,
-                                 config.integration_target)
+                                 config.integration_target,
+                                 config.deployment.launch_root / "checks" /
+                                 hash_canonical({"director_root":
+                                     str(config.operator.director_root.resolve()).casefold()})[:32])
