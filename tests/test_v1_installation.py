@@ -1,3 +1,4 @@
+import json
 import shutil
 import sys
 from dataclasses import replace
@@ -7,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import pytest
 from stage2cb import OrchestrationError, ResidueStore
-from v1_installation import install_persistent, verify_persistent
+from v1_installation import finalize_existing, install_persistent, verify_persistent
 
 from tests.test_codex_package import make_package
 from tests.test_git_package import package as make_git_package
@@ -67,6 +68,86 @@ def test_non_elevated_preflight_has_no_install_mutations(tmp_path):
     assert not config.residue_record_path().exists()
     assert not ops.ops_of("create_worker")
     assert not ops.ops_of("copytree")
+
+
+def test_application_identity_bound_before_service_start(tmp_path, monkeypatch):
+    from gnosis.trust.publisher_service import ServiceConfig
+
+    config, ops = prepared(tmp_path)
+    effective = "b" * 64
+    observations = iter((F17D, effective))
+    original_start = ops.service_start
+
+    def start(name):
+        assert ServiceConfig.load(Path(config.layout.config_path)).expected_deployment_digest == effective
+        original_start(name)
+
+    monkeypatch.setattr(ops, "service_start", start)
+    result = install_persistent(config, ops, expected_head="test-head", actual_head="test-head",
+        f17_stable=True, source_root=Path(__file__).resolve().parents[1] / "src",
+        observe_effective=lambda: effective,
+        observe_fn=lambda _: FakeObserved(next(observations)))
+    assert result.f17_deployment_digest == F17D
+    assert result.effective_deployment_digest == effective
+    assert ops.ops_of("service_start")
+
+
+def test_finalization_drift_never_starts_service(tmp_path):
+    config, ops = prepared(tmp_path)
+    observations = iter((F17D, "c" * 64))
+    with pytest.raises(OrchestrationError, match="changed during application finalization"):
+        install_persistent(config, ops, expected_head="test-head", actual_head="test-head",
+            f17_stable=True, source_root=Path(__file__).resolve().parents[1] / "src",
+            observe_effective=lambda: "b" * 64,
+            observe_fn=lambda _: FakeObserved(next(observations)))
+    assert not ops.ops_of("service_start")
+    assert ResidueStore(config.residue_record_path(), config.run_id).load().status == "active"
+
+
+def test_verification_refuses_stale_publisher_expectation(tmp_path):
+    config, ops = prepared(tmp_path)
+    install(config, ops)
+    path = Path(config.layout.config_path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["expected_deployment_digest"] = "d" * 64
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(OrchestrationError, match="Publisher expectation differs"):
+        verify_persistent(config, observe_effective=lambda: F17D)
+
+
+@pytest.mark.parametrize("change", ["base", "unexpected", "worker", "drift"])
+def test_existing_finalization_only_repairs_known_intact_install(tmp_path, change):
+    config, ops = prepared(tmp_path)
+    effective = "b" * 64
+    observations = iter((F17D, effective))
+    installed = install_persistent(config, ops, expected_head="test-head", actual_head="test-head",
+        f17_stable=True, source_root=Path(__file__).resolve().parents[1] / "src",
+        observe_effective=lambda: effective,
+        observe_fn=lambda _: FakeObserved(next(observations)))
+    path = Path(config.layout.config_path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["expected_deployment_digest"] = "d" * 64 if change == "unexpected" else F17D
+    if change == "worker":
+        data["authorized_worker_sid"] = "S-1-5-21-unexpected"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    before = path.read_bytes()
+    ops.log.clear()
+    if change == "base":
+        assert finalize_existing(config, ops, observe_effective=lambda: effective,
+            observe_fn=lambda _: FakeObserved(effective)) == installed
+        assert verify_persistent(config, observe_effective=lambda: effective) == installed
+    else:
+        from gnosis.provision.gnosis_deployment import GnosisDeploymentError
+        with pytest.raises((OrchestrationError, GnosisDeploymentError)):
+            finalize_existing(config, ops,
+                observe_effective=lambda: "e" * 64 if change == "drift" else effective,
+                observe_fn=lambda _: FakeObserved(effective))
+        assert path.read_bytes() == before
+        assert not ops.ops_of("write_text")
+    assert not ops.ops_of("create_worker")
+    assert not ops.ops_of("copytree")
+    assert not ops.ops_of("protect_secret")
+    assert not ops.ops_of("service_start")
 
 
 @pytest.mark.parametrize("change", ["none", "application", "identity", "ownership"])

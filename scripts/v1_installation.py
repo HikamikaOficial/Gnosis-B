@@ -36,6 +36,13 @@ from gnosis.provision.operator_stack import (
     canonical_package_root,
     load_application_manifest,
 )
+from gnosis.provision.provisioner import (
+    WELL_KNOWN_ADMINISTRATORS,
+    WELL_KNOWN_SYSTEM,
+    Provisioner,
+    ResolvedSids,
+)
+from gnosis.trust.publisher_service import ServiceConfig
 
 
 def install_pinned(config: Stage2CBConfig, ops: OperationsBackend, *,
@@ -56,7 +63,7 @@ def install_pinned(config: Stage2CBConfig, ops: OperationsBackend, *,
         observe_effective=observe_effective, observe_fn=observe_fn)
 
 
-def verify_persistent(config: Stage2CBConfig, *,
+def _verify_composed(config: Stage2CBConfig, *,
                       observe_effective: Callable[[], str]) -> ComposedDeployment:
     """Reconstruct from canonical paths and freshly verify a persisted install.
 
@@ -91,6 +98,53 @@ def verify_persistent(config: Stage2CBConfig, *,
     return comp
 
 
+def verify_persistent(config: Stage2CBConfig, *,
+                      observe_effective: Callable[[], str]) -> ComposedDeployment:
+    """Verify both the assembled release and the Publisher's active expectation."""
+    comp = _verify_composed(config, observe_effective=observe_effective)
+    publisher = ServiceConfig.load(Path(config.layout.config_path))
+    if publisher.expected_deployment_digest != comp.effective_deployment_digest:
+        raise OrchestrationError("Publisher expectation differs from verified composed deployment")
+    return comp
+
+
+def finalize_existing(config: Stage2CBConfig, ops: OperationsBackend, *,
+                      observe_effective: Callable[[], str],
+                      observe_fn: Any = None) -> ComposedDeployment:
+    """Repair only the known pre-assembly binding on an intact owned installation.
+
+    Maintenance callers must stop the service before this operation and restart
+    it only after success. No account, application, credential or record is
+    replaced. An arbitrary mismatched expectation is refused, never adopted.
+    """
+    if not ops.is_elevated():
+        raise OrchestrationError("finalization requires elevated maintenance")
+    store = ResidueStore(config.residue_record_path(), config.run_id)
+    with FileLock(store.path.parent / "installation.lock", timeout_s=30):
+        comp = _verify_composed(config, observe_effective=observe_effective)
+        publisher = ServiceConfig.load(Path(config.layout.config_path))
+        sids = ResolvedSids(WELL_KNOWN_ADMINISTRATORS, WELL_KNOWN_SYSTEM,
+            ops.resolve_sid(f"NT SERVICE\\{config.service_name}"),
+            ops.resolve_sid(config.worker_username))
+        if (publisher.service_name != config.service_name
+                or publisher.pipe_name != config.pipe_name
+                or publisher.service_sid != sids.service
+                or publisher.authorized_worker_sid != sids.worker
+                or publisher.trust_state_root != Path(config.layout.state_base)
+                or publisher.evidence_root != Path(config.layout.bundles_root)
+                or publisher.log_path != Path(config.layout.log_path)
+                or publisher.expected_deployment_digest not in
+                    (comp.f17_deployment_digest, comp.effective_deployment_digest)):
+            raise OrchestrationError("existing Publisher configuration is not the known assembly binding")
+        provisioner = Provisioner(config=config.provision_config(), ops=ops,
+            runtime_src=config.runtime_src, publisher_files=(), bootstrap_files=(),
+            toolchain_files=(), observe_fn=observe_fn)
+        digest, _ = provisioner.activate_release(config.layout, sids)
+        if digest != comp.effective_deployment_digest:
+            raise OrchestrationError("deployment changed during existing-install finalization")
+        return verify_persistent(config, observe_effective=observe_effective)
+
+
 def install_persistent(config: Stage2CBConfig, ops: OperationsBackend, *,
                        expected_head: str, actual_head: str, f17_stable: bool,
                        source_root: Path, observe_effective: Callable[[], str],
@@ -123,12 +177,20 @@ def install_persistent(config: Stage2CBConfig, ops: OperationsBackend, *,
         store.write_initial(config)
         # Never accept a fixed test password on this persistent route. Plaintext
         # is handed only to the existing account/DPAPI provisioning operation.
-        provision, _handle = make_base_provision(config, ops, observe_fn=observe_fn,
+        provision, handle = make_base_provision(config, ops, observe_fn=observe_fn,
                                                 worker_password=secrets.token_urlsafe(36))
         base = provision()
         store.mark_acquired({config.worker_username, config.service_name, *config.owned_roots()})
-        GnosisDeploymentProvisioner(source_root, base_provision=lambda: base,
+        composed = GnosisDeploymentProvisioner(source_root, base_provision=lambda: base,
             observe_effective=observe_effective).provision()
+        # The base identity predates application assembly. Use the maintenance
+        # activation path to observe the complete release and bind the Publisher
+        # before starting it; never substitute a stored digest for observation.
+        digest, _ = handle["provisioner"].activate_release(
+            config.layout, handle["install"].sids)
+        if digest != composed.effective_deployment_digest:
+            raise OrchestrationError("deployment changed during application finalization")
+        verify_persistent(config, observe_effective=observe_effective)
         ops.service_start(config.service_name)
         if not ops.pipe_ready(config.pipe_name, config.service_name):
             raise OrchestrationError("installed Publisher is not ready; retain journal for recovery")
