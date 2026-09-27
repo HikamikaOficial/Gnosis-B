@@ -124,6 +124,36 @@ def test_invalid_provider_input_causes_no_provisioning_mutation(tmp_path: Path, 
 
 
 class TestProviderComposition(_Base):
+    def test_claude_review_uses_measured_binary_and_worker(self) -> None:
+        from gnosis.director.worker_review import WorkerClaudeReviewer
+        from gnosis.runner.claude_cli_runner import ClaudeCodeCLIRunner
+
+        runtime_dir = self.root / "runtime"
+        runtime_dir.mkdir()
+        python, _, _ = runtime(runtime_dir)
+        claude = runtime_dir / "providers/claude/claude.exe"
+        claude.parent.mkdir()
+        claude.write_bytes(b"measured test executable")
+        config = replace(self._config(review_runner=ClaudeCodeCLIRunner(str(claude))),
+            execution_mode=ExecutionMode.PROVIDER_BACKED,
+            provider_runtime_tree=observe_runtime_tree(runtime_dir))
+        with patch("gnosis.director.composition._bind_deployment_runtime", return_value=python):
+            pipeline = build_production_composition(config)
+        self.assertIsInstance(pipeline.review_runner, WorkerClaudeReviewer)
+        self.assertIs(pipeline.review_runner.launcher, pipeline.scheduler.engine.cli_runner._port._launcher)
+
+    def test_unmeasured_claude_review_is_refused(self) -> None:
+        from gnosis.runner.claude_cli_runner import ClaudeCodeCLIRunner
+
+        runtime_dir = self.root / "runtime"
+        runtime_dir.mkdir()
+        python, _, tree = runtime(runtime_dir)
+        config = replace(self._config(review_runner=ClaudeCodeCLIRunner(str(self.root / "claude.exe"))),
+            execution_mode=ExecutionMode.PROVIDER_BACKED, provider_runtime_tree=tree)
+        with patch("gnosis.director.composition._bind_deployment_runtime", return_value=python), \
+                self.assertRaisesRegex(CompositionError, "measured provider runtime"):
+            build_production_composition(config)
+
     def test_canonical_factory_reaches_dedicated_worker_provider(self) -> None:
         runtime_dir = self.root / "runtime"
         runtime_dir.mkdir()

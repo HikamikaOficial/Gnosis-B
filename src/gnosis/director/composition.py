@@ -440,10 +440,28 @@ def build_production_composition(config: ProductionCompositionConfig, *,
              "the review runner is the same object as the implementer runner; a task "
              "cannot close on its own author's review (rule 10 / §17)")
 
+    review_runner = config.review_runner
+    if config.execution_mode is ExecutionMode.PROVIDER_BACKED:
+        from gnosis.runner.claude_cli_runner import ClaudeCodeCLIRunner
+
+        if isinstance(review_runner, ClaudeCodeCLIRunner):
+            from gnosis.director.worker_review import WorkerClaudeReviewer
+
+            relative = "providers/claude/claude.exe"
+            binary = python_executable.parent / relative
+            tree = config.provider_runtime_tree
+            _require(tree is not None and sum(entry.path == relative for entry in tree.files) == 1,
+                     "Claude reviewer must belong to the measured provider runtime")
+            _require(Path(review_runner.binary).resolve() == binary.resolve() and binary.is_file(),
+                     "Claude reviewer path differs from measured runtime")
+            review_runner = WorkerClaudeReviewer(binary=binary, launcher=launcher,
+                output_root=dep.launch_root / "review-output",
+                guard=scope.check if scope is not None else lambda: None)
+
     pipeline = GovernedPipeline(
         director_root=op.director_root, scheduler=scheduler, repo_path=op.repo_path,
         verifier=verifier, policy=config.policy,
-        review_runner=config.review_runner,
+        review_runner=review_runner,
         fix_runner=trusted_runner,
         policy_actor=config.attribution.policy_actor,
         reviewer_id=config.attribution.reviewer_id,
