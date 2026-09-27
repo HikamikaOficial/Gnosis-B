@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from gnosis.director.publisher_client import PublisherClient, PublisherClientError
-from gnosis.trust.bundle_verify import write_bundle_manifest
+from gnosis.kernel.execution_scope import ExecutionScope
 from gnosis.trust.deployment import TrustPlaneDeploymentIdentity
 from gnosis.trust.launch import AuthorityUnavailable
 from gnosis.trust.launch_spec import LaunchSpec
@@ -41,10 +41,6 @@ from gnosis.trust.orchestration import (
 from gnosis.trust.publication import PublicationCorrupt
 from gnosis.trust.run_identity import PublicationState, TrustedRunIdentityStore
 from gnosis.trust.worker_launcher import LaunchedWorkerIdentity
-
-# The CLEAN .git-machinery boundary verdict the trust plane requires before a run
-# may become PUBLISHABLE (mirrors trust.anchor._PUBLISHABLE_BOUNDARY_VERDICT).
-_CLEAN = "CLEAN"
 
 
 class PublicationError(Exception):
@@ -78,26 +74,6 @@ def observe_git_tree(repo_path: Path) -> GitTreeEvidence:
                            tree_identity=_git("rev-parse", "HEAD^{tree}"))
 
 
-def capture_publishable_bundle(bundle_dir: Path, tree: GitTreeEvidence) -> Path:
-    """Write and seal a minimal trusted evidence bundle for the run.
-
-    The Director (trusted) states the observed head_sha, the CLEAN boundary
-    verdict and the tree content digest; then `write_bundle_manifest` seals the
-    bundle so `verify_bundle` can prove it byte for byte. A Worker-written
-    manifest would be a worker-controlled statement, so the trusted side writes
-    it (mirrors the F-17 Stage-6 recipe)."""
-    import json
-
-    bundle_dir.mkdir(parents=True, exist_ok=True)
-    (bundle_dir / "SUMMARY.json").write_text(json.dumps({
-        "tree_identity": {"post": {"fingerprint": {"head_sha": tree.head_sha}}},
-        "boundary": {"verdict": _CLEAN,
-                     "protection": {"content_digest": tree.tree_identity}},
-    }), encoding="utf-8")
-    write_bundle_manifest(bundle_dir)
-    return bundle_dir
-
-
 @dataclass(frozen=True)
 class PublicationInputs:
     """Everything the trusted seam needs to anchor ONE completed run."""
@@ -123,7 +99,8 @@ class PublicationResult:
 
 def publish_governed_run(*, trust_state_root: Path, bundle_dir: Path,
                          inputs: PublicationInputs,
-                         publisher_client: PublisherClient) -> PublicationResult:
+                         publisher_client: PublisherClient,
+                         scope: ExecutionScope | None = None) -> PublicationResult:
     """Drive the completed run through the F-17 authoritative-publication path.
 
     Returns a `PublicationResult`; raises `PublicationError` (fail closed) if any
@@ -133,33 +110,42 @@ def publish_governed_run(*, trust_state_root: Path, bundle_dir: Path,
     run_store = TrustedRunIdentityStore(Path(trust_state_root) / "runidentity")
 
     try:
-        # Director-side trusted gates. Idempotency (§21): publication state is
-        # monotonic; never re-create or re-mark a run that already progressed.
-        if run_store.exists(inputs.run_id):
-            record = run_store.read(inputs.run_id)
-            if record.publication_state is PublicationState.ANCHORED:
-                return PublicationResult(
-                    run_id=inputs.run_id, publication_state=record.publication_state,
-                    anchored=True, detail="already anchored")
-        else:
-            plan = RunPlan(
-                task_id=inputs.task_id, run_id=inputs.run_id,
-                repository_id=inputs.repository_id, head_sha=inputs.tree.head_sha,
-                tree_identity=inputs.tree.tree_identity,
-                bundle_path=str(bundle_dir), epoch=inputs.epoch)
+        if inputs.exit_code != 0:
+            raise RunNotPublishable(f"run {inputs.run_id} exited {inputs.exit_code}")
+        # The existing create operation is idempotent for IDENTICAL identities.
+        # Always cross-check it: an already-anchored ID cannot stand in for a
+        # different task, tree, deployment or launch during retry/recovery.
+        plan = RunPlan(
+            task_id=inputs.task_id, run_id=inputs.run_id,
+            repository_id=inputs.repository_id, head_sha=inputs.tree.head_sha,
+            tree_identity=inputs.tree.tree_identity,
+            bundle_path=str(bundle_dir), epoch=inputs.epoch)
+        def authorize() -> None:
             record = create_trusted_run(
                 run_store, plan, spec=inputs.spec, deployment=inputs.deployment,
                 launched=inputs.launched)
-        # NOT_PUBLISHABLE -> PUBLISHABLE, trusted gate only.
-        if record.publication_state is PublicationState.NOT_PUBLISHABLE:
-            authorize_publishable(
-                run_store, record.identity,
-                CompletionEvidence(exit_code=inputs.exit_code, timed_out=False,
-                                   cancelled=False, bundle_dir=bundle_dir))
+            # Preserve the observed launch epoch, including on recovery.
+            if record.publication_state is PublicationState.NOT_PUBLISHABLE:
+                authorize_publishable(
+                    run_store, record.identity,
+                    CompletionEvidence(exit_code=inputs.exit_code, timed_out=False,
+                                       cancelled=False, bundle_dir=bundle_dir))
+
+        if scope is None:
+            authorize()
+        else:
+            scope.commit(authorize)
+            scope.check()
         # PUBLISHABLE -> anchor -> ANCHORED via the F-17 PUBLISHER SERVICE, through
         # the client seam. The canonical operator route never calls durable_publish
         # in-process; the response is NOT the authority — the persisted state is.
+        # Even an ANCHORED retry goes through the Publisher's committed-watermark
+        # reconciliation. A status file alone is not proof of a committed anchor.
         publisher_client.publish(inputs.run_id)
+        # RPC can outlive ownership. An immutable historical anchor does not
+        # grant the former controller authority to report task success.
+        if scope is not None:
+            scope.check()
     except (RunNotPublishable, AuthorityUnavailable, PublicationCorrupt,
             PublisherClientError) as exc:
         raise PublicationError(

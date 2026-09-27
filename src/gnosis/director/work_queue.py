@@ -34,21 +34,24 @@ from __future__ import annotations
 
 import json
 import math
-import os
+import re
 import time
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ..contracts.director_brief import DirectorBrief
+from ..kernel.atomic_io import atomic_write_text
 from ..kernel.claims import (
     ClaimConflictError,
     ClaimStatus,
+    StaleClaimError,
     WorkAuthority,
     WorkGrant,
 )
 from ..kernel.file_lock import FileLock, lock_path_for
+from ..runner.claude_cli_runner import CancellationToken
 
 PENDING = "pending"
 RUNNING = "running"
@@ -67,6 +70,8 @@ class ClaimedWork:
     grant: WorkGrant
     enqueued_at: float
     attempts: int
+    cancellation_token: CancellationToken = field(default_factory=CancellationToken,
+                                                  compare=False, repr=False)
 
     @property
     def brief_id(self) -> str:
@@ -114,7 +119,8 @@ class WorkQueue:
 
     # -- putting work in ---------------------------------------------------
 
-    def enqueue(self, brief: DirectorBrief) -> bool:
+    def enqueue(self, brief: DirectorBrief, *, dependencies: tuple[str, ...] = (),
+                require_matching: bool = False) -> bool:
         """Add a brief. Idempotent by brief id.
 
         Returns False when the brief is already queued, running or done —
@@ -122,25 +128,41 @@ class WorkQueue:
         orphan the first one's evidence, which is the defect ADR-0017's
         review found in `run_brief`.
         """
-        if self._locate(brief.brief_id) is not None:
+        with FileLock(self._lock_path, timeout_s=30.0):
+            return self._enqueue_locked(brief, dependencies, require_matching)
+
+    def _enqueue_locked(self, brief: DirectorBrief, dependencies: tuple[str, ...],
+                        require_matching: bool) -> bool:
+        if not isinstance(dependencies, tuple) or any(
+            not isinstance(dep, str) or re.fullmatch(r"[A-Za-z0-9_-]{1,128}", dep) is None
+            for dep in dependencies
+        ):
+            raise ValueError("dependencies must be a tuple of safe brief identifiers")
+        if brief.brief_id in dependencies or len(set(dependencies)) != len(dependencies):
+            raise ValueError("self or duplicate dependency")
+        # Edges only point at existing immutable queue records. Consequently a
+        # newly inserted node cannot introduce a cycle. A project submits in
+        # topological order, preserving this invariant across crash recovery.
+        if any(self._locate(dep) is None for dep in dependencies):
+            raise ValueError("dependency is not enqueued")
+        existing_state = self._locate(brief.brief_id)
+        if existing_state is not None:
+            if require_matching:
+                existing = _read(self.root / existing_state / f"{brief.brief_id}.json")
+                if (existing is None or existing.get("brief") != brief.to_dict()
+                        or existing.get("dependencies", []) != list(dependencies)):
+                    raise ValueError("existing task differs from project plan or moved; retry")
             return False
         payload = {
             "brief": brief.to_dict(),
             "enqueued_at": time.time(),
             "attempts": 0,
+            "dependencies": list(dependencies),
         }
-        # EXCLUSIVE create, not write-then-replace. Two enqueuers racing
-        # on the same brief id both passed `_locate` before either wrote,
-        # and replace-based writing let the later one silently win — so
-        # "idempotent by brief id" held only when nobody raced
-        # (independent review). `x` mode makes the filesystem the
-        # arbiter: exactly one creator, the other is told no.
+        # The queue lock serializes insertion with every move. The atomic
+        # writer prevents a killed enqueuer from leaving a partial brief.
         target = self.root / PENDING / f"{brief.brief_id}.json"
-        try:
-            with target.open("x", encoding="utf-8") as fh:
-                fh.write(json.dumps(payload, indent=2, sort_keys=True))
-        except FileExistsError:
-            return False
+        _atomic_write(target, json.dumps(payload, indent=2, sort_keys=True))
         return True
 
     # -- taking work out ---------------------------------------------------
@@ -153,9 +175,15 @@ class WorkQueue:
         owner. A `ClaimConflictError` here means another worker won the
         race — the mechanism working, not a failure — so this moves on.
         """
+        with FileLock(self._lock_path, timeout_s=30.0):
+            return self._claim_locked(worker_id)
+
+    def _claim_locked(self, worker_id: str) -> ClaimedWork | None:
         for path in sorted((self.root / PENDING).glob("*.json")):
             record = _read(path)
             if record is None:
+                continue
+            if not self._dependencies_ready(record):
                 continue
             brief_id = str(record["brief"]["brief_id"])
             attempts = int(record.get("attempts", 0))
@@ -183,13 +211,13 @@ class WorkQueue:
                 # Not an error and not a skip worth recording on every
                 # scan — the wait IS the mechanism.
                 continue
-            lock = FileLock(self._lock_path, timeout_s=30.0)
-            lock.acquire()
+            # Parse before taking authority: a corrupt brief must not strand
+            # a new ACTIVE claim. All record reads and moves share this lock.
+            brief = DirectorBrief.from_dict(record["brief"])
             try:
                 grant = self.authority.acquire(
                     brief_id, worker_id, ttl_s=self.lease_ttl_s)
             except ClaimConflictError:
-                lock.release()
                 continue
             except Exception as exc:  # noqa: BLE001 - see below
                 # Claim taken but the lease is still held by a previous
@@ -201,7 +229,6 @@ class WorkQueue:
                 # project keeps finding, and `skipped` is readable by
                 # whoever asks the queue what it did.
                 self.skipped.append((brief_id, f"{type(exc).__name__}: {exc}"))
-                lock.release()
                 continue
 
             moved = self.root / RUNNING / path.name
@@ -213,14 +240,16 @@ class WorkQueue:
                 # a record we no longer hold would be acting on a guess,
                 # so hand the grant back and move on.
                 self.authority.release(grant)
-                lock.release()
                 continue
 
             record["attempts"] = int(record.get("attempts", 0)) + 1
+            record["claim_holder"] = grant.holder
+            record["claim_epoch"] = grant.claim.epoch
+            record.pop("pending_transition", None)
+            record.pop("outcome", None)
             _atomic_write(moved, json.dumps(record, indent=2, sort_keys=True))
             # The record is in `running/` with a live grant: recovery can
             # no longer mistake it for a stranded one.
-            lock.release()
 
             try:
                 # The grant was taken before the file moved, and a stalled
@@ -236,12 +265,28 @@ class WorkQueue:
                 continue
 
             return ClaimedWork(
-                brief=DirectorBrief.from_dict(record["brief"]),
+                brief=brief,
                 grant=grant,
                 enqueued_at=float(record.get("enqueued_at", 0.0)),
                 attempts=int(record["attempts"]),
             )
         return None
+
+    def _dependencies_ready(self, record: dict[str, Any]) -> bool:
+        dependencies = record.get("dependencies", [])
+        if not isinstance(dependencies, list):
+            return False
+        for dep in dependencies:
+            if (not isinstance(dep, str)
+                    or re.fullmatch(r"[A-Za-z0-9_-]{1,128}", dep) is None):
+                return False
+            previous = _read(self.root / DONE / f"{dep}.json")
+            claim = self.authority.claims.get(dep)
+            if (previous is None or previous.get("outcome") != "COMPLETED"
+                    or claim is None or claim.status is not ClaimStatus.RESOLVED
+                    or claim.outcome != "COMPLETED"):
+                return False
+        return True
 
     def recover(self, pace: Callable[[int], float] | None = None) -> list[str]:
         """Return briefs whose owner is gone to `pending`.
@@ -287,18 +332,16 @@ class WorkQueue:
             # worse than the ghost this recovery exists to prevent, and
             # exactly the mistake ADR-0016's boot sweep already had to
             # learn (independent review caught it in this fix).
-            # A transition is a claims-plane call AND a file move, and a
-            # crash can land between them in either order. The intent is
-            # stamped on the record before the plane call, so recovery
-            # finishes what a dead worker decided instead of overruling
-            # it: a brief the worker BLOCKED must not come back pending,
-            # and a park's `not_before` must not be dropped on the way.
+            # Intent alone is not a commit. A worker can die or lose its
+            # lease between stamping and the authority CAS. Honour only
+            # the transition committed by the same holder and epoch.
             intent = record.pop("pending_transition", None)
-            resolved = claim is not None and claim.status is ClaimStatus.RESOLVED
-            if intent in (BLOCKED, DONE, PENDING):
-                target = str(intent)
-            else:
-                target = DONE if resolved else PENDING
+            same_claim = claim is not None and (
+                record.get("claim_holder") == claim.holder
+                and record.get("claim_epoch") == claim.epoch)
+            resolved = same_claim and claim is not None and claim.status is ClaimStatus.RESOLVED
+            released = same_claim and claim is not None and claim.status is ClaimStatus.RELEASED
+            target = DONE if resolved else BLOCKED if released and intent == BLOCKED else PENDING
             # THE MOVE IS THE CLAIM, exactly as in `claim()`. Writing the
             # target and then unlinking the origin let two supervisors
             # both act on one stale read: the first moved the record to
@@ -319,6 +362,12 @@ class WorkQueue:
             # cannot land on somebody else's file.
             moved = _read(destination) or record
             moved.pop("pending_transition", None)
+            if resolved:
+                assert claim is not None
+                moved["outcome"] = claim.outcome
+            elif not released:
+                for key in ("outcome", "not_before", "blocked_because", "released_because"):
+                    moved.pop(key, None)
             moved["recovered_from"] = RUNNING
             moved["recovered_because"] = (
                 claim.status.value if claim is not None else "no_claim")
@@ -339,9 +388,10 @@ class WorkQueue:
 
     def complete(self, work: ClaimedWork, outcome: str) -> None:
         """Finish the brief: the claim resolves and the work leaves the queue."""
-        self._stamp(work.brief_id, {"pending_transition": DONE, "outcome": outcome})
-        self.authority.resolve(work.grant, outcome=outcome)
-        self._move(work.brief_id, RUNNING, DONE, {"outcome": outcome})
+        with FileLock(self._lock_path, timeout_s=30.0):
+            self._stamp(work, {"pending_transition": DONE, "outcome": outcome})
+            self.authority.resolve(work.grant, outcome=outcome)
+            self._move(work.brief_id, RUNNING, DONE, {"outcome": outcome})
 
     def release(self, work: ClaimedWork, reason: str,
                 not_before: float | None = None) -> None:
@@ -360,16 +410,17 @@ class WorkQueue:
         extra: dict[str, Any] = {"released_because": reason}
         if not_before is not None:
             extra["not_before"] = float(not_before)
-        self._stamp(work.brief_id, {**extra, "pending_transition": PENDING})
-        self.authority.release(work.grant)
-        self._move(work.brief_id, RUNNING, PENDING, extra)
+        with FileLock(self._lock_path, timeout_s=30.0):
+            self._stamp(work, {**extra, "pending_transition": PENDING})
+            self.authority.release(work.grant)
+            self._move(work.brief_id, RUNNING, PENDING, extra)
 
     def block(self, work: ClaimedWork, reason: str) -> None:
         """Take the brief out of circulation for a human to look at."""
-        self._stamp(work.brief_id,
-                    {"pending_transition": BLOCKED, "blocked_because": reason})
-        self.authority.release(work.grant)
-        self._move(work.brief_id, RUNNING, BLOCKED, {"blocked_because": reason})
+        with FileLock(self._lock_path, timeout_s=30.0):
+            self._stamp(work, {"pending_transition": BLOCKED, "blocked_because": reason})
+            self.authority.release(work.grant)
+            self._move(work.brief_id, RUNNING, BLOCKED, {"blocked_because": reason})
 
     def requeue(self, brief_id: str, reason: str = "operator") -> bool:
         """An operator's decision to try a blocked brief again.
@@ -377,6 +428,10 @@ class WorkQueue:
         Attempts reset here and nowhere else: a bound an automated path
         could clear is not a bound.
         """
+        with FileLock(self._lock_path, timeout_s=30.0):
+            return self._requeue_locked(brief_id, reason)
+
+    def _requeue_locked(self, brief_id: str, reason: str) -> bool:
         origin = self.root / BLOCKED / f"{brief_id}.json"
         record = _read(origin)
         if record is None:
@@ -386,13 +441,18 @@ class WorkQueue:
         record.pop("blocked_because", None)
         record.pop("pending_transition", None)
         record["requeued_because"] = reason
-        _atomic_write(self.root / PENDING / f"{brief_id}.json",
-                      json.dumps(record, indent=2, sort_keys=True))
-        origin.unlink(missing_ok=True)
+        _atomic_write(origin, json.dumps(record, indent=2, sort_keys=True))
+        origin.replace(self.root / PENDING / f"{brief_id}.json")
         return True
 
     def blocked_ids(self) -> list[str]:
         return sorted(p.stem for p in (self.root / BLOCKED).glob("*.json"))
+
+    def dependency_waiting_ids(self) -> list[str]:
+        """Pending tasks whose predecessor evidence is not complete."""
+        return [path.stem for path in sorted((self.root / PENDING).glob("*.json"))
+                if (record := _read(path)) is not None
+                and not self._dependencies_ready(record)]
 
     def waiting(self) -> list[tuple[str, float]]:
         """Briefs that are pending but backing off, and until when.
@@ -432,22 +492,23 @@ class WorkQueue:
                 return state
         return None
 
-    def _stamp(self, brief_id: str, extra: dict[str, Any]) -> None:
-        """Record a decision on the running record before acting on it.
+    def _stamp(self, work: ClaimedWork, extra: dict[str, Any]) -> None:
+        """Persist intent under the queue lock, after checking ownership.
 
-        A best-effort write: if it fails the transition still proceeds and
-        recovery falls back to reading the claim status, which is where it
-        was before. It can only add information, never withhold a move.
+        A failed write aborts the transition: a committed release without
+        its block/backoff intent cannot be correctly recovered.
         """
-        path = self.root / RUNNING / f"{brief_id}.json"
+        self.authority.assert_current(work.grant)
+        path = self.root / RUNNING / f"{work.brief_id}.json"
         record = _read(path)
         if record is None:
             return
+        if (record.get("claim_holder") != work.grant.holder
+                or record.get("claim_epoch") != work.grant.claim.epoch):
+            raise StaleClaimError("running record belongs to another claim")
         record.update(extra)
-        try:
-            _atomic_write(path, json.dumps(record, indent=2, sort_keys=True))
-        except OSError:
-            return
+        payload = json.dumps(record, indent=2, sort_keys=True)
+        self.authority.commit(work.grant, lambda: _atomic_write(path, payload))
 
     def _move(self, brief_id: str, source: str, target: str,
               extra: dict[str, Any]) -> None:
@@ -469,10 +530,13 @@ class WorkQueue:
             self.skipped.append((brief_id, f"record vanished from {source}/"))
             return
         record.update(extra)
-        record.pop("pending_transition", None)  # it arrived; nothing is pending
-        _atomic_write(self.root / target / f"{brief_id}.json",
-                      json.dumps(record, indent=2, sort_keys=True))
-        origin.unlink(missing_ok=True)
+        # Persist details before the one atomic move, retaining intent
+        # until arrival. A crash never leaves records in two buckets.
+        _atomic_write(origin, json.dumps(record, indent=2, sort_keys=True))
+        destination = self.root / target / f"{brief_id}.json"
+        origin.replace(destination)
+        record.pop("pending_transition", None)
+        _atomic_write(destination, json.dumps(record, indent=2, sort_keys=True))
 
 
 def _finite_time(value: Any) -> float | None:
@@ -499,10 +563,9 @@ def _read(path: Path) -> dict[str, Any] | None:
 
 
 def _atomic_write(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(path)
+    # Reuse the fsynced, unique-temp writer and its bounded Windows sharing
+    # retry. A PID-only temporary path collides between threads in one process.
+    atomic_write_text(path, text)
 
 
 def drain(queue: WorkQueue, worker_id: str,

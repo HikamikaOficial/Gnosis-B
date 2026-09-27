@@ -44,6 +44,19 @@ class TestWorktreeManager(unittest.TestCase):
         # The source repo's own working tree must be untouched.
         self.assertTrue((self.repo / "README.md").exists())
 
+    def test_separate_provenance_survives_restart_and_ignores_worker_marker(self):
+        work = self.root / "worker-area"
+        records = self.root / "protected-records"
+        manager = WorktreeManager(self.repo, work, provenance_root=records)
+        handle = manager.create(task_id="TASK-separated")
+        marker = records / ".TASK-separated.worktree.json"
+        original = marker.read_bytes()
+        (work / marker.name).write_text("forged worker record", encoding="utf-8")
+        restarted = WorktreeManager(self.repo, work, provenance_root=records)
+        self.assertEqual(restarted.load_handle("TASK-separated"), handle)
+        self.assertEqual(restarted.create(task_id="TASK-separated"), handle)
+        self.assertEqual(marker.read_bytes(), original)
+
     def test_create_rejects_non_repo_source(self):
         not_a_repo = self.root / "plain_dir"
         not_a_repo.mkdir()

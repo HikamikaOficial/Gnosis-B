@@ -22,7 +22,6 @@ from gnosis.director.execution import ExecutionMode
 from gnosis.director.publication import (
     PublicationError,
     PublicationInputs,
-    capture_publishable_bundle,
     observe_git_tree,
     publish_governed_run,
 )
@@ -89,7 +88,7 @@ class TestRunIdentityContinuity(unittest.TestCase):
 
     def test_i1_same_run_id_reaches_publication(self) -> None:
         inputs = self._inputs()
-        capture_publishable_bundle(self.bundle, inputs.tree)
+        tf.capture_publishable_bundle(self.bundle, inputs.tree)
         spy = _CapturingClient(self._client(inputs))
         publish_governed_run(trust_state_root=self.tsr, bundle_dir=self.bundle,
                              inputs=inputs, publisher_client=spy)
@@ -97,14 +96,14 @@ class TestRunIdentityContinuity(unittest.TestCase):
 
     def test_i2_mismatched_run_id_fails(self) -> None:
         inputs = self._inputs(run_id="run-1", spec_run_id="run-OTHER")
-        capture_publishable_bundle(self.bundle, inputs.tree)
+        tf.capture_publishable_bundle(self.bundle, inputs.tree)
         with self.assertRaises(PublicationError):
             publish_governed_run(trust_state_root=self.tsr, bundle_dir=self.bundle,
                                  inputs=inputs, publisher_client=self._client(inputs))
 
     def test_i3_deployment_digest_mismatch_fails(self) -> None:
         inputs = self._inputs()
-        capture_publishable_bundle(self.bundle, inputs.tree)
+        tf.capture_publishable_bundle(self.bundle, inputs.tree)
         bad = self._client(inputs, digest="e" * 64)  # publisher expects a different deployment
         with self.assertRaises(PublicationError):
             publish_governed_run(trust_state_root=self.tsr, bundle_dir=self.bundle,

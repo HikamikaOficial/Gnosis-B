@@ -556,7 +556,8 @@ def bootstrap_script_path() -> Path:
     return (Path(__file__).resolve().parent / "bootstrap.py")
 
 
-def build_transport_command(runtime: Path, spec_path: Path, digest: str) -> str:
+def build_transport_command(runtime: Path, spec_path: Path, digest: str, *,
+                            bootstrap: Path | None = None) -> str:
     """The SHORT command line that crosses the identity boundary.
 
     `-I` isolates the interpreter: PYTHONPATH, the user site directory and every
@@ -564,7 +565,8 @@ def build_transport_command(runtime: Path, spec_path: Path, digest: str) -> str:
     module into the bootstrap by setting a variable. `-E` and `-s` are implied.
     """
     return subprocess.list2cmdline(
-        [str(runtime), "-I", str(bootstrap_script_path()), str(spec_path), digest])
+        [str(runtime), "-I", str(bootstrap if bootstrap is not None else bootstrap_script_path()),
+         str(spec_path), digest])
 
 
 @dataclass(frozen=True)
@@ -627,11 +629,15 @@ class TrustedWindowsWorkerLauncher:
     def __init__(self, account: WorkerAccount, credential_blob_path: Path,
                  launch_root: Path, runtime: Path | None = None,
                  environment_allowlist: frozenset[str] = DEFAULT_ENVIRONMENT_ALLOWLIST,
-                 director_env: Mapping[str, str] | None = None) -> None:
+                 director_env: Mapping[str, str] | None = None,
+                 bootstrap: Path | None = None) -> None:
         self.account = account
         self.credential_blob_path = credential_blob_path
         self.launch_root = launch_root
         self.runtime = runtime or Path(sys.executable)
+        if bootstrap is not None and not bootstrap.is_absolute():
+            raise WorkerLaunchFailed("trusted bootstrap path must be absolute")
+        self.bootstrap = bootstrap
         self.environment_allowlist = environment_allowlist
         # Captured explicitly rather than read from os.environ at launch time,
         # so what may cross is a decision the caller makes and a test can pin.
@@ -647,7 +653,8 @@ class TrustedWindowsWorkerLauncher:
                 self._director_env, self.environment_allowlist).items())))
         digest = seal_launch_spec(self.launch_root, spec)
         spec_path = self.launch_root / f"{spec.launch_id}.json"
-        command = build_transport_command(self.runtime, spec_path, digest)
+        command = build_transport_command(self.runtime, spec_path, digest,
+                                          bootstrap=self.bootstrap)
         if len(command) > TRANSPORT_COMMAND_BUDGET:
             raise WorkerLaunchFailed(
                 f"the transport command is {len(command)} characters, over this "

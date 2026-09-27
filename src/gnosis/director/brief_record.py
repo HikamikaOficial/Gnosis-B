@@ -99,6 +99,18 @@ class BriefRecordStore:
             self._write(record)
             return record
 
+    def add_run(self, brief_id: str, task_id: str, run_id: str) -> BriefRecord:
+        """Attach an attempt before launch, without losing prior recovery refs."""
+        with FileLock(lock_path_for(self._path(brief_id)), timeout_s=30.0):
+            record = self.get(brief_id)
+            if record.task_id != task_id:
+                raise ValueError("attempt belongs to a different task assignment")
+            if run_id not in record.run_ids:
+                record.run_ids.append(run_id)
+                record.updated_at = datetime.now(UTC).isoformat()
+                self._write(record)
+            return record
+
     def _write(self, record: BriefRecord) -> None:
         atomic_write_text(self._path(record.brief_id), json.dumps(record.to_dict(), indent=2, sort_keys=True))
 

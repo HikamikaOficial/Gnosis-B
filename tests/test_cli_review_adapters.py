@@ -199,6 +199,11 @@ class _AdapterTestCase(unittest.TestCase):
 
 
 class TestCliReviewer(_AdapterTestCase):
+    def test_nonzero_exit_with_pass_payload_is_invalid(self):
+        agent = _ScriptedAgent([_PASS_REVIEW], exit_code=1)
+        with self.assertRaises(InvalidReviewOutput):
+            self._reviewer(agent)(1)
+
     def test_a_review_round_produces_a_report_and_keeps_evidence(self):
         agent = _ScriptedAgent([_PASS_REVIEW])
         report = self._reviewer(agent, reviewer_id="rev-1")(1)

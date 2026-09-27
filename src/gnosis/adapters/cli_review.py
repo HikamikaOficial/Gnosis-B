@@ -248,10 +248,11 @@ class CliReviewer:
                 f"reviewer {self.reviewer_id!r} changed the workspace it was "
                 f"judging in round {round_index}: {before} -> {after}"
             )
-        if result.timed_out or result.cancelled:
+        if result.timed_out or result.cancelled or result.exit_code != 0:
             raise InvalidReviewOutput(
                 f"reviewer {self.reviewer_id!r} did not finish round {round_index} "
-                f"(timed_out={result.timed_out}, cancelled={result.cancelled})"
+                f"(exit_code={result.exit_code}, timed_out={result.timed_out}, "
+                f"cancelled={result.cancelled})"
             )
         return parse_review_payload(agent_message_text(result), reviewer=self.reviewer_id)
 

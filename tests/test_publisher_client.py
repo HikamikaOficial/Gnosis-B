@@ -15,7 +15,6 @@ from gnosis.director import publication as publication_mod
 from gnosis.director.publication import (
     PublicationError,
     PublicationInputs,
-    capture_publishable_bundle,
     observe_git_tree,
     publish_governed_run,
 )
@@ -106,7 +105,7 @@ class TestPersistedAnchorAuthority(unittest.TestCase):
         # A client that REPLIES ANCHORED but never anchors must NOT yield success:
         # publish_governed_run re-reads the persisted state and fails closed.
         inputs = self._inputs()
-        capture_publishable_bundle(self.bundle, inputs.tree)
+        tf.capture_publishable_bundle(self.bundle, inputs.tree)
         with self.assertRaises(PublicationError):
             publish_governed_run(trust_state_root=self.trust_state_root,
                                  bundle_dir=self.bundle, inputs=inputs,

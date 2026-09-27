@@ -193,8 +193,9 @@ class TestProductionClientConsistency(unittest.TestCase):
     def test_observer_uses_same_primitive_as_client(self) -> None:
         # §15: the observer's readiness primitive is exactly the production client's
         # availability gate (WaitNamedPipeW), so READY == "client can proceed".
-        client_src = (REPO / "src" / "gnosis" / "director"
-                      / "publisher_client.py").read_text(encoding="utf-8")
+        from gnosis.director.publisher_client import pipe_io
+
+        client_src = Path(pipe_io.__file__).read_text(encoding="utf-8")
         ops_src = (REPO / "scripts" / "stage2cb_ops.py").read_text(encoding="utf-8")
         self.assertIn("WaitNamedPipeW", client_src)
         self.assertIn("WaitNamedPipeW", ops_src)

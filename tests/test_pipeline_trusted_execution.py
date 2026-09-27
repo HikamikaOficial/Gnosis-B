@@ -171,6 +171,8 @@ class TestPipelineReachesPort(_Base):
         # The governed implementation launch went through the trusted port.
         self.assertEqual(spy.launch_count, 1)
         self.assertEqual(spy.saw_schema, dw.CASSETTE_SCHEMA)
+        self.assertEqual(runner.last_run_id, outcome.run_ids[-1])
+        self.assertEqual(runner.last_spec.run_id, outcome.run_ids[-1])
 
     def test_p2_run_request_preserved_through_seam(self) -> None:
         # cwd (the governed exec root) is carried to the sealed launch, and the

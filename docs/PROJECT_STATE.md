@@ -1,5 +1,14 @@
 # GNOSIS Project State
 
+**2026-09-26 resumption:** The operator now requests completion of Agent B V1 on
+this workstation, excluding Gnosis Control and the separate Autopilot. The older
+Stage-1 status below predates the actual local HEAD `ca17d9f` (F-33 Stage
+2C-B1-R4A.1). Current reconstruction, baseline results, confirmed V1 gaps and the
+verified provider/project components, reviewed-task proof capture and durable
+task/phase recovery are recorded in
+[V1_RESUMPTION_2026-09-26.md](V1_RESUMPTION_2026-09-26.md). **V1 is not complete;
+F-33 is not closed.** Historical entries below are preserved as history.
+
 **Status:** PHASE -1 COMPLETE; NINE KERNEL-HARDENING DIRECTIVES IMPLEMENTED; ADAPTER MILESTONE COMPLETE; INTEGRATION MILESTONE COMPLETE; RESULTS LAND ON THE SHARED BRANCH; MULTI-WORKER PLANE (QUEUE + BUDGET + ORDERING); RE-REVIEW AS EVIDENCE; WORKER SUPERVISION; THE PROBE HAS A CALLER; MULTI-CREDENTIAL ROTATION
 **Target machine:** Nicol
 **Current roadmap focus:** V1 traceability-audit closure and residual technical-debt verification. (Kernel hardening — archaeology directives 1–9 — is implemented; the adapter/integration/multi-worker/supervision/rotation milestones are complete; the F-17 Trust Plane / Publisher / provisioning is qualified and CLOSED, ADR-0031. Gnosis has no single globally-authoritative monotonic numeric phase: the archaeology "directives" (1–9), the F-17 "Stages" (1–8), and the earlier "Phase" campaign labels are distinct numbering systems — see the Status line above and the ADR index. The former `Phase: 1 — Kernel hardening` label named that kernel-hardening campaign, now superseded by this current-focus field.)

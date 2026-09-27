@@ -78,8 +78,10 @@ _RELEASE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 def build_reviewer(reviewer_cfg: dict[str, Any]) -> Any:
     """Construct the REAL production reviewer runner from TRUSTED config.
 
-    The reviewer is a provider-backed `ClaudeCodeCLIRunner` (a distinct runner
-    object from the trusted-execution implementer). Its executable is
+    The reviewer is a provider-backed Claude or Codex runner (a distinct runner
+    object from the trusted-execution implementer). Claude remains the default
+    for existing configuration; Codex is an explicit trusted-config choice.
+    Its executable is
     deployment/trusted configuration — an ABSOLUTE path that must exist — never a
     PATH lookup and never operator work input. It is NEVER a replay runner and
     NEVER an always-pass fake. This constructs; it does not invoke the reviewer.
@@ -98,10 +100,26 @@ def build_reviewer(reviewer_cfg: dict[str, Any]) -> Any:
         raise OperatorError(
             f"reviewer executable {binary} not found; reviewer unavailable "
             "(fail closed)", EXIT_EXECUTION)
+    provider = reviewer_cfg.get("provider", "claude")
+    if provider == "codex":
+        from gnosis.adapters.codex_cli import CodexCLIRunner, CodexConfigurationError
+        try:
+            return CodexCLIRunner(binary=str(path))
+        except CodexConfigurationError as exc:
+            raise OperatorError(str(exc), EXIT_USAGE) from exc
+    if provider != "claude":
+        raise OperatorError("unsupported trusted reviewer provider", EXIT_USAGE)
     return ClaudeCodeCLIRunner(binary=str(path))
 
 
 def build_operator_composition(config_path: Path) -> Any:
+    from gnosis.director.composition import build_production_deployment
+
+    config, publication = load_operator_configuration(config_path)
+    return build_production_deployment(config, publication)
+
+
+def load_operator_configuration(config_path: Path) -> tuple[Any, Any]:
     """Build the canonical operator composition from a TRUSTED config file.
 
     Wires the REAL production reviewer (a provider-backed runner, distinct object)
@@ -117,10 +135,12 @@ def build_operator_composition(config_path: Path) -> Any:
         OperatorInputs,
         ProductionCompositionConfig,
         PublicationCompositionInputs,
-        build_production_deployment,
         trusted_deployment_from_layout,
+        validate_integration_target,
     )
+    from gnosis.director.execution import ExecutionMode
     from gnosis.kernel.engine import AGENT_RUN_INTERVENTION_POINT
+    from gnosis.kernel.integration import INTEGRATION_INTERVENTION_POINT
     from gnosis.kernel.policy import (
         InterventionPoint,
         PolicyEngine,
@@ -180,14 +200,39 @@ def build_operator_composition(config_path: Path) -> Any:
         # Production policy matrix is TRUSTED configuration (ADR-0032 §22); the
         # full matrix loader is a separate concern (finalized in the fresh-deploy
         # qualification). This basic intent-gated allow keeps the graph valid.
-        policy = PolicyEngine([InterventionPoint(
+        points = [InterventionPoint(
             name=AGENT_RUN_INTERVENTION_POINT,
             declared_tools=frozenset({"claude_cli"}),
             rules=(("production", lambda s: RuleOutcome(Verdict.ALLOW, "ok:production")),),
-            requires_intent=True)])
+            requires_intent=True)]
+        target = None
+        if "integration" in raw:
+            integration = raw["integration"]
+            if (not isinstance(integration, dict)
+                    or set(integration) != {"target_branch", "authorized"}
+                    or integration["authorized"] is not True):
+                raise OperatorError("integration requires explicit trusted authorization", EXIT_USAGE)
+            target = integration["target_branch"]
+            validate_integration_target(target)
+            points.append(InterventionPoint(name=INTEGRATION_INTERVENTION_POINT,
+                declared_tools=frozenset({"git_merge"}), requires_intent=True,
+                rules=(("trusted-integration", lambda s: RuleOutcome(
+                    Verdict.ALLOW, "ok:trusted-integration")),)))
+        policy = PolicyEngine(points)
+        execution = raw.get("execution", {"mode": "deterministic"})
+        if execution == {"mode": "deterministic"}:
+            execution_mode = ExecutionMode.DETERMINISTIC
+        elif execution == {"mode": "provider_backed", "provider": "codex"}:
+            execution_mode = ExecutionMode.PROVIDER_BACKED
+        else:
+            raise OperatorError("unsupported trusted execution configuration", EXIT_USAGE)
         config = ProductionCompositionConfig(
             deployment=trusted, attribution=attribution, operator=operator,
-            verifier=verifier, review_runner=review_runner, policy=policy)
+            verifier=verifier, review_runner=review_runner, policy=policy,
+            execution_mode=execution_mode,
+            integration_target=target,
+            provider_runtime_tree=(deployment_identity.runtime_tree
+                                   if execution_mode is ExecutionMode.PROVIDER_BACKED else None))
         publication = PublicationCompositionInputs(
             trust_state_root=Path(pub["trust_state_root"]),
             evidence_root=Path(pub["evidence_root"]),
@@ -195,7 +240,7 @@ def build_operator_composition(config_path: Path) -> Any:
             pipe_name=pub["pipe_name"])
     except KeyError as exc:
         raise OperatorError(f"trusted config missing field {exc}", EXIT_USAGE) from exc
-    return build_production_deployment(config, publication)
+    return config, publication
 
 
 def _load_brief(brief_path: Path) -> Any:
@@ -210,6 +255,31 @@ def _load_brief(brief_path: Path) -> Any:
     except (KeyError, TypeError, ValueError) as exc:
         raise OperatorError(f"brief {brief_path} is invalid: {exc}",
                             EXIT_USAGE) from exc
+
+
+def _project_command(ns: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    from gnosis.director.composition import CompositionError
+    from gnosis.director.project_execution import ProjectExecutor
+    from gnosis.director.projects import ProjectPlan
+
+    try:
+        plan = ProjectPlan.read(Path(ns.plan)) if ns.command == "project-submit" else None
+        project_id = plan.project_id if plan is not None else ns.project
+        config, publication = load_operator_configuration(Path(ns.config))
+        executor = ProjectExecutor(project_id, config, publication)
+        if plan is not None:
+            executor.submit(plan)
+            return EXIT_OK, executor.status()
+        if ns.command == "project-status":
+            return EXIT_OK, executor.status()
+        report = executor.run(ns.worker)
+        status = executor.status()
+        status["supervision"] = report.to_dict()
+        return (EXIT_OK if status["complete"] else EXIT_WORK_FAILED), status
+    except CompositionError as exc:
+        raise OperatorError(f"project composition refused: {exc}", EXIT_EXECUTION) from exc
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise OperatorError(f"project input unavailable or invalid: {exc}", EXIT_USAGE) from exc
 
 
 def _run(config_path: Path, brief_path: Path) -> tuple[int, dict[str, Any]]:
@@ -254,13 +324,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         p = sub.add_parser(name, help="run one governed+published brief")
         p.add_argument("--config", required=True, help="trusted config JSON path")
         p.add_argument("--brief", required=True, help="operator brief JSON path")
+    for name in ("project-submit", "project-status", "project-run"):
+        p = sub.add_parser(name, help="register, inspect or resume a governed project")
+        p.add_argument("--config", required=True, help="trusted config JSON path")
+        if name == "project-submit":
+            p.add_argument("--plan", required=True, help="project plan JSON path")
+        else:
+            p.add_argument("--project", required=True, help="stored project identifier")
+        if name == "project-run":
+            p.add_argument("--worker", required=True, help="controller identity for task claims")
     try:
         ns = parser.parse_args(argv)
     except SystemExit:
         return EXIT_USAGE
 
     try:
-        code, record = _run(Path(ns.config), Path(ns.brief))
+        if ns.command.startswith("project-"):
+            code, record = _project_command(ns)
+        else:
+            code, record = _run(Path(ns.config), Path(ns.brief))
     except OperatorError as exc:
         print(f"gnosis: {exc}")
         return exc.code

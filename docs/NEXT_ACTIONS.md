@@ -1,5 +1,86 @@
 # GNOSIS Next Actions — Nicol workstation
 
+## Current resumption — 2026-09-26
+
+LATEST: full regression 5924 passed: 2177 tests, 72 skips, 416 subtests; frozen
+249-file manifest matched after completion. Runtime Git/Python PATH and readable
+bootstrap deployment were then integrated from managed worktree agent-b-runtime
+(168 targeted tests + 2 binding tests; maintenance 10; mypy 101 modules). They
+are not included in 5924's full result. No processes currently running. Prepare
+a reviewed source-only pinned checkout and regenerate installation source IDs.
+Real elevated installation, dedicated Worker ChatGPT login and provider/service
+qualification remain outstanding. See latest V1_RESUMPTION entries for paths.
+
+Full pytest session **3455** finished: 2085 passed, 1 failed, 72 skipped,
+319 subtests passed in 1581.85s. The frozen source/test manifest matched afterward.
+The failure was the readiness source check referencing the pre-extraction client;
+it now inspects the actual transport helper. The helper is an explicit measured
+deployment dependency; packaging/readiness/Windows transport: 47 passed.
+Local publication authorization now uses ExecutionScope.commit, with RPC outside
+the locks and a post-RPC ownership check. Publication regressions: 11 passed.
+Admitted-authorization contention and combined full-handler delayed-RPC recovery
+now pass at component level (real Git/Windows capture/stores, fake providers).
+Queue intent stamping's check/write race was reproduced and fixed with commit;
+43 queue/publication tests pass, plus the combined project scenario (28.29s).
+Terminal authority lease/CAS race was reproduced for resolve/release and fixed
+with a lease guard under the claims lock; expiry before commit refuses, admitted
+commit holds both locks through persistence. Related 66 tests and four terminal
+fencing cases pass. Full regression **18197 finished successfully**: 2096 passed,
+72 skipped, 389 subtests in 1687.98s; frozen source/test manifest matched afterward.
+JUnit is in `.gnosis/evidence/v1-regression-final-candidate-20260927`.
+Since that run, native-package validation/staging/binding and Stage2CB bootstrap
+input were integrated: 80 targeted tests + 18 subtests pass, plus one filesystem
+copy-before-measurement regression. Invalid provider input is now refused before
+any install or direct-deploy operations (34 package/provider tests passed).
+Worktrees now use deployment work_base with protected provenance; raw outputs
+use unique staging and protected retained records. Exact parsed stdout is retained.
+Checkpoint recovery imports missing staged outputs without reconstructing success;
+actual separate-process death regression passes. See latest V1_RESUMPTION entries.
+No tests currently running. Persistent install/verify components now have the
+scripts/v1_maintenance.py entry (initialize/install/verify), strict protected config
+loading, elevation/source checks and fresh deployment observations. Maintenance
+and install tests: 16 passed. PRIORITY: prepare concrete protected configuration
+and reviewed pinned source, then execute dedicated Worker installation/provider
+qualification. Current checkout has 107 changed/untracked entries, not a clean
+installable snapshot. No privileged installation or login has occurred. CI workflow
+is prepared locally but not remotely executed. See V1_ACCEPTANCE_AUDIT_2026-09-27.md
+and PUBLICATION_FENCING_AUDIT_2026-09-27.md for explicit remaining gaps.
+
+Follow [V1_RESUMPTION_2026-09-26.md](V1_RESUMPTION_2026-09-26.md) for the current
+checkpoint and implementation sequence. The operator requests a complete local
+Agent B V1. Real provider execution, a Codex adapter, project/DAG persistence,
+proof packets, recovery composition and fresh production qualification remain.
+Project/dependency persistence and trusted provider execution now have component
+implementations. The canonical factory/CLI can select Codex only from its measured
+protected runtime and Publisher-bound identity (ADR-0033). This has NOT been
+qualified with a real dedicated-Worker login. The static publication bundle has
+been replaced by byte-bound task proof with real Windows capture tests (ADR-0034).
+Corrections now use the trusted implementer with durable attempt attribution.
+Queue transitions reject stale writers; completed proof checkpoints can resume
+publication without re-running implementation or review (ADR-0035).
+The canonical deployment now retains task/worktree identity, attempt/round budgets,
+typed phase evidence and observed launch across restart. Proof capture uses bounded
+staging attempts and a protected receipt before finalization (ADR-0036).
+The first full post-change suite ended with 1936 passed / 19 failed / 72 skipped;
+the 19 diagnostic/fixture failures were repaired and their 32-case regression passed.
+Targeted recovery, real process-death and capture/publication tests pass; a final
+full regression and elevated real-Worker qualification are still required.
+Borrowed execution scopes now propagate cancellation and ownership checks through
+the handler. The canonical composition supports optional proof-before-integration,
+with durable prepared-merge receipts and protected re-review budget reservation.
+ProjectExecutor now connects ProjectStore, WorkQueue and WorkerSupervisor to the
+canonical deployment per claimed task; queue completion requires publication and
+integration. Parent/child component tests exercise actual landed Git changes.
+The project-submit/status/run CLI now uses the same configuration loader and
+executor. Integration is opt-in through explicit trusted configuration, not a plan
+field or command-line bypass. See PROJECT_COMMANDS.md for usage and limitations.
+Next: additional whole-handler survival/fencing and budget-recovery tests, then
+fresh OS-real deployment and full V1 acceptance regression.
+Do not treat the older Stage-1-only entries below as the current code state.
+Gnosis Control and Autopilot remain outside this task.
+
+## Historical next-action entries
+
 0-XLVIII. **F-33: OPEN — ADR-0032 FORMALLY ACCEPTED (architecture only); implementation pending (2026-09-01).** `docs/adr/ADR-0032-canonical-production-composition.md` is now **Status: accepted** after two independent acceptance reviews: the first found one blocking attribution SHOULD-vs-MUST ambiguity; it was remediated (attribution made uniformly MUST with placeholder rejection; stale source-line citations replaced with stable references; the deterministic Worker entry added to the Stage-2 file plan); the final review returned **PASS WITH NON-BLOCKING NOTES — READY FOR ACCEPTANCE**. **Acceptance is of the canonical production-composition ARCHITECTURE only.** It does **NOT** close F-33, does **NOT** implement the composition root / CLI / deterministic Worker entry, does **NOT** qualify a new deployment, and does **NOT** authorize Stage 2. **F-33 remains OPEN (architecture accepted / implementation pending).** Preserved contract: GovernedPipeline is the canonical strong-governance orchestration (DirectorOrchestrator = non-production record/replay harness); execution via the F-17 trusted worker launch (no plain-`cli_runner`/subprocess fallback); single authoritative publication via `authorize_publishable`→`Publisher`→`ANCHORED`; two distinct state machines (`ANCHORED` ≠ universal engineering completion); operator-success = work-complete AND ANCHORED, a NEW F-33 COMPOSITION GUARANTEE (not F-17); identity floor `implementer_runner is reviewer_runner → fail closed` + mandatory non-placeholder attribution, with strong underlying-principal separation deferred as a NEW IDENTITY CONTRACT; the deterministic Worker entry is planned/not-yet-qualified and the composed F-33 deployment needs a FRESH measurement/qualification (no inherited F-17 byte-level qualification). Non-blocking Stage-2 notes recorded in ADR §29 (mutation symmetry for placeholder attribution; final worker-module path). **ADDITIVE F-17-CONSUMER CHANGE; F-17 untouched and remains CLOSED.** Docs/governance-only: no src/tests/scripts/pyproject/trust change. F-34 CLOSED; F-35–F-40 NOT STARTED; F-41/F-42 PASS. **NEXT: independent verification of this acceptance commit; only then may explicit Stage-2 implementation authorization be considered. Do NOT start Stage 2 or F-35–F-40.**
 
 0-XLVII. **F-33: OPEN — Stage-1 architecture ADR authored; awaiting independent review (2026-09-01).** F-33 (GovernedPipeline production-inert; ALTA / product-completeness) is **NOT resolved** — no implementation exists and none is authorized. Stage 0 (read-only architecture gate) found the hard blocker: `GovernedPipeline` is **doubly decoupled** from the CLOSED F-17 trust plane — its implementation launch uses a plain `cli_runner` (not the F-17 trusted worker launcher) and its completion is a `WorkIntegrator` git-branch land + `EngineerReport` (not the F-17 `authorize_publishable`→`Publisher`→anchor path). Stage 1 (design-only, authorized) produced **`docs/adr/ADR-0032-canonical-production-composition.md`** (status: **proposed**, awaiting independent review), defining: one canonical composition root (`src/gnosis/director/composition.py`) + one operator entry point (`[project.scripts] gnosis`); GovernedPipeline as the canonical strong-governance orchestration with `DirectorOrchestrator` kept as the non-production record/replay harness (relationship A); **Seam A** (trusted execution via `trust.worker_launcher.WorkerLauncher.launch(LaunchSpec)`, no plain-`cli_runner`/subprocess fallback); **Seam B** (authoritative publication via `trust.orchestration.authorize_publishable(store, identity, CompletionEvidence)` → `trust.publisher.Publisher` `PUBLISH <run_id>` → `PublicationState.ANCHORED`); two distinct state machines (governed-work lifecycle vs F-17 evidence-publication lifecycle — `ANCHORED` **not** broadened into universal engineering completion); provider-free E2E that still traverses the worker boundary (in-worker replay backend, §10 — with a recorded potential Stage-2 blocker if the F-17 launch API cannot host it); fail-closed startup; single publication authority; verifier-required; implementer≠reviewer (object-identity today, flagged as a Stage-2 assurance question). F-35 SOFT (single-brief slice avoids `sweep()`), F-36/F-37/F-39 independent, F-38 must-not-worsen, F-40 overlap-different-subsystems. **This stage is docs/design-only: no src/tests/scripts/pyproject change; F-17 untouched and remains CLOSED; GovernedPipeline not constructed in production.** Stage 2 (implementation) is **NOT authorized**. F-34 remains CLOSED; F-35–F-40 NOT STARTED; F-41/F-42 PASS. **NEXT: independent review of ADR-0032; on acceptance, Stage 2 = the minimum implementation slice (ADR §23). Do NOT start Stage 2 or F-35–F-40.**

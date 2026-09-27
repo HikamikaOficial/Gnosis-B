@@ -6,9 +6,11 @@ budget/journal/residue/recovery/preflight/route/env components.
 """
 from __future__ import annotations
 
+import shutil
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import ClassVar
 
@@ -42,7 +44,9 @@ from stage2cb import (
 )
 from stage2cb_ops import DryOperations, WindowsRealOperations
 
+from gnosis.provision.codex_package import codex_package_entrypoint
 from gnosis.provision.layout import DeploymentLayout
+from tests.test_codex_package import make_package
 
 F17D = "f" * 64
 CLAUDE = r"C:\Users\nicol\.local\bin\claude.exe"
@@ -471,6 +475,38 @@ class TestCrashPersistentResidue(_Base):
 
 
 class TestGuardsAndJournal(unittest.TestCase):
+    def test_base_provision_copies_complete_provider_before_observation(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            native = make_package(root / "native")
+            cfg = replace(_config(root), codex_runtime_src=str(native))
+            class FilesystemProviderOps(DryOperations):
+                def copytree(self, src, dst):
+                    if Path(src) == native:
+                        self._rec("copytree", src, dst)
+                        shutil.copytree(src, dst, dirs_exist_ok=True)
+                    else:
+                        super().copytree(src, dst)
+
+            ops = FilesystemProviderOps()
+            observed = []
+
+            def observe(config):
+                deployed = Path(config.runtime_root) / "providers" / "codex"
+                # Observation receives DesiredDeploymentConfig: provider bytes
+                # must already be present when identity measurement begins.
+                self.assertEqual(codex_package_entrypoint(deployed), deployed / "bin" / "codex.exe")
+                for file in native.rglob("*"):
+                    if file.is_file():
+                        self.assertEqual(file.read_bytes(),
+                            (deployed / file.relative_to(native)).read_bytes())
+                observed.append(True)
+                return FakeObserved(F17D)
+
+            provision, _handle = make_base_provision(cfg, ops, observe_fn=observe)
+            self.assertEqual(provision().deployment_digest, F17D)
+            self.assertEqual(observed, [True])
+
     def test_windows_real_ops_guarded(self) -> None:
         with self.assertRaises(PermissionError):
             WindowsRealOperations()

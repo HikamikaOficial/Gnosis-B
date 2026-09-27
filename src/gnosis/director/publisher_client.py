@@ -20,9 +20,13 @@ Two clients share one interface:
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+
+import gnosis.director._publisher_pipe_io as pipe_io
 
 # Mirror of the F-17 wire contract (trust/publisher.py) — consumed, not owned.
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -86,6 +90,9 @@ class PipePublisherClient:
         if not pipe_name.startswith(r"\\.\pipe\\") and not pipe_name.startswith(r"\\.\pipe"):
             raise PublisherClientError(
                 f"publisher endpoint {pipe_name!r} is not a local pipe path")
+        for value in (connect_timeout_ms, op_timeout_ms):
+            if type(value) is not int or not 1 <= value <= 300000:
+                raise PublisherClientError("pipe timeouts must be integer milliseconds in 1..300000")
         self._pipe_name = pipe_name
         self._connect_timeout_ms = connect_timeout_ms
         self._op_timeout_ms = op_timeout_ms
@@ -100,35 +107,24 @@ class PipePublisherClient:
         return parse_publish_response(raw)
 
     def _round_trip(self, request: str) -> str:  # pragma: no cover - OS-real (2C-B)
-        import ctypes
-        from ctypes import wintypes as w
-
-        k32 = ctypes.windll.kernel32
-        generic_rw = 0x80000000 | 0x40000000
-        open_existing = 3
-        invalid = ctypes.c_void_p(-1).value
-        # Bounded wait for the single-instance server to be free.
-        if not k32.WaitNamedPipeW(self._pipe_name, self._connect_timeout_ms):
-            raise PublisherClientError(
-                f"publisher service unavailable at {self._pipe_name} (fail closed)")
-        handle = k32.CreateFileW(self._pipe_name, generic_rw, 0, None,
-                                 open_existing, 0, None)
-        if handle in (invalid, None, 0):
-            raise PublisherClientError(
-                f"could not open publisher pipe (winerr {ctypes.get_last_error()})")
+        # The same interpreter/account as the Director, isolated from ambient
+        # Python paths. The helper owns every blocking handle. run() kills and
+        # reaps it on timeout; no I/O thread or native buffer is abandoned.
+        helper = Path(pipe_io.__file__)
         try:
-            raw = request.encode("utf-8")
-            written = w.DWORD(0)
-            if not k32.WriteFile(handle, raw, len(raw), ctypes.byref(written), None):
-                raise PublisherClientError("publisher write failed (fail closed)")
-            buf = ctypes.create_string_buffer(MAX_RESPONSE_BYTES + 1)
-            read = w.DWORD(0)
-            if not k32.ReadFile(handle, buf, MAX_RESPONSE_BYTES + 1,
-                                ctypes.byref(read), None):
-                raise PublisherClientError("publisher read failed (fail closed)")
-            return buf.raw[:read.value].decode("utf-8", "replace")
-        finally:
-            k32.CloseHandle(handle)
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", str(helper), self._pipe_name,
+                 str(self._connect_timeout_ms), str(MAX_RESPONSE_BYTES)],
+                input=request.encode("utf-8"), capture_output=True, check=False,
+                timeout=(self._connect_timeout_ms + self._op_timeout_ms) / 1000,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except subprocess.TimeoutExpired as exc:
+            raise PublisherClientError("publisher transport timed out; publication outcome unknown") from exc
+        except OSError as exc:
+            raise PublisherClientError("publisher transport unavailable") from exc
+        if result.returncode != 0:
+            raise PublisherClientError(f"publisher transport failed (stage {result.returncode})")
+        return result.stdout.decode("utf-8", "replace")
 
 
 class InProcessPublisherClient:

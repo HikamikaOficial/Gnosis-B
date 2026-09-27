@@ -39,6 +39,7 @@ from gnosis.provision.gnosis_deployment import (
     f17_publisher_files,
 )
 from gnosis.provision.layout import DeploymentLayout
+from gnosis.provision.operator_stack import worker_bootstrap_files
 from gnosis.provision.provisioner import (
     Operations,
     ProvisionConfig,
@@ -491,6 +492,8 @@ class Stage2CBConfig:
     reviewer_binary: str          # absolute path to the trusted claude executable
     run_id: str
     residue_root: str = ""        # recovery-record dir; MUST be outside owned_roots
+    codex_runtime_src: str | None = None  # complete trusted native vendor package
+    git_runtime_src: str | None = None  # complete existing Git for Windows tree
 
     def owned_roots(self) -> tuple[str, ...]:
         return (self.layout.code_base, self.layout.state_base, self.layout.work_base)
@@ -580,7 +583,10 @@ def make_base_provision(config: Stage2CBConfig, ops: Operations, *,
             config=config.provision_config(), ops=ops,
             runtime_src=config.runtime_src,
             publisher_files=f17_publisher_files(_SRC()),
-            bootstrap_files=(), toolchain_files=(), observe_fn=observe_fn)
+            bootstrap_files=(), toolchain_files=(), observe_fn=observe_fn,
+            codex_runtime_src=config.codex_runtime_src,
+            git_runtime_src=config.git_runtime_src,
+            runtime_bootstrap_files=worker_bootstrap_files(_SRC()))
         handle["provisioner"] = prov
         result = prov.install(worker_password)
         handle["install"] = result

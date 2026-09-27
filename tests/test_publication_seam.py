@@ -11,6 +11,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -19,7 +20,6 @@ import trust_fixtures as tf
 from gnosis.director.publication import (
     PublicationError,
     PublicationInputs,
-    capture_publishable_bundle,
     observe_git_tree,
     publish_governed_run,
 )
@@ -54,7 +54,7 @@ class _Base(unittest.TestCase):
             authorized_worker_sid=inputs.launched.observed_sid)
 
     def _publish(self, inputs: PublicationInputs) -> object:
-        capture_publishable_bundle(self.bundle_dir, inputs.tree)
+        tf.capture_publishable_bundle(self.bundle_dir, inputs.tree)
         return publish_governed_run(
             trust_state_root=self.trust_state_root, bundle_dir=self.bundle_dir,
             inputs=inputs, publisher_client=self._client(inputs))
@@ -74,6 +74,26 @@ class TestPublishesToAnchored(_Base):
 
 
 class TestFailClosed(_Base):
+    def test_anchored_id_cannot_be_reused_for_other_work(self) -> None:
+        inputs = self._inputs()
+        self._publish(inputs)
+        with self.assertRaises(PublicationError):
+            self._publish(replace(inputs, task_id="OTHER-TASK"))
+
+    def test_retry_consults_publisher_even_when_state_says_anchored(self) -> None:
+        from gnosis.director.publisher_client import PublisherClientError
+        inputs = self._inputs()
+        self._publish(inputs)
+
+        class RefusingPublisher:
+            def publish(self, run_id):
+                raise PublisherClientError("committed watermark unavailable")
+
+        with self.assertRaises(PublicationError, msg="must not trust cached ANCHORED alone"):
+            publish_governed_run(trust_state_root=self.trust_state_root,
+                                 bundle_dir=self.bundle_dir, inputs=inputs,
+                                 publisher_client=RefusingPublisher())
+
     def test_nonzero_exit_is_not_publishable(self) -> None:
         with self.assertRaises(PublicationError):
             self._publish(self._inputs(exit_code=13))
@@ -84,7 +104,7 @@ class TestFailClosed(_Base):
 
     def test_tampered_bundle_fails_closed(self) -> None:
         inputs = self._inputs()
-        capture_publishable_bundle(self.bundle_dir, inputs.tree)
+        tf.capture_publishable_bundle(self.bundle_dir, inputs.tree)
         (self.bundle_dir / "SUMMARY.json").write_text('{"tampered": true}',
                                                       encoding="utf-8")
         with self.assertRaises(PublicationError):

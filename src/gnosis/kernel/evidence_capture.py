@@ -99,6 +99,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -963,6 +964,13 @@ class CheckCommand:
     name: str
     argv: tuple[str, ...]
     lint_baseline: bool = False
+    timeout_s: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.timeout_s is not None and (
+                isinstance(self.timeout_s, bool) or not math.isfinite(self.timeout_s)
+                or self.timeout_s <= 0):
+            raise ValueError("check timeout must be positive and finite")
 
 
 @dataclass(frozen=True)
@@ -1052,10 +1060,24 @@ def check_environment(scratch: Path) -> dict[str, str]:
 def _run_check(repo: Path, command: CheckCommand, staging: Path,
                lint_baseline: int, env: Mapping[str, str] | None = None) -> CheckResult:
     started = time.monotonic()
-    proc = subprocess.run(
-        list(command.argv), cwd=repo, capture_output=True, text=True, check=False,
-        env=dict(env) if env is not None else None,
-    )
+    try:
+        proc = subprocess.run(
+            list(command.argv), cwd=repo, capture_output=True, text=True, check=False,
+            env=dict(env) if env is not None else None, timeout=command.timeout_s,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # Preserve a typed failing check; never turn timeout into an absent
+        # result which could accidentally qualify under an empty check set.
+        def partial_text(value: bytes | str | None) -> str:
+            return value.decode("utf-8", "replace") if isinstance(value, bytes) else value or ""
+
+        (staging / f"{command.name}.stdout.txt").write_text(
+            partial_text(exc.stdout), encoding="utf-8")
+        (staging / f"{command.name}.stderr.txt").write_text(
+            partial_text(exc.stderr) + "\nverification timed out", encoding="utf-8")
+        return CheckResult(command.name, tuple(command.argv), 124,
+                           round(time.monotonic() - started, 2), "verification timed out",
+                           CheckOutcome.FAILED, detail="timeout")
     duration = time.monotonic() - started
     (staging / f"{command.name}.stdout.txt").write_text(proc.stdout, encoding="utf-8")
     (staging / f"{command.name}.stderr.txt").write_text(proc.stderr, encoding="utf-8")

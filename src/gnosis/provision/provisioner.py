@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from gnosis.provision.codex_package import CodexPackageError, codex_package_entrypoint
+from gnosis.provision.git_package import GitPackageError, git_package_entrypoint
 from gnosis.provision.layout import DeploymentLayout, Principal, RootSpec
 
 # The four SID roles the ACL matrix resolves. Administrators and SYSTEM are
@@ -264,12 +266,18 @@ class Provisioner:
     # real deployment; defaults to the real deployment observer.
     observe_fn: Any = None
     steps: list[str] = field(default_factory=list)
+    # Optional official native Codex bundle. Kept INSIDE the measured runtime
+    # tree, so existing deployment identity + runtime ACLs cover all its bytes.
+    codex_runtime_src: str | None = None
+    git_runtime_src: str | None = None
+    runtime_bootstrap_files: Sequence[tuple[str, str]] = ()
 
     def _note(self, step: str) -> None:
         self.steps.append(step)
 
     # -- the install transaction, in the one correct order --------------------
     def install(self, worker_password: str) -> InstallResult:
+        self._validate_provider_source()
         sids_partial = self._create_identities(worker_password)
         self._deploy_code()
         self._write_descriptors_pre_acl(sids_partial)
@@ -312,10 +320,31 @@ class Provisioner:
         self._note("write DPAPI machine-bound worker credential blob")
         return ResolvedSids(maintenance, system, "PENDING-SERVICE-SID", worker)
 
+    def _validate_provider_source(self) -> None:
+        if self.git_runtime_src is not None:
+            try:
+                git_package_entrypoint(Path(self.git_runtime_src))
+            except GitPackageError as exc:
+                raise ProvisioningError(f"invalid Git package: {exc}") from exc
+        if self.codex_runtime_src is not None:
+            try:
+                codex_package_entrypoint(Path(self.codex_runtime_src))
+            except CodexPackageError as exc:
+                raise ProvisioningError(f"invalid native Codex package: {exc}") from exc
+
     def _deploy_code(self) -> None:
+        self._validate_provider_source()
         lay = self.config.layout
         self.ops.mkdir(lay.code_release_base)
         self.ops.copytree(self.runtime_src, lay.runtime_root)
+        for src, relative in self.runtime_bootstrap_files:
+            self.ops.copyfile(src, str(Path(lay.runtime_root) / "worker-bootstrap" / relative))
+        if self.git_runtime_src is not None:
+            self.ops.copytree(self.git_runtime_src,
+                              str(Path(lay.runtime_root) / "toolchains" / "git"))
+        if self.codex_runtime_src is not None:
+            self.ops.copytree(self.codex_runtime_src,
+                              str(Path(lay.runtime_root) / "providers" / "codex"))
         self.ops.write_text(lay.pth_file, pth_content())
         self._note("deploy runtime + python._pth")
         for src, rel in self.publisher_files:

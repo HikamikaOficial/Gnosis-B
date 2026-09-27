@@ -13,6 +13,7 @@ import json
 import subprocess
 from pathlib import Path
 
+from gnosis.director.publication import GitTreeEvidence
 from gnosis.trust.bundle_verify import write_bundle_manifest
 from gnosis.trust.deployment import (
     DEPLOYMENT_SCHEMA_V2,
@@ -130,3 +131,8 @@ def sealed_bundle(path: Path, *, head_sha: str, tree_identity: str) -> Path:
     }), encoding="utf-8")
     write_bundle_manifest(path)
     return path
+
+
+def capture_publishable_bundle(path: Path, tree: GitTreeEvidence) -> Path:
+    """Synthetic boundary evidence for component tests ONLY, not an OS capture."""
+    return sealed_bundle(path, head_sha=tree.head_sha, tree_identity=tree.tree_identity)

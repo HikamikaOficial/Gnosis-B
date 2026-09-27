@@ -112,6 +112,13 @@ class TestPositiveComposition(_Base):
         # Attribution flowed to the pipeline.
         self.assertEqual(pipeline.reviewer_id, "reviewer@team-b")
         self.assertEqual(pipeline.policy_actor, "agent://director-prod")
+        self.assertIsNotNone(pipeline.worktrees)
+        self.assertTrue(pipeline.worktrees.worktrees_root.is_relative_to(
+            self.root / "launch"))
+        self.assertEqual(pipeline.worktrees.provenance_root,
+                         self.root / "director" / "worktrees")
+        self.assertFalse(pipeline.worktrees.worktrees_root.is_relative_to(
+            self.root / "director"))
 
     def test_no_legacy_direct_runner_default(self) -> None:
         pipeline = build_production_composition(self._config())

@@ -47,6 +47,7 @@ from typing import Any
 from ..kernel.budget import BudgetExhausted
 from ..kernel.claims import GrantHeartbeatPump, StaleClaimError
 from ..kernel.lease import StaleLeaseError
+from ..runner.claude_cli_runner import CancellationToken
 from ..runner.gated_runner import CredentialHeld
 from .work_queue import ClaimedWork, WorkQueue
 
@@ -56,6 +57,10 @@ from .work_queue import ClaimedWork, WorkQueue
 _PARK_EXCEPTIONS: tuple[type[BaseException], ...] = (
     CredentialHeld, BudgetExhausted,
 )
+
+
+def _cancel_on_deposition(token: CancellationToken) -> Callable[[Exception], None]:
+    return lambda exc: token.cancel()
 
 
 class Disposition(str, Enum):
@@ -70,6 +75,7 @@ class StopReason(str, Enum):
     QUEUE_EMPTY = "QUEUE_EMPTY"
     # Nothing claimable, but only because every brief is backing off.
     ALL_WAITING = "ALL_WAITING"
+    DEPENDENCIES_WAITING = "DEPENDENCIES_WAITING"
     MAX_BRIEFS = "MAX_BRIEFS"
     WALL_CLOCK = "WALL_CLOCK"
     CONSECUTIVE_PARKS = "CONSECUTIVE_PARKS"
@@ -243,6 +249,8 @@ class WorkerSupervisor:
                 waiting = self.queue.waiting()
                 reason = (StopReason.ALL_WAITING if waiting
                           else StopReason.QUEUE_EMPTY)
+                if self.queue.dependency_waiting_ids():
+                    reason = StopReason.DEPENDENCIES_WAITING
                 return self._report(worker_id, reason, completed, parked,
                                     blocked, errors, waiting=waiting)
 
@@ -253,40 +261,22 @@ class WorkerSupervisor:
             # verifier and the supervisor inherited none of it.
             pump = GrantHeartbeatPump(
                 self.queue.authority, work.grant,
-                interval_s=self.heartbeat_interval_s,
+                interval_s=min(self.heartbeat_interval_s, work.grant.ttl_s / 4),
+                on_deposed=_cancel_on_deposition(work.cancellation_token),
             )
             pump.start()
+            returned: object = None
+            handler_error: Exception | None = None
             try:
                 # `object`, not `Disposition`: the annotation is a promise
                 # the runtime cannot enforce, and this loop is the place
                 # that finds out. Typing it honestly is also what keeps
                 # the check below from reading as dead code.
-                returned: object = handler(work)
-            except _PARK_EXCEPTIONS as park:
-                # RULE 6 AND RULE 7. A shut window and an exhausted
-                # budget are not the brief misbehaving, and blocking on
-                # them sent work to a human that only needed to wait —
-                # the supervisor collapsed the project's whole failure
-                # taxonomy into one `handler_raised:` string (independent
-                # review). These are parks, paced like any other.
-                delay = self.backoff.delay_for(work.attempts)
-                self.queue.release(work, reason=f"park:{type(park).__name__}",
-                                   not_before=self.clock() + delay)
-                parked.append(work.brief_id)
-                consecutive_parks += 1
-                continue
+                returned = handler(work)
             except Exception as exc:  # noqa: BLE001 - see below
-                # The brief is CLAIMED. A handler that raises must not
-                # leave it owned by a worker that has stopped — that is
-                # the stranding ADR-0019's review found, arriving through
-                # a different door. It is blocked, not retried: the
-                # outcome is unknown, and re-running work a worker
-                # recorded as unknown is not this supervisor's decision.
-                self.queue.block(work, reason=f"handler_raised:{type(exc).__name__}")
-                blocked.append(work.brief_id)
-                errors.append((work.brief_id, f"{type(exc).__name__}: {exc}"))
-                return self._report(worker_id, StopReason.HANDLER_RAISED,
-                                    completed, parked, blocked, errors)
+                # Classification never grants ownership. Defer EVERY queue
+                # transition until the heartbeat/deposition check below.
+                handler_error = exc
             finally:
                 pump.stop()
 
@@ -295,29 +285,37 @@ class WorkerSupervisor:
                 # NEW owner may already be running this brief. Writing
                 # anything now — a stamp, a move, a resolve — would act on
                 # somebody else's record: the transition methods address
-                # it by brief id and prove no ownership. So this worker
+                # it by brief id (the queue also fences each write). This worker
                 # touches nothing and names the exit.
                 errors.append((work.brief_id,
                                f"deposed mid-handler: {pump.deposed}"))
                 return self._report(worker_id, StopReason.DEPOSED,
                                     completed, parked, blocked, errors)
 
-            if not isinstance(returned, Disposition):
-                # Rule 8 asks for an invalid-output limit. Falling through
-                # to the park branch would turn a handler bug — a bare
-                # `return`, the commonest one — into an indefinite pacing
-                # loop that looks like a system waiting on a window. The
-                # outcome is as unknown as a raise, and treated the same.
-                self.queue.block(
-                    work, reason=f"invalid_disposition:{type(returned).__name__}")
-                blocked.append(work.brief_id)
-                errors.append((work.brief_id,
-                               f"handler returned {returned!r}, not a Disposition"))
-                return self._report(worker_id, StopReason.INVALID_OUTPUT,
-                                    completed, parked, blocked, errors)
-
-            disposition = returned
             try:
+                if isinstance(handler_error, _PARK_EXCEPTIONS):
+                    # Quota/budget remains a paced park, never a code failure.
+                    delay = self.backoff.delay_for(work.attempts)
+                    self.queue.release(work, reason=f"park:{type(handler_error).__name__}",
+                                       not_before=self.clock() + delay)
+                    parked.append(work.brief_id)
+                    consecutive_parks += 1
+                    continue
+                if handler_error is not None:
+                    # Unknown work remains blocked only by its current owner.
+                    self.queue.block(work, reason=f"handler_raised:{type(handler_error).__name__}")
+                    blocked.append(work.brief_id)
+                    errors.append((work.brief_id, f"{type(handler_error).__name__}: {handler_error}"))
+                    return self._report(worker_id, StopReason.HANDLER_RAISED,
+                                        completed, parked, blocked, errors)
+                if not isinstance(returned, Disposition):
+                    # An invalid output must not become an indefinite park loop.
+                    self.queue.block(work, reason=f"invalid_disposition:{type(returned).__name__}")
+                    blocked.append(work.brief_id)
+                    errors.append((work.brief_id, f"handler returned {returned!r}, not a Disposition"))
+                    return self._report(worker_id, StopReason.INVALID_OUTPUT,
+                                        completed, parked, blocked, errors)
+                disposition = returned
                 if disposition is Disposition.COMPLETED:
                     self.queue.complete(work, outcome="COMPLETED")
                     completed.append(work.brief_id)

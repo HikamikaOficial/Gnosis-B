@@ -7,6 +7,8 @@ Filesystem only; no OS provisioning, no provider calls.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -109,6 +111,30 @@ class TestDeployIntoCanonicalRoot(unittest.TestCase):
     def test_never_deploys_trust(self) -> None:
         deploy_operator_stack(SRC, self.pkg, self.rec)
         self.assertFalse((self.pkg / "gnosis" / "trust" / "orchestration.py").exists())
+
+    def test_transport_helper_is_measured_and_executable_without_checkout(self) -> None:
+        dep = deploy_operator_stack(SRC, self.pkg, self.rec)
+        relpath = "gnosis/director/_publisher_pipe_io.py"
+        self.assertIn(relpath, {f.relpath for f in dep.manifest.files})
+        helper = self.pkg / relpath
+        self.assertEqual(helper.read_bytes(), (SRC / relpath).read_bytes())
+        # The staged client imports its own helper. Isolated Python cannot fall
+        # back to the editable checkout or an ambient PYTHONPATH.
+        program = (
+            "import sys; sys.path.insert(0, sys.argv[1]); "
+            "from gnosis.director.publisher_client import PipePublisherClient; "
+            "PipePublisherClient(r'\\\\.\\pipe\\unused')._round_trip('')"
+        )
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", "-c", program, str(self.pkg)],
+            cwd=self.tmp.name, capture_output=True, text=True, timeout=10, check=False)
+        # Empty input is rejected by the real helper before touching Windows;
+        # a missing/unimportable helper cannot produce this client exception.
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("PublisherClientError: publisher transport failed (stage 2)",
+                      result.stderr)
+        ok, problems = verify_application_tree(self.pkg, dep.manifest)
+        self.assertTrue(ok, problems)
 
     def test_refuses_to_overwrite_existing_f17_file(self) -> None:
         victim = self.pkg / "gnosis" / "director" / "cli.py"

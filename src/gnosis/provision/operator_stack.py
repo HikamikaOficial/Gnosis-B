@@ -125,6 +125,12 @@ def production_closure(source_root: Path) -> dict[str, Path]:
     return _closure(source_root, _CLOSURE_ROOTS)
 
 
+def worker_bootstrap_files(source_root: Path) -> tuple[tuple[str, str], ...]:
+    """Minimal Worker-readable bootstrap, copied into the measured runtime."""
+    return tuple((str(path), path.relative_to(source_root).as_posix())
+                 for _, path in sorted(_closure(source_root, ("gnosis.trust.bootstrap",)).items()))
+
+
 def f17_provided_closure(source_root: Path) -> dict[str, Path]:
     """The trust-plane sub-closure the F-17 Provisioner deploys (as publisher_files).
 

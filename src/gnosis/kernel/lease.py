@@ -194,6 +194,13 @@ class LeaseStore:
             state = self._load_locked()
             return self._current_locked(state, resource, lease_id)
 
+    def while_current(self, resource: str, lease_id: str,
+                      action: Callable[[], None]) -> None:
+        """Bounded commit; action must not reenter lease or claim stores."""
+        with self._locked():
+            self._current_locked(self._load_locked(), resource, lease_id)
+            action()
+
     def current(self, resource: str) -> Lease | None:
         """The live lease for a resource, or None (expired counts as None)."""
         with self._locked():

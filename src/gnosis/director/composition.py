@@ -30,33 +30,60 @@ bundling every launcher input. This factory consumes the EXISTING artifacts — 
 
 from __future__ import annotations
 
+import re
+import shlex
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
 from gnosis.contracts.director_brief import DirectorBrief
 from gnosis.contracts.engineer_report import ReportStatus
-from gnosis.director.execution import ExecutionMode, TrustedExecutionPort
+from gnosis.director.checkpoint import (
+    CapturedProof,
+    CheckpointError,
+    CheckpointSession,
+    PipelineCheckpointStore,
+)
+from gnosis.director.execution import (
+    CodexWorkerConfiguration,
+    ExecutionMode,
+    TrustedExecutionPort,
+)
 from gnosis.director.pipeline import GovernedPipeline, PipelineOutcome
+from gnosis.director.proof import capture_task_proof
 from gnosis.director.publication import (
+    GitTreeEvidence,
     PublicationError,
     PublicationInputs,
-    capture_publishable_bundle,
-    observe_git_tree,
     publish_governed_run,
 )
+from gnosis.director.publication_checkpoint import PublicationCheckpointStore
 from gnosis.director.publisher_client import PipePublisherClient, PublisherClient
 from gnosis.director.trusted_runner import TrustedExecutionRunner
+from gnosis.kernel.budget import BudgetLedger
+from gnosis.kernel.canonical import hash_canonical
 from gnosis.kernel.convergence import ConvergencePolicy
 from gnosis.kernel.engine import TaskEngine
+from gnosis.kernel.execution_scope import ExecutionScope
+from gnosis.kernel.file_lock import FileLock
+from gnosis.kernel.integration import IntegrationOutcome, PreparedIntegration, WorkIntegrator
 from gnosis.kernel.policy import PolicyEngine
 from gnosis.kernel.run_store import RunStore
 from gnosis.kernel.scheduler import HoldStore, TaskScheduler
-from gnosis.kernel.verification import Verifier
-from gnosis.kernel.worktree import WorktreeManager
+from gnosis.kernel.subject import observe_subject
+from gnosis.kernel.verification import CommandVerifier, Verifier
+from gnosis.kernel.worktree import WorktreeError, WorktreeManager
 from gnosis.provision.layout import DeploymentLayout
-from gnosis.trust.deployment import TrustPlaneDeploymentIdentity, observe_runtime
+from gnosis.trust.bundle_verify import verify_bundle
+from gnosis.trust.deployment import (
+    FileTreeManifest,
+    TrustPlaneDeploymentIdentity,
+    observe_runtime,
+    observe_runtime_tree,
+)
 from gnosis.trust.launch import AuthorityUnavailable
+from gnosis.trust.launch_spec import LaunchSpec
 from gnosis.trust.publisher_service import ServiceConfig
 from gnosis.trust.worker_launcher import TrustedWindowsWorkerLauncher, WorkerAccount
 
@@ -65,8 +92,9 @@ from gnosis.trust.worker_launcher import TrustedWindowsWorkerLauncher, WorkerAcc
 _PLACEHOLDER_REVIEWER_IDS = frozenset({"claude-cli"})
 _PLACEHOLDER_POLICY_ACTORS = frozenset({"agent://unattributed"})
 
-# Only the deterministic, OS-real-qualified mode is selectable in Stage 2B.1.
-_SUPPORTED_MODES = frozenset({ExecutionMode.DETERMINISTIC})
+# Provider mode additionally requires a native executable bound into the measured
+# runtime and cross-bound to the Publisher's expected deployment identity.
+_SUPPORTED_MODES = frozenset({ExecutionMode.DETERMINISTIC, ExecutionMode.PROVIDER_BACKED})
 
 
 class CompositionError(Exception):
@@ -93,6 +121,7 @@ class TrustedDeploymentInputs:
     worker_account: WorkerAccount
     credential_blob_path: Path
     launch_root: Path
+    expected_deployment_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +151,8 @@ class ProductionCompositionConfig:
     credential: str = "claude://default"
     execution_mode: ExecutionMode = ExecutionMode.DETERMINISTIC
     convergence_policy: ConvergencePolicy | None = None
+    provider_runtime_tree: FileTreeManifest | None = None
+    integration_target: str | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -154,6 +185,9 @@ class OperatorConfigInputs:
     pipe_name: str
     verifier_name: str
     verifier_command: tuple[str, ...]
+    reviewer_provider: str = "claude"
+    execution_mode: ExecutionMode = ExecutionMode.DETERMINISTIC
+    integration_target: str | None = None
 
 
 # The mandatory production config contract (sections consumed by the reader
@@ -168,7 +202,12 @@ def build_operator_config(inputs: OperatorConfigInputs) -> dict[str, Any]:
     the authoritative `release_id` verbatim from `inputs.layout.release_id`, so the
     deployed operator reconstructs the EXACT release layout it was staged under."""
     lay = inputs.layout
-    return {
+    if inputs.reviewer_provider not in {"claude", "codex"}:
+        raise CompositionError("unsupported trusted reviewer provider")
+    reviewer = {"binary": inputs.reviewer_binary}
+    if inputs.reviewer_provider != "claude":
+        reviewer["provider"] = inputs.reviewer_provider
+    result: dict[str, Any] = {
         "deployment": {
             "code_base": lay.code_base, "state_base": lay.state_base,
             "work_base": lay.work_base, "release_id": lay.release_id,
@@ -185,8 +224,25 @@ def build_operator_config(inputs: OperatorConfigInputs) -> dict[str, Any]:
             "service_name": inputs.service_name, "pipe_name": inputs.pipe_name},
         "verifier": {"name": inputs.verifier_name,
                      "command": list(inputs.verifier_command)},
-        "reviewer": {"binary": inputs.reviewer_binary},
+        "reviewer": reviewer,
     }
+    if inputs.execution_mode not in _SUPPORTED_MODES:
+        raise CompositionError("unsupported trusted execution mode")
+    if inputs.execution_mode is ExecutionMode.PROVIDER_BACKED:
+        result["execution"] = {"mode": "provider_backed", "provider": "codex"}
+    if inputs.integration_target is not None:
+        validate_integration_target(inputs.integration_target)
+        result["integration"] = {"target_branch": inputs.integration_target, "authorized": True}
+    return result
+
+
+def validate_integration_target(target: str) -> None:
+    if (not isinstance(target, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}", target) is None
+            or ".." in target or "//" in target
+            or any(part.startswith(".") or part.endswith((".", ".lock")) for part in target.split("/"))
+            or target.endswith("/")):
+        raise CompositionError("invalid trusted integration target branch")
 
 
 def trusted_deployment_from_layout(layout: DeploymentLayout, worker_username: str,
@@ -211,7 +267,8 @@ def trusted_deployment_from_layout(layout: DeploymentLayout, worker_username: st
         runtime_executable=Path(layout.runtime_executable),
         worker_account=account,
         credential_blob_path=Path(layout.secrets_blob),
-        launch_root=Path(layout.work_base))
+        launch_root=Path(layout.work_base),
+        expected_deployment_digest=service_config.expected_deployment_digest)
 
 
 def _require(condition: bool, message: str) -> None:
@@ -250,7 +307,54 @@ def _bind_deployment_runtime(dep: TrustedDeploymentInputs) -> Path:
     return Path(identity.executable_path)
 
 
-def build_production_composition(config: ProductionCompositionConfig) -> GovernedPipeline:
+def bind_codex_runtime(python_executable: Path,
+                       expected_tree: FileTreeManifest | None) -> CodexWorkerConfiguration:
+    """Select only the native Codex inside the existing measured runtime tree."""
+    _require(expected_tree is not None, "provider runtime tree evidence is required")
+    assert expected_tree is not None
+    try:
+        current = observe_runtime_tree(python_executable.parent)
+    except Exception as exc:
+        raise CompositionError("provider runtime tree could not be observed") from exc
+    _require(current.digest() == expected_tree.digest(), "provider runtime tree drifted")
+    from gnosis.provision.codex_package import CodexPackageError, codex_package_entrypoint
+
+    relpath = "providers/codex/bin/codex.exe"
+    matches = [entry for entry in expected_tree.files if entry.path == relpath]
+    _require(len(matches) == 1, "measured runtime must contain exactly one native Codex")
+    try:
+        executable = codex_package_entrypoint(python_executable.parent / "providers" / "codex")
+    except CodexPackageError as exc:
+        raise CompositionError(f"deployed native Codex package is invalid: {exc}") from exc
+    from gnosis.provision.git_package import GitPackageError, git_package_entrypoint
+
+    runtime_root = python_executable.parent
+    try:
+        git = git_package_entrypoint(runtime_root / "toolchains" / "git")
+    except GitPackageError as exc:
+        raise CompositionError(f"deployed Git package is invalid: {exc}") from exc
+    bootstrap_root = runtime_root / "worker-bootstrap"
+    required_bootstrap = (
+        "gnosis/__init__.py", "gnosis/kernel/__init__.py", "gnosis/kernel/canonical.py",
+        "gnosis/kernel/atomic_io.py", "gnosis/trust/__init__.py", "gnosis/trust/launch.py",
+        "gnosis/trust/launch_spec.py", "gnosis/trust/bootstrap.py",
+    )
+    _require(all((bootstrap_root / relative).is_file() for relative in required_bootstrap),
+             "measured runtime lacks the Worker bootstrap closure")
+    provider = CodexWorkerConfiguration(
+        executable, matches[0].digest, trusted_path=(runtime_root, git.parent),
+        bootstrap=bootstrap_root / "gnosis" / "trust" / "bootstrap.py")
+    try:
+        provider.verify()
+    except Exception as exc:
+        raise CompositionError("deployed native Codex does not match its runtime record") from exc
+    return provider
+
+
+def build_production_composition(config: ProductionCompositionConfig, *,
+                                 checkpoint_store: PipelineCheckpointStore | None = None,
+                                 checkpoint_context: str | None = None,
+                                 scope: ExecutionScope | None = None) -> GovernedPipeline:
     """Assemble the ONE canonical strong-governance production orchestration.
 
     Returns a `GovernedPipeline` (ADR-0032 §8 — the single production orchestration
@@ -263,6 +367,8 @@ def build_production_composition(config: ProductionCompositionConfig) -> Governe
     _require(config.execution_mode in _SUPPORTED_MODES,
              f"execution mode {config.execution_mode!r} is not selectable in Stage 2B.1")
     _validate_attribution(config.attribution)
+    if config.integration_target is not None:
+        validate_integration_target(config.integration_target)
 
     op = config.operator
     _require(op.repo_path.exists() and op.repo_path.is_dir(),
@@ -272,6 +378,9 @@ def build_production_composition(config: ProductionCompositionConfig) -> Governe
     # --- trusted execution seam (deployment-derived runtime) -------------------
     dep = config.deployment
     python_executable = _bind_deployment_runtime(dep)
+    codex = None
+    if config.execution_mode is ExecutionMode.PROVIDER_BACKED:
+        codex = bind_codex_runtime(python_executable, config.provider_runtime_tree)
     # C2: the worker-launch infrastructure must be present (DPAPI credential blob
     # written by provisioning; a usable worker-writable launch plane).
     _require(dep.credential_blob_path.is_file(),
@@ -286,9 +395,15 @@ def build_production_composition(config: ProductionCompositionConfig) -> Governe
         account=dep.worker_account,
         credential_blob_path=dep.credential_blob_path,
         launch_root=dep.launch_root,
-        runtime=python_executable)
-    port = TrustedExecutionPort(launcher=launcher, python_executable=python_executable)
-    trusted_runner = TrustedExecutionRunner(port, workspace=dep.launch_root)
+        runtime=python_executable,
+        bootstrap=codex.bootstrap if codex is not None else None,
+        director_env=dict(codex.environment) if codex is not None else None,
+        environment_allowlist=frozenset({"PYTHONUTF8", "PYTHONIOENCODING", "PATH"}))
+    port = TrustedExecutionPort(launcher=launcher, python_executable=python_executable,
+                                codex=codex)
+    trusted_runner = TrustedExecutionRunner(port, workspace=dep.launch_root,
+                                             output_workspace=dep.launch_root / "outputs",
+                                            mode=config.execution_mode)
 
     # --- engine/scheduler: the trusted runner is the EXPLICIT implementer ------
     run_store = RunStore(op.director_root / "runs")
@@ -311,10 +426,19 @@ def build_production_composition(config: ProductionCompositionConfig) -> Governe
         director_root=op.director_root, scheduler=scheduler, repo_path=op.repo_path,
         verifier=config.verifier, policy=config.policy,
         review_runner=config.review_runner,
+        fix_runner=trusted_runner,
         policy_actor=config.attribution.policy_actor,
         reviewer_id=config.attribution.reviewer_id,
         convergence_policy=config.convergence_policy,
-        worktrees=WorktreeManager(op.repo_path, op.director_root / "worktrees"))
+        bind_review_subject=True,
+        checkpoint_store=checkpoint_store, checkpoint_context=checkpoint_context,
+        scope=scope,
+        commit_before_review=config.integration_target is not None,
+        worktrees=WorktreeManager(
+            op.repo_path,
+            dep.launch_root / "worktrees" / hash_canonical({
+                "director_root": str(op.director_root.resolve()).casefold()}),
+            provenance_root=op.director_root / "worktrees"))
     return pipeline
 
 
@@ -416,22 +540,85 @@ class ProductionComposition:
                  runner: TrustedExecutionRunner,
                  publication: PublicationCompositionInputs,
                  repo_path: Path,
-                 publisher_client: PublisherClient) -> None:
+                 publisher_client: PublisherClient,
+                 scope: ExecutionScope | None = None,
+                 integration_target: str | None = None) -> None:
         self._pipeline = pipeline
         self._runner = runner
         self._publication = publication
         self._repo_path = repo_path
         self._publisher_client = publisher_client
+        self.scope = scope
+        self.integration_target = integration_target
+
+    def _guard(self) -> None:
+        if self.scope is not None:
+            self.scope.check()
+
+    @cached_property
+    def _checkpoints(self) -> PublicationCheckpointStore:
+        # A failed-work report does not need publication infrastructure.
+        # Construct recovery storage only when that phase is actually reached.
+        return PublicationCheckpointStore(
+            self._publication.trust_state_root, self._publication.evidence_root, self.scope)
 
     @property
     def pipeline(self) -> GovernedPipeline:
         return self._pipeline
 
     def run_brief(self, brief: DirectorBrief) -> OperatorOutcome:
-        work: PipelineOutcome = self._pipeline.run_brief(brief)
-        return self._finish(work)
+        # Serialize one brief across its complete execution/publication path.
+        # A restart releases the OS lock; a concurrent caller cannot duplicate it.
+        self._guard()
+        operation = self._checkpoints.path_for(brief.brief_id).with_suffix(".operation.lock")
+        with FileLock(operation):
+            self._guard()
+            return self._run_brief(brief)
 
-    def _finish(self, work: PipelineOutcome) -> OperatorOutcome:
+    def _run_brief(self, brief: DirectorBrief) -> OperatorOutcome:
+        self._runner.clear_launch()
+        try:
+            publication_epoch = self._publication.epoch
+            claimed_launch = False
+            phases = getattr(self._pipeline, "checkpoints", None)
+            if isinstance(phases, PipelineCheckpointStore):
+                phase = phases.load(brief.brief_id)
+                if phase is not None and (phase.brief != brief
+                        or phase.context_digest != self._pipeline.checkpoint_context):
+                    raise CheckpointError("brief or deployment configuration changed since checkpoint")
+                if self.scope is not None and phase is not None and phase.trusted_attempt is not None:
+                    if phase.trusted_attempt.epoch is None:
+                        raise CheckpointError("unclaimed launch cannot be adopted by a claimed operation")
+                    publication_epoch = phase.trusted_attempt.epoch
+                    claimed_launch = True
+            pending = self._checkpoints.load(
+                brief, deployment=self._publication.deployment,
+                repository_id=self._publication.repository_id, epoch=publication_epoch,
+                source_for=self._pipeline._exec_root, verifier=self._pipeline.verifier)
+            if pending is not None:
+                if self.scope is not None and not claimed_launch:
+                    raise CheckpointError("claimed recovery requires a protected launch epoch")
+                self._guard()
+                result = publish_governed_run(
+                    trust_state_root=self._publication.trust_state_root,
+                    bundle_dir=self._publication.evidence_root / pending.run_id,
+                    inputs=pending, publisher_client=self._publisher_client,
+                    scope=self.scope)
+                self._guard()
+                landing = self._finish_integration(brief, pending.task_id, pending.run_id)
+                if landing is not None:
+                    return landing
+                return OperatorOutcome(True, pending.task_id, pending.run_id,
+                                       ReportStatus.COMPLETED.value,
+                                       result.publication_state.value, "anchored after recovery")
+        except (PublicationError, CheckpointError, WorktreeError, OSError, ValueError) as exc:
+            return OperatorOutcome(False, "", None, ReportStatus.BLOCKED.value, None,
+                                   f"publication recovery refused: {exc}")
+        work: PipelineOutcome = self._pipeline.run_brief(brief)
+        return self._finish(work, brief)
+
+    def _finish(self, work: PipelineOutcome, brief: DirectorBrief | None = None) -> OperatorOutcome:
+        self._guard()
         # Governed work must succeed FIRST; a non-COMPLETED run is never published.
         if work.status is not ReportStatus.COMPLETED:
             return OperatorOutcome(
@@ -443,44 +630,246 @@ class ProductionComposition:
         launched = self._runner.last_launched
         spec = self._runner.last_spec
         run_id = self._runner.last_run_id
+        phases = getattr(self._pipeline, "checkpoints", None)
+        if launched is None and isinstance(phases, PipelineCheckpointStore) and brief is not None:
+            try:
+                phase = phases.load(brief.brief_id)
+                if (phase is None or phase.task_id != work.task_id or phase.brief != brief
+                        or phase.context_digest != self._pipeline.checkpoint_context
+                        or phase.trusted_attempt is None
+                        or phase.trusted_attempt.spec.run_id != work.report.run_id):
+                    raise CheckpointError("completed work has no matching protected launch")
+                spec, launched = phase.trusted_attempt.spec, phase.trusted_attempt.launched
+                run_id = spec.run_id
+            except CheckpointError as exc:
+                return OperatorOutcome(False, work.task_id, None, work.status.value, None,
+                                       f"launch recovery refused: {exc}")
         if launched is None or spec is None or run_id is None:
             return OperatorOutcome(
                 success=False, task_id=work.task_id, run_id=run_id,
                 work_status=work.status.value, publication_state=None,
                 reason="no trusted launch was recorded for the governed run")
         try:
-            tree = observe_git_tree(self._repo_path)
+            if brief is None:
+                raise PublicationError("the completed work has no attributable brief")
+            publication_epoch = self._publication.epoch
+            if self.scope is not None:
+                if not isinstance(phases, PipelineCheckpointStore):
+                    raise CheckpointError("claimed publication requires protected phase evidence")
+                phase = phases.load(brief.brief_id)
+                if (phase is None or phase.trusted_attempt is None
+                        or phase.trusted_attempt.spec.run_id != run_id
+                        or phase.trusted_attempt.epoch is None):
+                    raise CheckpointError("claimed publication has no recorded launch epoch")
+                publication_epoch = phase.trusted_attempt.epoch
             bundle_dir = self._publication.evidence_root / run_id
-            capture_publishable_bundle(bundle_dir, tree)
+            tree = self._capture_proof(work, brief, run_id, spec)
+            inputs = PublicationInputs(
+                task_id=work.task_id, run_id=run_id,
+                repository_id=self._publication.repository_id,
+                epoch=publication_epoch, exit_code=0,
+                launched=launched, spec=spec,
+                deployment=self._publication.deployment, tree=tree)
+            self._guard()
+            self._checkpoints.save(brief, inputs)
+            self._guard()
             result = publish_governed_run(
                 trust_state_root=self._publication.trust_state_root,
                 bundle_dir=bundle_dir,
-                inputs=PublicationInputs(
-                    task_id=work.task_id, run_id=run_id,
-                    repository_id=self._publication.repository_id,
-                    epoch=self._publication.epoch, exit_code=0,
-                    launched=launched, spec=spec,
-                    deployment=self._publication.deployment, tree=tree),
-                publisher_client=self._publisher_client)
-        except PublicationError as exc:
+                inputs=inputs,
+                publisher_client=self._publisher_client, scope=self.scope)
+        except (PublicationError, CheckpointError, WorktreeError, OSError, ValueError) as exc:
             return OperatorOutcome(
                 success=False, task_id=work.task_id, run_id=run_id,
                 work_status=work.status.value, publication_state=None,
                 reason=f"authoritative publication failed: {exc}")
         # operator success = work COMPLETED AND publication ANCHORED (§14).
+        self._guard()
+        assert brief is not None
+        landing = self._finish_integration(brief, work.task_id, run_id)
+        if landing is not None:
+            return landing
         return OperatorOutcome(
             success=True, task_id=work.task_id, run_id=run_id,
             work_status=work.status.value,
             publication_state=result.publication_state.value, reason="anchored")
 
+    def _finish_integration(self, brief: DirectorBrief, task_id: str,
+                            run_id: str) -> OperatorOutcome | None:
+        if self.integration_target is None:
+            return None
+        self._guard()
+        phases = self._pipeline.checkpoints
+        try:
+            if phases is None or self._pipeline.worktrees is None:
+                raise CheckpointError("integration requires durable isolated task state")
+            record = phases.load(brief.brief_id)
+            if (record is None or record.task_id != task_id or record.brief != brief
+                    or record.proof is None or record.proof.run_id != run_id
+                    or record.convergence is None or record.subject is None):
+                raise CheckpointError("integration has no matching published task proof")
+            session = CheckpointSession(phases, record)
+
+            def prepared(receipt: PreparedIntegration) -> None:
+                self._guard()
+                session.save(prepared_integration=receipt)
+
+            integrator = WorkIntegrator(self._repo_path, self._pipeline.worktrees,
+                self._pipeline.verifier, target_branch=self.integration_target,
+                integration_root=self._pipeline.inbox.layout.root / "integration",
+                policy=self._pipeline.policy, approvals=self._pipeline.approvals,
+                policy_actor=self._pipeline.policy_actor, scope=self.scope,
+                on_prepared=prepared, convergence_policy=self._pipeline.convergence_policy)
+            if record.prepared_integration is not None:
+                result = integrator.resume_prepared(record.prepared_integration)
+            else:
+                if record.integration_attempts >= 3:
+                    raise CheckpointError("integration attempt budget exhausted")
+                session.save(integration_attempts=record.integration_attempts + 1)
+                ledger = BudgetLedger(self._pipeline.budget, prior_launches=record.launches,
+                                      prior_elapsed_s=record.elapsed_s)
+
+                def save_budget() -> None:
+                    self._guard()
+                    session.save(launches=ledger.launches, elapsed_s=ledger.elapsed_s)
+                    self._pipeline.budget_store.record(brief.brief_id, ledger)
+
+                try:
+                    result = integrator.integrate(task_id, record.convergence,
+                        re_reviewer=self._pipeline._rereviewer_for(task_id, ledger, save_budget,
+                            integration_attempt=session.current.integration_attempts))
+                finally:
+                    save_budget()
+            self._guard()
+            session.save(integration=result)
+            landed = result.integrated
+            if result.outcome is IntegrationOutcome.NOTHING_TO_INTEGRATE:
+                landed = observe_subject(self._repo_path) == record.subject
+            if not landed:
+                return OperatorOutcome(False, task_id, run_id, ReportStatus.COMPLETED.value,
+                                       "ANCHORED", f"integration refused: {result.reason}")
+            return OperatorOutcome(True, task_id, run_id, ReportStatus.COMPLETED.value,
+                                   "ANCHORED", "anchored and integrated")
+        except (CheckpointError, WorktreeError, OSError, ValueError) as exc:
+            return OperatorOutcome(False, task_id, run_id, ReportStatus.COMPLETED.value,
+                                   "ANCHORED", f"integration failed: {exc}")
+
+    def _capture_proof(self, work: PipelineOutcome, brief: DirectorBrief,
+                       run_id: str, spec: LaunchSpec) -> GitTreeEvidence:
+        self._guard()
+        final = self._publication.evidence_root / run_id
+
+        def capture(target: Path) -> GitTreeEvidence:
+            return capture_task_proof(
+                bundle_dir=target, source=self._pipeline._exec_root(work.task_id),
+                brief=brief, work=work, run_id=run_id, spec=spec,
+                verifier=self._pipeline.verifier,
+                convergence_dir=self._pipeline.inbox.layout.outbox / f"{work.task_id}-convergence")
+
+        phases = getattr(self._pipeline, "checkpoints", None)
+        if not isinstance(phases, PipelineCheckpointStore):
+            return capture(final)
+        phase = phases.load(brief.brief_id)
+        if (phase is None or phase.task_id != work.task_id or phase.brief != brief
+                or phase.trusted_attempt is None or phase.trusted_attempt.spec != spec
+                or phase.context_digest != self._pipeline.checkpoint_context
+                or phase.convergence != work.convergence):
+            raise CheckpointError("proof does not match protected phase evidence")
+        if phase.proof is None:
+            if final.exists():
+                raise PublicationError("uncheckpointed final proof exists; refusing replacement")
+            if phase.proof_attempts >= 3:
+                raise PublicationError("proof capture attempt budget exhausted; evidence retained")
+            phase = phases.update(phase, proof_attempts=phase.proof_attempts + 1)
+            stage = final.parent / f".{run_id}-proof-{phase.proof_attempts}"
+            tree = capture(stage)
+            self._guard()
+            verified = verify_bundle(stage)
+            if not verified.verified or verified.bundle_digest is None:
+                raise PublicationError("captured proof has no verified digest")
+            # Persist the receipt BEFORE moving the sealed directory. A restart
+            # can identify either side of that rename by its protected digest.
+            phase = phases.update(phase, proof=CapturedProof(
+                run_id, phase.proof_attempts, verified.bundle_digest, tree))
+        receipt = phase.proof
+        assert receipt is not None
+        stage = final.parent / f".{run_id}-proof-{receipt.attempt}"
+        candidate = final if final.exists() else stage
+        root = self._publication.evidence_root.resolve()
+        if candidate.resolve().parent != root or final.resolve().parent != root:
+            raise PublicationError("proof recovery path escaped its evidence root")
+        if not verify_bundle(candidate, receipt.bundle_digest).verified:
+            raise PublicationError("captured proof digest changed before publication")
+        if candidate == stage:
+            self._guard()
+            stage.rename(final)
+        elif stage.exists():
+            raise PublicationError("proof recovery has ambiguous staging and final copies")
+        if not verify_bundle(final, receipt.bundle_digest).verified:
+            raise PublicationError("final proof differs from protected capture receipt")
+        return receipt.tree
+
+
+def _checkpoint_context(config: ProductionCompositionConfig,
+                        publication: PublicationCompositionInputs) -> str:
+    """Bind durable work to the trusted deployment and its execution configuration.
+
+    The deployment digest covers the installed policy/adapter code. Never load
+    executable rules or provider credentials from recovery records.
+    """
+    verifier = config.verifier
+    if not isinstance(verifier, CommandVerifier):
+        raise CompositionError("durable publication requires a reproducible command verifier")
+    reviewer_binary = getattr(config.review_runner, "binary", None)
+    _require(isinstance(reviewer_binary, str) and bool(reviewer_binary),
+             "durable publication requires an identified reviewer executable")
+    convergence = config.convergence_policy or ConvergencePolicy(max_rounds=3)
+    return hash_canonical({
+        "schema": "gnosis.pipeline-context.v1",
+        "deployment": publication.deployment.digest(),
+        "repository_id": publication.repository_id,
+        "repository_path": str(config.operator.repo_path.resolve()),
+        "director_root": str(config.operator.director_root.resolve()),
+        "evidence_root": str(publication.evidence_root.resolve()),
+        "launch_root": str(config.deployment.launch_root.resolve()),
+        "worker_sid": config.deployment.worker_account.expected_sid,
+        "epoch": publication.epoch, "mode": config.execution_mode.value,
+        "integration_target": config.integration_target,
+        "credential": config.credential,
+        "reviewer": {"id": config.attribution.reviewer_id,
+                     "binary": reviewer_binary,
+                     "adapter": type(config.review_runner).__module__ + "." + type(config.review_runner).__qualname__},
+        "policy_actor": config.attribution.policy_actor,
+        "verifier": {"name": verifier.name, "timeout_s": verifier.timeout_s,
+                     "argv": shlex.split(verifier.command) if isinstance(verifier.command, str)
+                             else list(verifier.command)},
+        "convergence": {"max_rounds": convergence.max_rounds,
+                        "max_unchanged_rounds": convergence.max_unchanged_rounds,
+                        "blocking": sorted(v.value for v in convergence.blocking_severities),
+                        "min_confidence": convergence.min_blocking_confidence},
+    })
+
 
 def build_production_deployment(config: ProductionCompositionConfig,
-                                publication: PublicationCompositionInputs
+                                publication: PublicationCompositionInputs, *,
+                                scope: ExecutionScope | None = None,
                                 ) -> ProductionComposition:
     """Assemble the operator-reachable production composition (governed work +
     authoritative publication). Reuses the canonical `build_production_composition`
     for the governed graph, then binds the publication seam on top."""
-    pipeline = build_production_composition(config)
+    if config.execution_mode is ExecutionMode.PROVIDER_BACKED:
+        expected = config.deployment.expected_deployment_digest
+        _require(expected is not None and publication.deployment.digest() == expected,
+                 "provider deployment differs from the Publisher's trusted expectation")
+        tree = publication.deployment.runtime_tree
+        _require(tree is not None and config.provider_runtime_tree is not None
+                 and tree.digest() == config.provider_runtime_tree.digest(),
+                 "provider and publication must bind the same runtime tree")
+    if scope is not None:
+        scope.check()
+    pipeline = build_production_composition(config,
+        checkpoint_store=PipelineCheckpointStore(publication.trust_state_root / "director-phases", scope),
+        checkpoint_context=_checkpoint_context(config, publication), scope=scope)
     runner = pipeline.scheduler.engine.cli_runner
     if not isinstance(runner, TrustedExecutionRunner):  # defence in depth
         raise CompositionError(
@@ -503,4 +892,5 @@ def build_production_deployment(config: ProductionCompositionConfig,
     # the pipe client (never in-process durable_publish on the operator route).
     publisher_client = PipePublisherClient(publication.pipe_name)
     return ProductionComposition(pipeline, runner, publication,
-                                 config.operator.repo_path, publisher_client)
+                                 config.operator.repo_path, publisher_client, scope,
+                                 config.integration_target)

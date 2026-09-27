@@ -38,3 +38,20 @@ class ExecutionResult:
             "parsed_json": self.parsed_json, "succeeded": self.succeeded,
             "launch": self.launch,
         }
+
+
+@dataclass(frozen=True)
+class RecordedAttempt:
+    """One durable agent invocation; success here is not task completion."""
+
+    run_id: str
+    task_id: str
+    stage: str
+    state: str
+    result: ExecutionResult | None = None
+    error_type: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"run_id": self.run_id, "task_id": self.task_id, "stage": self.stage,
+                "state": self.state, "result": self.result.to_dict() if self.result else None,
+                "error_type": self.error_type}

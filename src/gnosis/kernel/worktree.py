@@ -132,10 +132,15 @@ class WorktreeManager:
     each checked out from `source_repo` on its own `gnosis/<task_id>`
     branch."""
 
-    def __init__(self, source_repo: Path, worktrees_root: Path):
+    def __init__(self, source_repo: Path, worktrees_root: Path, *,
+                 provenance_root: Path | None = None):
         self.source_repo = Path(source_repo)
         self.worktrees_root = Path(worktrees_root)
+        # Production keeps these authority records outside Worker-writable trees.
+        self.provenance_root = (Path(provenance_root) if provenance_root is not None
+                                else self.worktrees_root)
         self.worktrees_root.mkdir(parents=True, exist_ok=True)
+        self.provenance_root.mkdir(parents=True, exist_ok=True)
 
     def planned_path(self, task_id: str) -> Path:
         """Where this task's worktree WOULD live. Creates nothing.
@@ -476,7 +481,7 @@ class WorktreeManager:
     # -- shared helpers --------------------------------------------------------
 
     def _handle_marker(self, task_id: str) -> Path:
-        return self.worktrees_root / f".{task_id}.worktree.json"
+        return self.provenance_root / f".{task_id}.worktree.json"
 
     def _branch_exists(self, branch: str) -> bool:
         proc = _run_git(self.source_repo, ["rev-parse", "--verify", "--quiet",
