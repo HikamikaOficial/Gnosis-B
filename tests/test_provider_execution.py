@@ -64,6 +64,10 @@ def test_login_and_execution_both_use_sealed_worker_launch(tmp_path: Path) -> No
     assert specs[1].run_id == intent.run_id
     assert specs[1].argv[-2:] == ("--", intent.prompt)
     assert "workspace-write" in specs[1].argv
+    # On native Windows an unspecified sandbox implementation can downgrade
+    # workspace-write to read-only, even though the Worker has filesystem access.
+    assert 'windows.sandbox="unelevated"' in specs[1].argv
+    assert "--dangerously-bypass-approvals-and-sandbox" not in specs[1].argv
     assert result.result["result"] == "implemented"
     assert result.spec == specs[1]
     for handle in handles:

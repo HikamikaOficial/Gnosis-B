@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -133,9 +134,11 @@ class WorktreeManager:
     branch."""
 
     def __init__(self, source_repo: Path, worktrees_root: Path, *,
-                 provenance_root: Path | None = None):
+                 provenance_root: Path | None = None,
+                 prepare_directory: Callable[[Path], None] | None = None):
         self.source_repo = Path(source_repo)
         self.worktrees_root = Path(worktrees_root)
+        self._prepare_directory = prepare_directory
         # Production keeps these authority records outside Worker-writable trees.
         self.provenance_root = (Path(provenance_root) if provenance_root is not None
                                 else self.worktrees_root)
@@ -217,6 +220,13 @@ class WorktreeManager:
         return handle
 
     def _worktree_add(self, target: Path, branch: str, base_ref: str) -> None:
+        if self._prepare_directory is not None:
+            if target.exists() or target.is_symlink():
+                raise WorktreeError("workspace preparation requires a new directory")
+            self._prepare_directory(target)
+            if (not target.is_dir() or target.is_symlink()
+                    or (hasattr(target, "is_junction") and target.is_junction())):
+                raise WorktreeError("workspace preparation did not create an ordinary directory")
         if self._branch_exists(branch):
             # Adopt the surviving kernel-minted branch rather than deleting
             # or shadowing it: its commits are recoverable work.

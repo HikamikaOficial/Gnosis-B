@@ -458,6 +458,17 @@ def build_production_composition(config: ProductionCompositionConfig, *,
                 output_root=dep.launch_root / "review-output",
                 guard=scope.check if scope is not None else lambda: None)
 
+    def prepare_workspace(target: Path) -> None:
+        # Creation under the Worker token gives its sandbox authority over only
+        # this fresh task directory. No privileged ownership transfer or change
+        # to the protected repository, provenance, runtime or state is needed.
+        result = verification_executor.execute(
+            (str(python_executable), "-I", "-B", "-c",
+             "from pathlib import Path; import sys; Path(sys.argv[1]).mkdir()",
+             str(target)), cwd=target.parent, timeout_s=30)
+        if result.returncode != 0:
+            raise WorktreeError("Worker workspace preparation failed: " + result.stderr)
+
     pipeline = GovernedPipeline(
         director_root=op.director_root, scheduler=scheduler, repo_path=op.repo_path,
         verifier=verifier, policy=config.policy,
@@ -474,7 +485,9 @@ def build_production_composition(config: ProductionCompositionConfig, *,
             op.repo_path,
             dep.launch_root / "worktrees" / hash_canonical({
                 "director_root": str(op.director_root.resolve()).casefold()}),
-            provenance_root=op.director_root / "worktrees"))
+            provenance_root=op.director_root / "worktrees",
+            prepare_directory=(prepare_workspace
+                               if config.execution_mode is ExecutionMode.PROVIDER_BACKED else None)))
     return pipeline
 
 

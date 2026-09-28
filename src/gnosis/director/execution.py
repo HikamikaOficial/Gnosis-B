@@ -294,6 +294,7 @@ class TrustedExecutionPort:
             raise WorkerAuthenticationRequired("dedicated Worker ChatGPT login is required")
         argv = (executable, "exec", "--json", "--color", "never", "--sandbox",
                 "workspace-write", "-c", 'approval_policy="never"',
+                "-c", 'windows.sandbox="unelevated"',
                 "-c", 'model_provider="openai"', "--", intent.prompt)
         code, identity, spec = launch(argv, intent.stdout_path, intent.stderr_path)
         if code != 0:

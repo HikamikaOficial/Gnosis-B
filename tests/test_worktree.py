@@ -71,6 +71,37 @@ class TestWorktreeManager(unittest.TestCase):
         second = self.manager.create(task_id="TASK-1")
         self.assertEqual(first, second)
 
+    def test_directory_preparation_runs_before_checkout_and_not_on_resume(self):
+        prepared = []
+        def prepare(path):
+            self.assertFalse(path.exists())
+            path.mkdir()
+            prepared.append(path)
+        manager = WorktreeManager(self.repo, self.root / "prepared", prepare_directory=prepare)
+        first = manager.create("TASK-prepared")
+        self.assertEqual(prepared, [Path(first.path)])
+        self.assertTrue((Path(first.path) / "README.md").is_file())
+        self.assertEqual(manager.create("TASK-prepared"), first)
+        self.assertEqual(len(prepared), 1)
+
+    def test_failed_preparation_does_not_register_branch_or_provenance(self):
+        def prepare(path):
+            raise WorktreeError("Worker unavailable")
+        manager = WorktreeManager(self.repo, self.root / "failed", prepare_directory=prepare)
+        with self.assertRaisesRegex(WorktreeError, "Worker unavailable"):
+            manager.create("TASK-failed")
+        self.assertFalse(manager.exists("TASK-failed"))
+        result = subprocess.run(["git", "branch", "--list", "gnosis/TASK-failed"],
+                                cwd=self.repo, capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout.strip(), "")
+
+    def test_preparation_must_create_a_directory(self):
+        manager = WorktreeManager(self.repo, self.root / "invalid",
+                                  prepare_directory=lambda path: path.write_text("not a directory"))
+        with self.assertRaisesRegex(WorktreeError, "ordinary directory"):
+            manager.create("TASK-invalid")
+        self.assertFalse(manager.exists("TASK-invalid"))
+
     def test_evidence_reflects_isolated_changes(self):
         handle = self.manager.create(task_id="TASK-1")
         (Path(handle.path) / "new_file.txt").write_text("hello", encoding="utf-8")
