@@ -58,4 +58,16 @@ worktrees are not chowned or reset. Provenance stays in protected Director state
 Preparation failure leaves no branch or successful provenance record. A separate
 live probe qualifies this exact creation path; deployment is still pending.
 
+`worker-prepared-boundary-probe.json` passed the exact Worker-created directory
+path with scoped write/read and outside-write denial. Candidate 8b9a841 then
+passed 2248 tests (75 skipped, 272 subtests), with all 274 frozen inputs unchanged.
+
+The repository probe succeeded with Worker RX access to a separate owned source
+repository under maintenance and an exact `safe.directory` entry for the task's
+worktree in the Worker's Git configuration. It also proved the Worker could not
+write a marker to the source repository. Evidence:
+`worker-repository-boundary-probe.json`. Production preparation now registers
+only its freshly allocated task directory; no wildcard trust, source write grant
+or credential change is introduced. The original escalated project is retained.
+
 Official reference: https://learn.chatgpt.com/docs/windows/windows-sandbox

@@ -468,6 +468,15 @@ def build_production_composition(config: ProductionCompositionConfig, *,
              str(target)), cwd=target.parent, timeout_s=30)
         if result.returncode != 0:
             raise WorktreeError("Worker workspace preparation failed: " + result.stderr)
+        # Git metadata is Director-owned and Worker-readable. Trust only this
+        # exact kernel-assigned worktree in the Worker's own Git configuration;
+        # never trust '*' or grant write access to source repository metadata.
+        git = python_executable.parent / "toolchains/git/cmd/git.exe"
+        trusted = verification_executor.execute(
+            (str(git), "config", "--global", "--add", "safe.directory", str(target)),
+            cwd=target.parent, timeout_s=30)
+        if trusted.returncode != 0:
+            raise WorktreeError("Worker Git workspace registration failed: " + trusted.stderr)
 
     pipeline = GovernedPipeline(
         director_root=op.director_root, scheduler=scheduler, repo_path=op.repo_path,
