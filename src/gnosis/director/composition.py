@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import re
 import shlex
+import subprocess
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -477,6 +478,15 @@ def build_production_composition(config: ProductionCompositionConfig, *,
             cwd=target.parent, timeout_s=30)
         if trusted.returncode != 0:
             raise WorktreeError("Worker Git workspace registration failed: " + trusted.stderr)
+        # The root belongs to Worker while its Git metadata belongs to Director.
+        # Both identities need this exact assignment registered. Run this small
+        # configuration operation from the protected source, never task code.
+        director_trust = subprocess.run(
+            [str(git), "config", "--global", "--add", "safe.directory", str(target)],
+            cwd=op.repo_path, capture_output=True, text=True, timeout=30, check=False)
+        if director_trust.returncode != 0:
+            raise WorktreeError("Director Git workspace registration failed: "
+                                + director_trust.stderr)
 
     pipeline = GovernedPipeline(
         director_root=op.director_root, scheduler=scheduler, repo_path=op.repo_path,

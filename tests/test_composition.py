@@ -98,6 +98,36 @@ class _Base(unittest.TestCase):
 
 
 class TestPositiveComposition(_Base):
+    def test_provider_workspace_registers_both_identities_and_refuses_director_failure(self) -> None:
+        from gnosis.kernel.worktree import WorktreeError
+
+        native = mock.Mock(bootstrap=None, environment=())
+        with mock.patch.object(comp, "bind_codex_runtime", return_value=native):
+            pipeline = build_production_composition(
+                self._config(execution_mode=ExecutionMode.PROVIDER_BACKED))
+        target = self.root / "assigned-task"
+        assert pipeline.worktrees is not None
+        prepare = pipeline.worktrees._prepare_directory
+        assert prepare is not None
+        ok = subprocess.CompletedProcess([], 0, "", "")
+        with (mock.patch("gnosis.director.check_executor.WorkerCheckExecutor.execute",
+                         return_value=ok) as worker,
+              mock.patch.object(comp.subprocess, "run", return_value=ok) as director):
+            prepare(target)
+        self.assertEqual(worker.call_count, 2)
+        self.assertEqual(worker.call_args.args[0][-4:],
+                         ("--global", "--add", "safe.directory", str(target)))
+        self.assertEqual(director.call_args.args[0][-4:],
+                         ["--global", "--add", "safe.directory", str(target)])
+        self.assertEqual(director.call_args.kwargs["cwd"], self.repo)
+        self.assertEqual(director.call_args.kwargs["timeout"], 30)
+        denied = subprocess.CompletedProcess([], 1, "", "configuration denied")
+        with (mock.patch("gnosis.director.check_executor.WorkerCheckExecutor.execute",
+                         return_value=ok),
+              mock.patch.object(comp.subprocess, "run", return_value=denied),
+              self.assertRaisesRegex(WorktreeError, "Director Git workspace")):
+            prepare(target)
+
     def test_builds_canonical_governed_pipeline(self) -> None:
         pipeline = build_production_composition(self._config())
         self.assertIsInstance(pipeline, GovernedPipeline)
