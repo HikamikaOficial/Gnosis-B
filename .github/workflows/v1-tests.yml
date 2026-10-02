@@ -17,6 +17,9 @@ jobs:
   windows-tests:
     runs-on: windows-2025
     timeout-minutes: 60
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
     defaults:
       run:
         shell: pwsh
@@ -31,6 +34,14 @@ jobs:
           python-version: '3.12'
       - name: Install declared development dependencies
         run: python -m pip install '.[dev]'
+      - name: Canonicalize the Windows temporary directory
+        # Hosted Windows exposes TEMP using an 8.3 alias. Trusted output readers
+        # deliberately reject redirected path spellings; create fixtures using
+        # the canonical path, as the deployed runtime does.
+        run: |
+          $taskTemp = python -c "from pathlib import Path; import tempfile; print(Path(tempfile.gettempdir()).resolve())"
+          "TEMP=$taskTemp" >> $env:GITHUB_ENV
+          "TMP=$taskTemp" >> $env:GITHUB_ENV
       - name: Record runtime and configure disposable test Git identity
         run: |
           python --version

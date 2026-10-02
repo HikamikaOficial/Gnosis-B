@@ -153,11 +153,13 @@ class TestACrashedWorkerLosesNothing(_QueueTestCase):
         # through the lease TTL, and the brief still sat in `running/`
         # where no worker looks — ownership free, record unreachable,
         # which is the ghost rule 4 forbids.
-        queue = self._short_lived()
+        clock = [1000.0]
+        queue = self._short_lived(clock=lambda: clock[0])
         queue.enqueue(_brief("BRIEF-1"))
-        queue.claim("worker-that-dies")
+        self.assertIsNotNone(queue.claim("worker-that-dies"))
 
-        time.sleep(0.15)
+        # Expire an acquired lease, independent of CI disk write latency.
+        clock[0] += 0.15
         queue.authority.sweep()
         self.assertEqual(queue.running_ids(), ["BRIEF-1"])
         self.assertIsNone(queue.claim("worker-b"), "should be invisible before recovery")
@@ -180,10 +182,11 @@ class TestACrashedWorkerLosesNothing(_QueueTestCase):
         self.assertEqual(queue.done_ids(), ["BRIEF-1"])
 
     def test_recovery_is_idempotent(self):
-        queue = self._short_lived()
+        clock = [1000.0]
+        queue = self._short_lived(clock=lambda: clock[0])
         queue.enqueue(_brief("BRIEF-1"))
-        queue.claim("worker-that-dies")
-        time.sleep(0.15)
+        self.assertIsNotNone(queue.claim("worker-that-dies"))
+        clock[0] += 0.15
         queue.authority.sweep()
 
         self.assertEqual(queue.recover(), ["BRIEF-1"])
@@ -275,10 +278,11 @@ class TestRepairsFromTheIndependentReview(_QueueTestCase):
         # A mechanism nothing calls is a parallel fiction; a worker
         # starting up is when a previous worker's stranded record should
         # come back.
-        queue = self._short_lived()
+        clock = [1000.0]
+        queue = self._short_lived(clock=lambda: clock[0])
         queue.enqueue(_brief("BRIEF-1"))
-        queue.claim("worker-that-dies")
-        time.sleep(0.15)
+        self.assertIsNotNone(queue.claim("worker-that-dies"))
+        clock[0] += 0.15
         queue.authority.sweep()
 
         claimed = [w.brief_id for w in drain(queue, "worker-b")]
