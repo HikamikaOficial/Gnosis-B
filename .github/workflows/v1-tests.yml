@@ -34,12 +34,14 @@ jobs:
           python-version: '3.12'
       - name: Install declared development dependencies
         run: python -m pip install '.[dev]'
-      - name: Canonicalize the Windows temporary directory
-        # Hosted Windows exposes TEMP using an 8.3 alias. Trusted output readers
-        # deliberately reject redirected path spellings; create fixtures using
-        # the canonical path, as the deployed runtime does.
+      - name: Prepare a short canonical Windows temporary directory
+        # Profile TEMP may be an 8.3 alias and its expanded form makes nested
+        # task worktrees exceed Git's internal GIT_DIR limit. Use the runner's
+        # scratch directory; retain all path checks and test assertions.
         run: |
-          $taskTemp = python -c "from pathlib import Path; import tempfile; print(Path(tempfile.gettempdir()).resolve())"
+          $taskTemp = Join-Path $env:RUNNER_TEMP 'gnosis-tests'
+          New-Item -ItemType Directory -Force -Path $taskTemp | Out-Null
+          $taskTemp = (Resolve-Path -LiteralPath $taskTemp).Path
           "TEMP=$taskTemp" >> $env:GITHUB_ENV
           "TMP=$taskTemp" >> $env:GITHUB_ENV
       - name: Record runtime and configure disposable test Git identity
