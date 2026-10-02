@@ -135,10 +135,12 @@ class WorktreeManager:
 
     def __init__(self, source_repo: Path, worktrees_root: Path, *,
                  provenance_root: Path | None = None,
-                 prepare_directory: Callable[[Path], None] | None = None):
+                 prepare_directory: Callable[[Path], None] | None = None,
+                 populate_worktree: Callable[[Path], None] | None = None):
         self.source_repo = Path(source_repo)
         self.worktrees_root = Path(worktrees_root)
         self._prepare_directory = prepare_directory
+        self._populate_worktree = populate_worktree
         # Production keeps these authority records outside Worker-writable trees.
         self.provenance_root = (Path(provenance_root) if provenance_root is not None
                                 else self.worktrees_root)
@@ -227,14 +229,27 @@ class WorktreeManager:
             if (not target.is_dir() or target.is_symlink()
                     or (hasattr(target, "is_junction") and target.is_junction())):
                 raise WorktreeError("workspace preparation did not create an ordinary directory")
+        # Keep Git metadata under the Director while allowing a different token
+        # to create checked-out files. In Windows the sandbox must be able to
+        # authorize existing files, not just newly created files in an owned root.
+        checkout_options = ["--no-checkout"] if self._populate_worktree is not None else []
         if self._branch_exists(branch):
             # Adopt the surviving kernel-minted branch rather than deleting
             # or shadowing it: its commits are recoverable work.
-            proc = _run_git(self.source_repo, ["worktree", "add", str(target), branch])
+            proc = _run_git(self.source_repo, ["worktree", "add", *checkout_options, str(target), branch])
         else:
-            proc = _run_git(self.source_repo, ["worktree", "add", "-b", branch, str(target), base_ref])
+            proc = _run_git(self.source_repo, ["worktree", "add", *checkout_options,
+                                              "-b", branch, str(target), base_ref])
         if proc.returncode != 0:
             raise WorktreeError(f"git worktree add failed: {proc.stderr.strip()}")
+        if self._populate_worktree is not None:
+            indexed = _run_git(target, ["read-tree", "HEAD"])
+            if indexed.returncode != 0:
+                raise WorktreeError(f"worktree index initialization failed: {indexed.stderr.strip()}")
+            self._populate_worktree(target)
+            checked = _run_git(target, ["diff", "--quiet", "--exit-code"])
+            if checked.returncode != 0:
+                raise WorktreeError("Worker checkout does not match the assigned Git index")
 
     # -- resume-state loading (hostile input) ---------------------------------
 

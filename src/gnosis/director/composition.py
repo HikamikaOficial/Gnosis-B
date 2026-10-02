@@ -488,6 +488,15 @@ def build_production_composition(config: ProductionCompositionConfig, *,
             raise WorktreeError("Director Git workspace registration failed: "
                                 + director_trust.stderr)
 
+    def populate_workspace(target: Path) -> None:
+        # checkout-index without --index reads the protected index and creates
+        # files as Worker. It does not need write access to source Git metadata.
+        git = python_executable.parent / "toolchains/git/cmd/git.exe"
+        result = verification_executor.execute(
+            (str(git), "checkout-index", "--all"), cwd=target, timeout_s=120)
+        if result.returncode != 0:
+            raise WorktreeError("Worker workspace checkout failed: " + result.stderr)
+
     pipeline = GovernedPipeline(
         director_root=op.director_root, scheduler=scheduler, repo_path=op.repo_path,
         verifier=verifier, policy=config.policy,
@@ -506,6 +515,8 @@ def build_production_composition(config: ProductionCompositionConfig, *,
                 "director_root": str(op.director_root.resolve()).casefold()}),
             provenance_root=op.director_root / "worktrees",
             prepare_directory=(prepare_workspace
+                               if config.execution_mode is ExecutionMode.PROVIDER_BACKED else None),
+            populate_worktree=(populate_workspace
                                if config.execution_mode is ExecutionMode.PROVIDER_BACKED else None)))
     return pipeline
 

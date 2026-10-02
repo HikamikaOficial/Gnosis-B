@@ -98,6 +98,28 @@ class _Base(unittest.TestCase):
 
 
 class TestPositiveComposition(_Base):
+    def test_provider_checkout_uses_worker_without_index_write_and_refuses_failure(self) -> None:
+        from gnosis.kernel.worktree import WorktreeError
+
+        native = mock.Mock(bootstrap=None, environment=())
+        with mock.patch.object(comp, "bind_codex_runtime", return_value=native):
+            pipeline = build_production_composition(
+                self._config(execution_mode=ExecutionMode.PROVIDER_BACKED))
+        assert pipeline.worktrees is not None
+        populate = pipeline.worktrees._populate_worktree
+        assert populate is not None
+        target = self.root / "assigned-task"
+        with mock.patch("gnosis.director.check_executor.WorkerCheckExecutor.execute",
+                        return_value=subprocess.CompletedProcess([], 0, "", "")) as worker:
+            populate(target)
+        self.assertEqual(worker.call_args.args[0][-2:], ("checkout-index", "--all"))
+        self.assertEqual(worker.call_args.kwargs["cwd"], target)
+        self.assertEqual(worker.call_args.kwargs["timeout_s"], 120)
+        with (mock.patch("gnosis.director.check_executor.WorkerCheckExecutor.execute",
+                         return_value=subprocess.CompletedProcess([], 1, "", "denied")),
+              self.assertRaisesRegex(WorktreeError, "Worker workspace checkout failed")):
+            populate(target)
+
     def test_provider_workspace_registers_both_identities_and_refuses_director_failure(self) -> None:
         from gnosis.kernel.worktree import WorktreeError
 

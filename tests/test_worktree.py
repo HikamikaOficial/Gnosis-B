@@ -95,6 +95,38 @@ class TestWorktreeManager(unittest.TestCase):
                                 cwd=self.repo, capture_output=True, text=True, check=True)
         self.assertEqual(result.stdout.strip(), "")
 
+    def test_separate_checkout_materializes_existing_files_only_once(self):
+        populated = []
+        def populate(path):
+            self.assertFalse((path / "README.md").exists())
+            tracked = subprocess.check_output(["git", "ls-files"], cwd=path, text=True)
+            self.assertIn("README.md", tracked)
+            subprocess.run(["git", "checkout-index", "--all"], cwd=path, check=True,
+                           capture_output=True)
+            populated.append(path)
+        manager = WorktreeManager(self.repo, self.root / "worker-checkout",
+                                  populate_worktree=populate)
+        handle = manager.create("TASK-owned-files")
+        path = Path(handle.path)
+        self.assertEqual((path / "README.md").read_bytes(), (self.repo / "README.md").read_bytes())
+        (path / "README.md").write_text("unfinished worker change\n")
+        self.assertEqual(manager.create("TASK-owned-files"), handle)
+        self.assertEqual((path / "README.md").read_text(), "unfinished worker change\n")
+        self.assertEqual(populated, [path])
+
+    def test_incomplete_separate_checkout_preserves_files_without_admitting_handle(self):
+        def incomplete(path):
+            (path / "partial.txt").write_text("preserve me")
+        manager = WorktreeManager(self.repo, self.root / "partial-checkout",
+                                  populate_worktree=incomplete)
+        with self.assertRaisesRegex(WorktreeError, "does not match"):
+            manager.create("TASK-partial")
+        self.assertFalse(manager.exists("TASK-partial"))
+        self.assertEqual((manager.planned_path("TASK-partial") / "partial.txt").read_text(),
+                         "preserve me")
+        with self.assertRaises(WorktreeCorruptStateError):
+            manager.create("TASK-partial")
+
     def test_preparation_must_create_a_directory(self):
         manager = WorktreeManager(self.repo, self.root / "invalid",
                                   prepare_directory=lambda path: path.write_text("not a directory"))
