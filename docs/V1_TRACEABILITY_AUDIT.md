@@ -221,7 +221,7 @@ bytes de un árbol sucio pasaron las pruebas.**
   **desde la evidencia**.
 - **confidence** ALTA
 
-### F-15 · FAIL · ALTA · primitiva existente no utilizada
+### F-15 · RESOLVED / STALE (histórico: FAIL / ALTA) · primitiva existente no utilizada
 
 - **files** `scripts/capture_evidence.py` vs `src/gnosis/kernel/git_evidence.py:78`
 - **symbol** `content_fingerprint`, `tamper_fingerprint`
@@ -235,8 +235,29 @@ bytes de un árbol sucio pasaron las pruebas.**
 - **confidence** ALTA
 - **corrección sugerida** escribir `content_fingerprint(REPO)` en `SUMMARY.json`
   antes y después de la tanda.
+- **status (2026-08-31 · RESOLVED / STALE)** el hallazgo era válido al escribirse
+  (`capture_evidence.py` no usaba `content_fingerprint`), pero el trabajo de
+  vinculación de evidencia posterior (ADR-0026 / era F-14–F-17) ya conectó la
+  primitiva a la ruta de producción de captura. Cableado actual:
+  `capture_evidence.py` → `run_capture(...)` →
+  `probe_tree_identity(..., fingerprint=content_fingerprint)` (huella PRE antes
+  del primer check y POST tras el último) → `bind_tree(pre, post)` →
+  `TreeBinding.to_dict()` → `SUMMARY.json`, con la identidad de contenido
+  (incluido `patch_sha256`) enlazada y fallo cerrado si los extremos difieren o
+  la identidad no puede tomarse. La primitiva NO está sin usar: la consumen
+  además `kernel/engine.py`, `kernel/integration.py`, `adapters/cli_review.py`,
+  `runner/replay_runner.py` y `kernel/evidence_capture.py`; cubierta por
+  `test_evidence_binding.py` (extremo a extremo, `patch_sha256`, `bind_tree`) y
+  la suite de mutación F-14. Sin cambio de código en este cierre; F-14 y F-17
+  permanecen CLOSED. La capa de captura produce evidencia vinculada, NO una
+  segunda ruta de autoridad: la publicación autoritativa sigue siendo la ruta
+  F-17 ya cualificada. (Deuda técnica separada, no-F-15, no-bloqueante: el
+  parámetro inyectable `fingerprint=` podría dar una huella estructuralmente
+  incompleta y `bind_tree` describirla como BOUND; producción fija
+  `content_fingerprint` y no expone ese selector a entrada no confiable — no
+  reabre F-15/F-14/F-17 y no se corrige ahora.)
 
-### F-16 · FAIL · ALTA · orden de captura
+### F-16 · RESOLVED / STALE (histórico: FAIL / ALTA) · orden de captura
 
 - **file** `scripts/capture_evidence.py:64-70`
 - **symbol** `main()`
@@ -246,6 +267,47 @@ bytes de un árbol sucio pasaron las pruebas.**
   que la suite corrió. No hay captura pre/post ni comparación.
 - **evidence** `captured_at` = 17:49:22 frente al sello del directorio 17:40:16.
 - **confidence** ALTA
+- **status (2026-08-31 · RESOLVED / STALE)** el hallazgo era válido cuando se
+  escribió, pero la arquitectura de captura posterior (era F-14/F-17,
+  `kernel/evidence_capture.py:run_capture`) lo superó. Secuencia de producción
+  actual: (1) init de staging/scratch; (2) observador de escritura ARMADO; (3–5)
+  puertas Git backend/versión, topología, resolución; (6) **identidad PRE de
+  árbol/contenido (`pre = identity(repo)`, 1401)**; (7) bloqueo de entradas
+  cubiertas; (8) **identidad PREPARED tras dejar las entradas no escribibles
+  (1415)**; (9) chequeo de deriva de preparación — si `PRE != PREPARED` el bucle
+  de comandos NO se ejecuta; (10) **comandos de cualificación (1429)**; (11)
+  deriva de streams; (12) liberación del bloqueo; (13) **identidad POST (1439)**;
+  (14) fin del observador; (15) `bind_tree(pre, post)`; (16) clasificación de
+  observación/boundary; (17) veredicto de checks; (18) `SUMMARY.json`; (19)
+  manifiesto del bundle; (20) publicación como paso separado del bundle
+  completado. **Propiedad de seguridad: existe una identidad PRE de confianza
+  ANTES de que se ejecute el primer comando de cualificación** (NO se requiere
+  escribir `SUMMARY` antes de los comandos). Si la identidad PRE no está
+  disponible, no corre ningún comando, el efecto colateral del comando está
+  ausente y la captura devuelve identity-unavailable / fallo cerrado — protegido
+  por `test_an_unavailable_pre_identity_runs_nothing_and_fails_closed`,
+  `test_an_unavailable_post_identity_fails_closed_although_every_check_passed`,
+  `test_a_capture_with_no_checks_is_refused`, `test_the_observer_is_armed_before_the_lock`
+  y demostrado con un experimento controlado desechable (orden observado
+  `identity, identity, command, identity`; PRE no disponible → 0 checks, sin
+  efecto colateral, exit 3). La identidad de contenido y la COMPLETITUD de la
+  observación del intervalo son garantías SEPARADAS: el observador está armado
+  antes de PRE y activo hasta POST, y el bloqueo protege el conjunto de entradas
+  durante la ejecución; el diseño NO depende solo de huellas PRE/POST iguales.
+  Los transcripts parciales viven en staging antes del enlace final y NO
+  constituyen un bundle publicado válido: un bundle válido requiere
+  identidad/enlace + veredicto de boundary + veredicto de checks + `SUMMARY` +
+  manifiesto + paso de publicación (que rehúsa sobrescribir). Sin cambio de
+  código en este cierre. F-14 y F-17 permanecen CLOSED; la capa de captura
+  produce un transcript de hito enlazado, NO una segunda ruta de autoridad (la
+  publicación autoritativa sigue siendo la ruta F-17 cerrada). Deuda de
+  aseguramiento no-bloqueante (compartida con F-15, NO-F-16): el parámetro
+  inyectable `fingerprint=` podría dar snapshots estructuralmente incompletas
+  pero iguales que el enlace genérico llamaría BOUND; producción fija
+  `content_fingerprint` y ninguna entrada no confiable elige el proveedor — no
+  reabre F-14/F-16/F-17 y no se corrige ahora. Las entradas de comando
+  `git-head`/`git-status` son ahora transcript redundante; su retirada sería
+  limpieza cosmética, no requerida para resolver el hallazgo.
 
 ### F-17 · FAIL · MEDIA · tamper-evidence
 
@@ -255,12 +317,49 @@ implementa un ledger append-only hash-encadenado que se re-verifica íntegro ant
 de extenderse. La evidencia que sostiene las afirmaciones del proyecto es la
 parte menos protegida del proyecto.
 
-### F-18 · FAIL · MEDIA · deriva de evidencia
+### F-18 · RESOLVED / STALE (histórico: FAIL / MEDIA) · deriva de evidencia
 
 `PROJECT_REPORT.md` declara `Commit: edec96e` y cita `20260821T174016Z` como
 "Latest evidence bundle". Ese bundle registra HEAD `92fe18a` — el commit
 **anterior** — con árbol sucio. `HEAD` en la auditoría es `83ae84e`. **No existe
 bundle de evidencia para `edec96e` ni para `83ae84e`.**
+
+- **status (2026-08-31 · RESOLVED / STALE)** el defecto era una **deriva
+  documental / de procedencia** (una cita humana equivocada), NO una falla de
+  integridad de evidencia en tiempo de ejecución: el bundle citado
+  (`.gnosis/evidence/20260821T174016Z/`) se auto-identificaba correctamente
+  (`SUMMARY.json` y `git-head.stdout.txt` registran el commit real `92fe18a`); el
+  elemento incorrecto era la cita del informe. El estado autoritativo **rastreado**
+  ya no exhibe el defecto: se verificó que **todas las 49 referencias a bundles de
+  evidencia en la documentación rastreada existen (49/49, 0 faltantes)**, la
+  documentación de cierre de F-17 cita el estado cualificado de forma consistente
+  (ADR-0031 → `06cdf00` ↔ el bundle rastreado cuyo README registra el árbol
+  cualificado `06cdf00` ↔ raíz `f27a5f8a…`), y los bundles registran su propia
+  identidad real (cualquier deriva es DETECTABLE). **Distinción de alcance:** F-18
+  NO es la deriva de árbol en tiempo de ejecución (cerrada por F-14: observador →
+  PRE → entradas bloqueadas → PREPARED → comandos → POST → veredicto de
+  binding/boundary) NI la integridad de publicación autoritativa (cerrada por
+  F-17: separación candidato/autoritativo, raíz autoritativa denegada al Worker,
+  RunIdentity de confianza, recomputación del digest del bundle en el chokepoint
+  `build_anchor_record`, autorización del Publisher, Anchor V2, watermark durable,
+  binding de despliegue). **verify→publish:** no queda ventana de deriva
+  explotable por T2 en la ruta autoritativa F-17 — la construcción del ancla
+  recomputa/liga la identidad del bundle en el chokepoint de confianza y el Worker
+  no puede mutar la raíz de evidencia autoritativa (sin ampliar la afirmación a
+  Administrator/SYSTEM ni a compromiso del plano de confianza). **Post-publicación:**
+  la garantía es **tamper-evidence / binding de contenido**, no inmutabilidad
+  física perpetua — una modificación posterior de bytes cambia la identidad de
+  contenido y es detectable frente al digest/raíz registrado (sin PKI/autenticidad
+  externa). **Residual (honesto, no reabre F-18):** el artefacto históricamente
+  nombrado `PROJECT_REPORT.md` sigue existiendo como archivo **no rastreado,
+  preexistente y fuera de alcance**, y aún contiene la cita obsoleta; no es estado
+  autoritativo rastreado y su disposición queda para el operador (no se edita, no
+  se borra, no se añade en este cierre). Sin cambio de código/tests/scripts/
+  evidencia. F-14 y F-17 permanecen CLOSED. Deuda de aseguramiento no-bloqueante
+  (opcional, no requerida): un chequeo de que las rutas de bundles citadas por la
+  documentación rastreada existen (hoy 0 faltantes) y, donde exista un esquema de
+  cita legible por máquina, validar el commit/árbol declarado contra la identidad
+  registrada por el bundle.
 
 ---
 
@@ -268,20 +367,20 @@ bundle de evidencia para `edec96e` ni para `83ae84e`.**
 
 | # | file | Contradicción | Verificación | sev |
 |---|---|---|---|---|
-| F-19 | `docs/PROJECT_STATE.md:304` | "164 unit/contract tests + 3 memory-fabric" como *Suite status* | `pytest --collect-only` → **760** | ALTA |
-| F-20 | `docs/PROJECT_STATE.md:106` | "mypy strict clean (47 files)" | evidencia propia: `no issues found in 55 source files`; `find src -name "*.py"` → 55 | MEDIA |
-| F-21 | `docs/PROJECT_STATE.md:5` | `Last update: 2026-08-20` | el cuerpo documenta trabajo del 2026-08-21 (deuda de revisión, L-0042) | BAJA |
-| F-22 | `docs/PROJECT_STATE.md:307` | "Codex login pending (human-only step)" | contradice sus propios gates `[x] Codex CLI installed (0.148.0) and authenticated` y `NEXT_ACTIONS:1` "codex login DONE" | ALTA |
-| F-23 | `docs/PROJECT_STATE.md:283-286` | "real code lives in `gnosis/`, `src/gnosis/` (currently an empty scaffold)" | **falso**: no existe `gnosis/` en la raíz; los 55 módulos y 13 669 líneas están en `src/gnosis/`. Resuelto por ADR-0002 | ALTA |
-| F-24 | `docs/PROJECT_STATE.md:300` | gate `[ ] Kernel implementation (Phase 1 continuation) begins after archaeology` sin marcar | ADR-0004…0024 completados | MEDIA |
-| F-25 | `docs/NEXT_ACTIONS.md:1` vs `:38` | "Both review debts are now paid; no unreviewed unit remains" vs, en el mismo fichero, "REVIEW DEBT: PAID, with a weaker channel… Codex rate-limited, reset 2026-09-20" | contradicción interna | ALTA |
-| F-26 | `docs/NEXT_ACTIONS.md:22` | "the **seventeen** findings the reviews left open" | `PROJECT_REPORT §8` y el propio bloque (2 tachados) dicen **15** | MEDIA |
-| F-27 | `README.md` | describe M0/M1: "ChatGPT is the Director", "Python 3.10+ stdlib", `python -m unittest discover`. No menciona policy engine, claims, convergencia, integración, cola, supervisor ni credenciales | es el primer documento que lee un revisor externo | ALTA |
-| F-28 | `PROJECT_REPORT.md` (raíz, no rastreado) y `docs/PROJECT_REPORT.md` (rastreado) | duplicado byte-idéntico; la copia que el operador edita no es la versionada | riesgo de divergencia silenciosa | MEDIA |
-| F-29 | `docs/DECISIONS.md` D-035 | declara `credentials/child_honours_the_binding = PROMPT_ONLY` | el código (`policy.py`) y el test de pin exacto lo fijan en **IGNORED**; `PROJECT_REPORT §4` dice IGNORED | ALTA |
-| F-30 | `PROJECT_REPORT.md §2` | "33 modules in `src/gnosis/`" | 55 ficheros `.py` (las 13 669 líneas sí coinciden) | BAJA |
-| F-31 | `PROJECT_REPORT.md §11` | "`EnforcementMatrix.verify()` exists but no probes are registered" | impreciso: `tests/test_policy.py:557` registra una probe real. Lo cierto: **ninguna fila HARD tiene probe, y no hay probes en producción** | MEDIA |
-| F-32 | `docs/PROJECT_STATE.md:6` | `Phase: 1 — Kernel hardening` | ya se ha trabajado en Fases 2, 3, 4 y 8 de la directiva | MEDIA |
+| F-19 | `docs/PROJECT_STATE.md` "## Suite status" | histórico (FAIL/ALTA): "164 unit/contract tests + 3 memory-fabric" (=167) presentado como *Suite status* actual | **RESOLVED 2026-08-31 (docs-only)**: la sección se reemplazó por un checkpoint cualificado (F-17 final, árbol `06cdf00`, 1510 passed / 1 skipped / 291 subtests / exit 0; 1511 collected; ref. ADR-0031 + `.gnosis/evidence/20260831T025855Z-f17-final-qualification/`). **Causa raíz**: un conteo estático de fase temprana quedó embebido en un documento de estado de vida larga y se presentó indefinidamente como actual. **Remedio durable**: redacción checkpoint-cualificada referenciada a evidencia en vez de un número vivo sin fecha. Consecuencia: documental/auditabilidad; sin defecto de seguridad en runtime | ALTA → RESOLVED |
+| F-20 | `docs/PROJECT_STATE.md` línea "Suite:" | histórico (FAIL/MEDIA): "mypy strict clean (47 files)" presentado como estado, y ya inconsistente con su propia evidencia citada (`no issues found in 55 source files`; `find src -name "*.py"` → 55) | **RESOLVED 2026-08-31 (docs-only)**: el fragmento mypy se reemplazó por un checkpoint cualificado — `mypy --strict src` limpio en la cualificación final F-17 (árbol `06cdf00`, 2026-08-31): "Success: no issues found in **79** source files"; ref. ADR-0031 + `.gnosis/evidence/20260831T025855Z-f17-final-qualification/`. **Causa raíz**: un conteo estático de fase temprana embebido en una línea de estado de vida larga y presentado como actual. **Remedio durable**: redacción checkpoint-cualificada referenciada a evidencia en vez de un número vivo. Consecuencia: documental/auditabilidad; sin defecto de seguridad en runtime. La evidencia histórica (55) NO se modifica | MEDIA → RESOLVED |
+| F-21 | `docs/PROJECT_STATE.md` campo "Last update" | histórico (FAIL/BAJA): `Last update: 2026-08-20` mientras el cuerpo ya documentaba trabajo del 2026-08-21 (L-0042) — sello de estado más antiguo que el estado completado que el mismo documento representa | **RESOLVED / STALE 2026-08-31**: las actualizaciones de estado posteriores (trabajo de etapas F-17 + cierres F-15..F-20) corrigieron incidentalmente el campo; `docs/PROJECT_STATE.md` tiene ahora UN solo campo `Last update` = 2026-08-31 y el valor `2026-08-20` ya no existe como afirmación viva (su única aparición restante es este registro histórico de auditoría). Semántica: `Last update` = fecha de la última actualización de estado rastreada que representa el documento (no reloj perpetuo; fechas históricas/ADR/evidencia y la reset futura 2026-09-20 son semánticas separadas). No es un fix nuevo: superado incidentalmente por mantenimiento de estado. Deuda de proceso no-bloqueante: un campo `Last update` manual es propenso a deriva | BAJA → RESOLVED/STALE |
+| F-22 | `docs/PROJECT_STATE.md` caveat de login Codex | histórico (FAIL/ALTA): "Codex login pending (human-only step)" contradecía sus propios gates `[x] Codex CLI installed (0.148.0) and authenticated` (login 2026-08-19) y `NEXT_ACTIONS` "codex login DONE" (con la revisión de policy-gate ejecutada el 2026-08-20) | **RESOLVED 2026-08-31 (docs-only)**: el caveat obsoleto se reemplazó por un estado checkpoint-cualificado — setup/login completado (autenticación 2026-08-19; revisión independiente ejecutada 2026-08-20); login NO es un gate pendiente. Validez de credencial/quota = estado operativo separado (en el checkpoint registrado, cuota agotada, reset 2026-09-20 — rate-limit, NO "login pending"). **Causa raíz**: un paso de setup completado no se reconció con un caveat/TODO vivo más antiguo. Consecuencia: documental/workflow del operador; sin defecto de seguridad en runtime. No se hizo login/logout ni llamada al proveedor ni inspección de credenciales | ALTA → RESOLVED |
+| F-23 | `docs/PROJECT_STATE.md` nota de baseline M0→M3 | histórico (FAIL/ALTA): "real code lives in `gnosis/`, `src/gnosis/` (currently an empty scaffold), conflicto de layout pendiente" presentado como estado actual/pendiente | **RESOLVED 2026-08-31 (docs-only)**: la nota ahora expresa la transición histórico→actual — en el baseline M0→M3 el código vivía en `gnosis/` de nivel superior y `src/gnosis/` era un scaffold vacío (conflicto real ENTONCES); **ADR-0002 (ACCEPTED) lo resolvió** (`git mv gnosis src/gnosis`, historia preservada) manteniendo el namespace de import `gnosis`. Estado actual: layout canónico `src/gnosis/` (ruta de fuente en filesystem; paquete de import `gnosis` vía `pythonpath=["src"]`/`packages=["src/gnosis"]`); NO existe árbol de fuente raíz `gnosis/`; `src/gnosis/` está poblado (archaeology: ~78 módulos rastreados en este checkpoint — evidencia, no invariante permanente). **Causa raíz**: la prosa del baseline heredado nunca se reconció tras ADR-0002. Consecuencia: documental/onboarding; sin defecto de seguridad en runtime. ADR-0002 no se modificó | ALTA → RESOLVED |
+| F-24 | `docs/PROJECT_STATE.md` gate "Kernel implementation" | histórico (FAIL/MEDIA): el gate vivo `[ ] Kernel implementation (Phase 1 continuation) begins after archaeology` quedó sin marcar aunque su criterio ("begins") ya se había satisfecho; ADR-0004…0024 completados | **RESOLVED 2026-08-31 (docs-only)**: el gate se marcó satisfecho ("begins"), NO completitud total del kernel. Secuencia probada: (1) el gate se introdujo en fase pre-implementación/arqueología; (2) la arqueología Tier-S se completó primero; (3) la implementación/hardening de kernel de Fase 1 comenzó después (evidencia más temprana: ADR-0004 — canonical hashing + chained ledger); (4) milestones posteriores confirman que el gate de inicio se cruzó hace tiempo. **Causa raíz**: el estado del checklist nunca se reconció tras comenzar la implementación (defecto de documentación de estado obsoleto). Consecuencia: exactitud de roadmap / planificación de agentes / onboarding; sin defecto de seguridad en runtime causado por el checkbox. ADRs no modificados | MEDIA → RESOLVED |
+| F-25 | `docs/NEXT_ACTIONS.md:1` vs `:38` | histórico (FAIL/ALTA): "Both review debts are now paid; no unreviewed unit remains" vs, en el mismo fichero, "REVIEW DEBT: PAID, with a weaker channel… Codex rate-limited, reset 2026-09-20" | **NOT A CONTRADICTION / RESOLVED 2026-08-31 (docs-only)**: la auditoría histórica **conflació deuda de cobertura con deuda de aseguramiento/fuerza-de-canal** — dos ejes distintos que el repo ya distingue (`docs/LEARNINGS.md`: "a weaker channel is not the same as no channel"; encabezado de ADR-0022; `docs/PROJECT_STATE.md` §"Review debt paid"). **Cobertura** (existe una revisión cualificadora para cada unidad requerida del ámbito) vs **aseguramiento/fuerza de canal** (independencia/canal/profundidad de esa revisión). Los dos pasajes hablan de deudas y conjuntos de unidades DISTINTOS: el pasaje 1 = las dos revisiones Codex aparcadas del milestone de adapters ADR-0013…ADR-0016 (convergence + scheduler), pagadas vía Codex el 2026-08-21 → sin deuda de cobertura para ese milestone en ese checkpoint; el pasaje 2 = ADR-0022/0023/0024, que **sí tuvieron cobertura** (revisados 2026-08-21 por agentes independientes read-only de la misma familia) pero con una limitación de aseguramiento por separado divulgada (canal más débil; re-revisión Codex deseada). Una unidad puede satisfacer cobertura y aún así arrastrar una limitación de aseguramiento. NO se demostró defecto de seguridad en runtime. Además, la yuxtaposición literal histórica en `NEXT_ACTIONS` está **superada**: el segundo pasaje ("REVIEW DEBT: PAID, with a weaker channel") ya no ocupa esa ubicación (reubicado a `PROJECT_STATE`/`DECISIONS`/`LEARNINGS`/ADR-0022). El universal "no unreviewed unit remains" se acotó a su milestone/fecha en `NEXT_ACTIONS`. **NO se cierra como "contradicción VÁLIDA reparada".** Consecuencia actual: claridad terminológica / interpretación de auditoría; sin defecto de runtime. Evidencia de revisión existente (ADR-0015/0016 addenda; `.gnosis/evidence/20260821T170951Z/`) permanece autoritativa; no se re-ejecutó revisión ni se hicieron llamadas al proveedor | ALTA → RESOLVED / NOT A CONTRADICTION (BAJA) |
+| F-26 | `docs/NEXT_ACTIONS.md:22` | histórico (FAIL/MEDIA): "the **seventeen** findings the reviews left open" | `PROJECT_REPORT §8` y el propio bloque (2 tachados) dicen **15** | **RESOLVED / STALE / NOT A CONTRADICTION 2026-09-01 (docs-only)**: los dos números describen el **mismo episodio de revisión** (independiente, misma familia, ADR-0022/0023/0024, 2026-08-21, verdict FAIL, 47 findings) en **checkpoints distintos**, NO un conflicto aritmético de mismo-alcance/mismo-tiempo. **17** = residual inmediatamente después de la revisión — las addenda post-review lo registran por ADR: ADR-0022 = 7, ADR-0023 = 4, ADR-0024 = 6 (7+4+6 = 17; también `docs/DECISIONS.md:109` "seventeen … still open"). **15** = residual posterior tras resolverse DOS miembros de ese conjunto de 17: **(a)** la carrera de `recover()` concurrente (fix ingenuo con `replace` atómico resultó erróneo, ver **L-0042**) y **(b)** la recuperación de crash sin paced/unpaced crash recovery — ambos nombrados en `docs/PROJECT_STATE.md` §"Review debt paid" como "the two closed since" (17 − 2 = 15; 28 reparados). El **conjunto de 15 se enumera** en el documento TRACKED `docs/PROJECT_REPORT.md` §8 ("Open findings, 15 remaining of 47", ítems 1–15); el estado vivo tracked ya está reconciliado a 15 (`docs/NEXT_ACTIONS.md` "the 15 findings listed in `PROJECT_REPORT.md §8`"; `docs/PROJECT_STATE.md`). La redacción viva obsoleta "seventeen" ya desapareció de `NEXT_ACTIONS`. **Causa raíz**: un agregado puntual (17) apareció en documentación de acción-viva sin cualificación temporal; tras dos resoluciones el residual pasó a 15 y el mantenimiento de estado posterior reconció el conteo vivo, dejando obsoleta la queja histórica F-26. Los registros históricos de 17 (DECISIONS.md:109 y addenda 7/4/6) permanecen VÁLIDOS para el checkpoint post-review y NO se modifican. Sin defecto de seguridad en runtime. `docs/PROJECT_REPORT.md` (tracked) es autoritativo; el `./PROJECT_REPORT.md` raíz (untracked) es sólo corroboración | MEDIA → RESOLVED / STALE / NOT A CONTRADICTION (BAJA) |
+| F-27 | `README.md` | histórico (FAIL/ALTA): describe M0/M1: "ChatGPT is the Director", "Python 3.10+ stdlib", `python -m unittest discover`. No menciona policy engine, claims, convergencia, integración, cola, supervisor ni credenciales; es el primer documento que lee un revisor externo | **RESOLVED 2026-09-01 (docs-only, README modernizado y revisado)**: el README raíz se modernizó (Option B, targeted) y superó revisión independiente adversarial en dos rondas. Provenance completa preservada: modernización `1ec2ff8` → **primera revisión independiente: FAIL** (Issue A: la semántica de dependencia de LLM/runtime era demasiado amplia — el camino de ejecución cableado invoca el `claude` CLI local vía `engine.py`→`ClaudeCodeCLIRunner`→subprocess; Issue B: el claim de F-17 omitía el calificador `historical-evidence` de ADR-0031) → remediación `9dd35f8` → **segunda revisión independiente: PASS WITH NON-BLOCKING NOTES**. El README ahora: representa la arquitectura actual a nivel overview (kernel/policy/claims/lease/cola/convergencia/integración/credenciales/Trust Plane/Publisher/provisioning) y ya no presenta M0/M1 como el sistema completo; usa el requisito actual Python >= 3.12 y el flujo canónico pytest; distingue dependencias de paquete Python (`dependencies = []`) de herramientas de ejecución externas; declara que el camino de ejecución provider-backed cableado usa el `claude` CLI local; acota "provider-neutral" al límite adapter/interface; distingue Codex (dev/review) del runtime; preserva el layout `src/gnosis/` (ADR-0002); preserva el claim acotado de F-17 "authoritative historical-evidence publication" (ADR-0031) y describe la cualificación como production-equivalent bajo contrato (Windows / Git 2.55.x files-backend / Python-runtime / deployment), NO despliegue en producción; sin NVIDIA/NIM; sin conteos mutables perpetuos. **Causa raíz**: el README quedó congelado como artefacto M0/M1; los milestones posteriores (ADR-0004…0031) nunca se propagaron. Consecuencia actual: ninguna bloqueante (documental/onboarding/primer-contacto). Deuda de calidad NO bloqueante registrada en el historial de revisión (notas de diseño condensadas; posibles afinamientos de redacción). Sin cambios en source/tests/scripts/evidence/ADR/pyproject; F-14 y F-17 siguen CLOSED | ALTA → RESOLVED |
+| F-28 | `PROJECT_REPORT.md` (raíz, no rastreado) y `docs/PROJECT_REPORT.md` (rastreado) | histórico (FAIL/MEDIA): duplicado byte-idéntico; la copia que el operador edita no es la versionada; riesgo de divergencia silenciosa | **RESOLVED / PARTIALLY VALID 2026-09-01 (docs-only, aclaración de autoridad)**. **PROBADO**: existe `docs/PROJECT_REPORT.md` (rastreado) y `./PROJECT_REPORT.md` (raíz, no rastreado); eran byte-idénticos en el checkpoint de arqueología F-28 (sha256 `622e966e…`, 23210 bytes); NO hay sincronización impuesta por el repo entre ambos (sin pre-commit/CI/hook/script/test de igualdad), por lo que una divergencia silenciosa futura es mecánicamente posible; las referencias por basename desnudo `PROJECT_REPORT.md` pueden crear ambigüedad documental leve. **NO PROBADO**: la subafirmación histórica "la copia que el operador edita no es la versionada" — no se halló workflow/herramienta/instrucción que edite la copia raíz; por tanto NO se conserva como hecho actual. **Modelo de autoridad**: estado vivo = `docs/PROJECT_STATE.md` y `docs/NEXT_ACTIONS.md` (PROJECT_REPORT no figura entre los docs de estado durable de CLAUDE.md); `docs/PROJECT_REPORT.md` (rastreado) = snapshot/reporte versionado autoritativo para revisión externa (punto-en-el-tiempo), NO la máxima autoridad del estado vivo; `./PROJECT_REPORT.md` (raíz, no rastreado) = artefacto/snapshot no autoritativo, NO un par editable autoritativo. Igualdad acotada al checkpoint (no invariante perpetua; sin control que la garantice). **Causa raíz**: existe en la raíz una copia duplicada del reporte versionado punto-en-el-tiempo, no rastreada (sin regla en `.gitignore`; nunca añadida), sin mecanismo de sincronización — consistente con una duplicación manual (provenance no prueba autoría humana específica); el hallazgo histórico sobreestimó el comportamiento real del operador. **Retención**: bajo el estado cualificado/observado ACTUAL la copia raíz se conserva sin tocar (los tests de evidence-binding la tratan, junto con `.stfolder/`, como entrada de identidad-de-árbol no rastreada que nadie debe borrar/ignorar durante ese escenario); esto NO establece un requisito de existencia permanente — retirada física, cambios de ignore o de la política de evidence-binding requerirían una decisión/recualificación separada. Sin defecto de runtime/seguridad. Sin cambios en source/tests/scripts/evidence/ADR/README/`.gitignore`/pyproject ni en ninguna de las dos copias de PROJECT_REPORT. F-14 y F-17 siguen CLOSED | MEDIA → RESOLVED / PARTIALLY VALID (BAJA) |
+| F-29 | `docs/DECISIONS.md` D-035 | histórico (FAIL/ALTA): declara `credentials/child_honours_the_binding = PROMPT_ONLY` mientras el código (`policy.py`) y el test de pin exacto lo fijan en **IGNORED**; `PROJECT_REPORT §4` dice IGNORED | **RESOLVED / VALID — DOCUMENTACIÓN DE DECISIÓN OBSOLETA 2026-09-01 (docs-only)**: el token `PROMPT_ONLY` de D-035 quedó obsoleto tras la corrección formal. Cronología: `a8ddd3f` (ADR-0024) introdujo D-035 y `policy.py` ambos con PROMPT_ONLY → **el addendum de revisión independiente de ADR-0024 (finding 8, 2026-08-21, `92fe18a`) corrigió el nivel a `IGNORED`** porque "PROMPT_ONLY means asked-for-not-enforced and nothing asks" (nada instruye a la CLI ni hay chequeo posterior) → `policy.py`, el test de pin exacto (`tests/test_policy.py`) y `docs/PROJECT_REPORT.md §4` ya reflejan la política autorizada IGNORED; sólo la prosa de D-035 quedó sin reconciliar. **Semántica**: IGNORED clasifica el *auto-reclamo del hijo* inverificable ("honra el binding"), NO el binding — el binding confiable se aplica igual (el hijo sólo recibe la identidad dada; `billing_boundary = HARD`, `ambient_isolation`/`no_ambient_fallback = SANDBOX_APPROX`). Es endurecimiento por honestidad (acotado a esta entrada de la matriz), NO una regresión ni un defecto de política en producción. **Autoridad**: no es "el código gana a las decisiones" — el addendum formal posterior de ADR-0024 superó el valor previo de D-035 y la implementación/test/reporte se alinearon con esa decisión posterior. Causa raíz: decisión superada por el addendum de su propio ADR pero sin reconciliar en `DECISIONS.md`. Corrección docs-only: D-035 ahora preserva el valor histórico PROMPT_ONLY y su transición a IGNORED (referenciando el addendum). Sin cambios en `policy.py`/tests/ADR-0024/PROJECT_REPORT. F-14 y F-17 siguen CLOSED | ALTA → RESOLVED / VALID (BAJA) |
+| F-30 | `PROJECT_REPORT.md §2` | histórico (FAIL/BAJA): "33 modules in `src/gnosis/`" | 55 ficheros `.py` (las 13 669 líneas sí coinciden) | **RESOLVED / VALID — CONTEO DE MÓDULOS ORIGINAL INCORRECTO 2026-09-01 (docs-only)**: el valor `33` era **incorrecto ya en el checkpoint original** del reporte (`83ae84e`, 2026-08-21), no mera obsolescencia por crecimiento posterior. En ese checkpoint el árbol tenía **55** ficheros `.py` rastreados bajo `src/gnosis/` (**48** excluyendo `__init__.py`) y **13 669** líneas físicas — ambas cifras co-ubicadas en §2 eran correctas —, mientras que `33` no correspondía a ninguna regla de conteo coherente (all=55, non-init=48, inventario-listado=29, kernel-non-init=28, dirs=7). Corrección docs-only y **local a la fila «Source»**: se sustituyó "13,669 lines across 33 modules" por "At the 2026-08-21 report checkpoint: 13,669 lines across 55 tracked `.py` files under `src/gnosis/` (48 excluding `__init__.py`)" — elimina el `33` incorrecto, conserva 13 669 y 55 acotados al checkpoint, define 48 literalmente (excluye `__init__.py`), no introduce término ambiguo "module" ni ninguna cifra viva actual (79/70/25 342). La cabecera de §2 y la fila `Tests | 760 collected, 760 passing` quedan **byte-idénticas** (esta última es un hallazgo separado, fuera de F-30). `docs/PROJECT_REPORT.md` (rastreado, autoritativo per F-28) se corrige; la copia raíz no rastreada queda intacta y puede diferir (sin invariante de igualdad, per F-28). Sin defecto de runtime/seguridad. F-14 y F-17 siguen CLOSED | BAJA → RESOLVED / VALID |
+| F-31 | `PROJECT_REPORT.md §11` | histórico (FAIL/MEDIA): "`EnforcementMatrix.verify()` exists but no probes are registered" — impreciso: `tests/test_policy.py:557` registra una probe real. Lo cierto: **ninguna fila HARD tiene probe, y no hay probes en producción** | **RESOLVED / PARTIALLY VALID 2026-09-01 (docs-only)** — la redacción confundió el alcance test vs producción. **Probado**: `EnforcementMatrix.verify()` existe (`policy.py:718`, recibe las probes como argumento, no como registro persistente); existe una **probe de test real** (`tests/test_policy.py:557`) que ejercita el mecanismo contra el `GNOSIS_ENFORCEMENT` real (fila `worktree/shared_repo_isolation`, SANDBOX_APPROX) y **ya existía cuando se escribió §11** (ambos de `c64b8da`/ADR-0011, anteriores al reporte `83ae84e`), por lo que el "no probes are registered" fue impreciso **en origen**, no obsolescencia; **cero** llamadas `.verify()` en `src/` → sin probes de producción; **ninguna** de las 6 filas HARD (`file_lock/single_writer`, `replay/no_network_in_strict_replay`, `claims/no_stale_write_after_deposition`, `policy/deny_by_default`, `integration/verified_before_landing`, `credentials/billing_boundary`) está respaldada por probe. Las propiedades HARD **actuales** se aplican con mecanismos independientes de la capa de probes (locks, fencing, deny-by-default, orden de integración, selección de credenciales) — la ausencia de probes es una **brecha de completitud de aseguramiento, NO evidencia de que HARD esté sin enforcement**. Corrección docs-only local a §11: se acotó la afirmación (probe de test ejercita el mecanismo; sin probes de producción; ninguna fila HARD con probe) y se preservó la **deuda de aseguramiento** (una probe `verify()` por fila HARD sigue siendo trabajo futuro, rule 20 — no marcada como completa). Sin cambios en `policy.py`/tests/ADR ni probes nuevas; no se descubrió defecto de runtime-security. F-14 y F-17 siguen CLOSED | MEDIA → RESOLVED / PARTIALLY VALID (BAJA) |
+| F-32 | `docs/PROJECT_STATE.md:6` | histórico (FAIL/MEDIA): `Phase: 1 — Kernel hardening` | ya se ha trabajado en Fases 2, 3, 4 y 8 de la directiva | **RESOLVED / PARTIALLY VALID 2026-09-01 (docs-only)** — **(1)** el campo vivo `Phase: 1 — Kernel hardening per archaeology directives` (introducido en `94426fb` "directives 1-5 complete", nunca avanzado) se había vuelto **obsoleto/engañoso**: un único número de fase para un proyecto que ya abarca múltiples workstreams (kernel + adapters/integración + multi-worker + Trust Plane/provisioning + cierre de auditoría); la línea `Status` adyacente ya reflejaba esa amplitud. **(2)** La razón histórica del hallazgo **se excedió por conflación de taxonomías**: NO existe una directiva canónica con Fases numeradas `1→…→8` correspondiente a ese campo — **"Phase 8" no aparece en ninguna doc rastreada** (0 ocurrencias); el "8" es **F-17 Stage 8** (provisioning; "Stage 8" = 13 ocurrencias) y/o **directiva 8** (de las 9 directivas de arqueología). Las "Fases 2/3/4" tampoco existen como fases: son directivas de arqueología implementadas. `Phase` (etiqueta de campaña), `directivas` (1–9) y `F-17 Stages` (1–8) son sistemas de numeración distintos y no deben mezclarse. **NO se afirma que el proyecto llegó a "Phase 8".** Corrección docs-only: se retiró el número de fase vivo y se sustituyó por un campo **`Current roadmap focus:`** no numérico basado en el estado actual (sin inventar Phase 2/8/9, sin porcentaje de completitud). Referencias históricas a trabajo de "Phase 1" se conservan donde son explícitamente históricas. Sin defecto de runtime/seguridad; documental/gobernanza. F-14 y F-17 siguen CLOSED. Nota de registro: el diagnóstico continúa con secciones técnicas F-33…F-42 (F-32 NO es el final del registro) | MEDIA → RESOLVED / PARTIALLY VALID (BAJA) |
 
 ### F-29b · PASS · la matriz de refuerzo del informe es correcta
 

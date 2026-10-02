@@ -1,0 +1,157 @@
+{
+  "passed": 17,
+  "deferred": 13,
+  "failed": [],
+  "checks": [
+    {
+      "id": "PROVISION.returns_verified_composed",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "PROVISION.trusted_record_outside_tree",
+      "status": "PASS",
+      "detail": "C:\\Users\\nicol\\AppData\\Local\\Temp\\f33-2cb-dry-m8t87j1p\\state\\GNOSIS_COMPOSED.json"
+    },
+    {
+      "id": "PROVISION.record_binds_app_and_f17",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "PROVISION.gate_fail_closed_and_rollback",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "PRELAUNCH.isolated_argv",
+      "status": "PASS",
+      "detail": "python -I -B <entry> run --brief demo"
+    },
+    {
+      "id": "PRELAUNCH.app_tamper_refused",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "PRELAUNCH.f17_mismatch_refused",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "STARTUP.valid_selfcheck_passes",
+      "status": "PASS",
+      "detail": "rc=2"
+    },
+    {
+      "id": "STARTUP.entry_tamper_aborts_70",
+      "status": "PASS",
+      "detail": "rc=70"
+    },
+    {
+      "id": "STARTUP.coherent_tamper_aborts_70",
+      "status": "PASS",
+      "detail": "rc=70"
+    },
+    {
+      "id": "ONE_TREE.trust_copy_count_1",
+      "status": "PASS",
+      "detail": "count=1"
+    },
+    {
+      "id": "ONE_TREE.provenance_under_pkg",
+      "status": "PASS",
+      "detail": "director+trust resolve under pkg"
+    },
+    {
+      "id": "ONE_TREE.no_checkout_in_resolution",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "ONE_TREE.cwd_shadow_resisted",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "GATES.PROVISION_TIME",
+      "status": "PASS",
+      "detail": "PASS (dry-run)"
+    },
+    {
+      "id": "GATES.PRE_LAUNCH",
+      "status": "PASS",
+      "detail": "PASS (dry-run)"
+    },
+    {
+      "id": "GATES.STARTUP",
+      "status": "PASS",
+      "detail": "PASS (dry-run)"
+    },
+    {
+      "id": "OSREAL.base_provision",
+      "status": "NOT-RUN (OS-REAL REQUIRED)",
+      "detail": "privileged F-17 Provisioner (scripts/probe_stage8 machinery) -> BaseDeployment{observed deployment_digest, F-17 uninstall rollback}"
+    },
+    {
+      "id": "OSREAL.worker_account_sid",
+      "status": "NOT-RUN (OS-REAL REQUIRED)",
+      "detail": "temporary non-admin Worker account + SID boundary vs Director SID"
+    },
+    {
+      "id": "OSREAL.acls",
+      "status": "NOT-RUN (OS-REAL REQUIRED)",
+      "detail": "NTFS ACLs: worker cannot write trusted record / APPLICATION.json / operator_entry.py / deterministic_worker.py / measured bytes"
+    },
+    {
+      "id": "OSREAL.canonical_launch_spawn_true",
+      "status": "NOT-RUN (OS-REAL REQUIRED)",
+      "detail": "GnosisDeploymentProvisioner.canonical_launch(spawn=True) -> deployment-bound python -I -B operator_entry -> gnosis.director.cli:main"
+    },
+    {
+      "id": "OSREAL.real_worker_boundary",
+      "status": "NOT-RUN (OS-REAL REQUIRED)",
+      "detail": "TrustedExecutionRunner -> TrustedExecutionPort -> F-17 worker_launcher -> real Worker (SID, integrity, Job containment, LaunchSpec seal)"
+    },
+    {
+      "id": "OSREAL.verifier",
+      "status": "NOT-RUN (OS-REAL REQUIRED)",
+      "detail": "production governance verifier PASS + fail-closed negative"
+    },
+    {
+      "id": "OSREAL.live_reviewer",
+      "status": "NOT-RUN (OS-REAL REQUIRED)",
+      "detail": "adapters.cli_review.CliReviewer over runner.claude_cli_runner (ClaudeCLIRunner) LIVE \u2014 consumes L2..L5 (<=5 cumulative)"
+    },
+    {
+      "id": "OSREAL.real_publisher",
+      "status": "NOT-RUN (OS-REAL REQUIRED)",
+      "detail": "director.publisher_client.PipePublisherClient -> real named pipe -> F-17 Publisher service (no InProcessPublisherClient fallback)"
+    },
+    {
+      "id": "OSREAL.anchored",
+      "status": "NOT-RUN (OS-REAL REQUIRED)",
+      "detail": "create_trusted_run -> authorize_publishable -> PUBLISH -> persisted PublicationState.ANCHORED -> operator exit 0"
+    },
+    {
+      "id": "OSREAL.negatives_N1_N6",
+      "status": "NOT-RUN (OS-REAL REQUIRED)",
+      "detail": "N1 worker fail / N2 reviewer refuse / N3 verifier fail / N4 publisher unavailable / N5 identity mismatch / N6 not-anchored -> operator non-zero"
+    },
+    {
+      "id": "OSREAL.mutation_matrix_F33F",
+      "status": "NOT-RUN (OS-REAL REQUIRED)",
+      "detail": "F33F-1..12 against the live composed pipeline (reviewer/verifier/worker/publisher/anchor/identity) \u2014 filesystem-testable identity mutants already covered by R2 E-M table; pipeline mutants require OS-real"
+    },
+    {
+      "id": "OSREAL.recovery_CR1_CR3",
+      "status": "NOT-RUN (OS-REAL REQUIRED)",
+      "detail": "CR1 completed-not-committed / CR2 committed-not-observed / CR3 service restart reconciliation via existing F-17 mechanisms"
+    },
+    {
+      "id": "OSREAL.rollback_and_verify",
+      "status": "NOT-RUN (OS-REAL REQUIRED)",
+      "detail": "finally-scoped uninstall of worker/service/roots/blob/pipe + \u00a747 residue verification -> ROLLBACK = PASS"
+    }
+  ]
+}

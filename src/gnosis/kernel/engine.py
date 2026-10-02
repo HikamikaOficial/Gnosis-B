@@ -179,6 +179,14 @@ def _runner_binary(runner: Any) -> str:
     return binary if isinstance(binary, str) and binary else "<unknown-runner>"
 
 
+def _runner_permission_mode(runner: Any) -> str:
+    """Describe the runner's actual fixed mode; legacy CLI defaults to plan."""
+    mode = getattr(runner, "default_permission_mode", DEFAULT_PERMISSION_MODE)
+    if not isinstance(mode, str) or mode not in {"plan", "acceptEdits"}:
+        raise ValueError("runner declares an unsupported permission mode")
+    return mode
+
+
 def _mcp_fingerprint(mcp: McpRunnerConfig | None, exec_root: Path) -> dict[str, Any] | None:
     """Path AND content hash for every MCP config.
 
@@ -583,6 +591,8 @@ class TaskEngine:
         # CredentialPool). None means inherit, which is the single-
         # credential behaviour this engine has always had.
         launch_env: Mapping[str, str] | None = None,
+        before_attempt: Callable[[str], None] | None = None,
+        ownership_guard: Callable[[], None] | None = None,
     ) -> TaskExecutionOutcome:
         # FAIL CLOSED FIRST, before anything is spent. This check used to
         # live inside `if authority is not None`, which made "no DONE
@@ -612,6 +622,10 @@ class TaskEngine:
         # enforced at the engine's write paths, not by convention.
         grant: WorkGrant | None = None
         pump: GrantHeartbeatPump | None = None
+        if ownership_guard is not None:
+            if authority is not None:
+                raise ValueError("a borrowed ownership guard cannot also acquire an engine grant")
+            ownership_guard()
         if authority is not None:
             if not worker_id:
                 raise ValueError("worker_id is required when a WorkAuthority is supplied")
@@ -640,6 +654,8 @@ class TaskEngine:
         def guard() -> None:
             # Surface a pump-detected deposition deterministically, then
             # re-prove both planes.
+            if ownership_guard is not None:
+                ownership_guard()
             if pump is not None and pump.deposed is not None:
                 raise pump.deposed
             if authority is not None and grant is not None:
@@ -686,7 +702,7 @@ class TaskEngine:
                 max_context_chars=max_context_chars, authority=authority,
                 grant=grant, guard=guard, policy=policy, approvals=approvals,
                 policy_actor=policy_actor or worker_id or "agent://unattributed",
-                worktrees=worktrees, launch_env=launch_env,
+                worktrees=worktrees, launch_env=launch_env, before_attempt=before_attempt,
             )
         finally:
             if pump is not None:
@@ -709,7 +725,7 @@ class TaskEngine:
             binary=_runner_binary(self.cli_runner),
             exec_root=exec_root, planned_root=planned_root, mcp=mcp,
             worktree_branch=worktree_branch, policy_actor=policy_actor,
-            permission_mode=DEFAULT_PERMISSION_MODE,
+            permission_mode=_runner_permission_mode(self.cli_runner),
             code_intelligence=(
                 type(code_intelligence).__name__ if code_intelligence else None
             ),
@@ -849,6 +865,7 @@ class TaskEngine:
         policy_actor: str = "agent://unattributed",
         worktrees: WorktreeManager | None = None,
         launch_env: Mapping[str, str] | None = None,
+        before_attempt: Callable[[str], None] | None = None,
     ) -> TaskExecutionOutcome:
         task_sm = TaskStateMachine(TaskState.CREATED)
         task_sm.transition(TaskState.PLANNED)
@@ -1013,6 +1030,16 @@ class TaskEngine:
                 ledger.append(
                     run_id, "policy.decision", _safe_decision(pending_decisions.pop(0)),
                 )
+            if before_attempt is not None:
+                try:
+                    before_attempt(run_id)
+                except Exception as exc:
+                    # A failed durable reservation must prevent the launch.
+                    # The allocated run remains attributable and auditable.
+                    ledger.append(run_id, "run.attempt_start_refused",
+                                  {"error_type": type(exc).__name__})
+                    store.update_state(run_id, RunState.FAILED)
+                    raise
             ledger.append(run_id, "run.attempt_started", {
                 "attempt": attempt_number, "objective": objective,
                 "mcp": mcp.to_dict() if mcp is not None else None,
@@ -1030,6 +1057,14 @@ class TaskEngine:
             # enforcement inside RunStore) is tracked in NEXT_ACTIONS.
             guard()
             launch_kwargs: dict[str, Any] = {}
+            # Optional runner capability, explicit rather than forwarding new
+            # keywords to legacy/fake runners that cannot bind an attempt ID.
+            # The production runner must seal the SAME ID the durable run store
+            # uses; minting another ID made publication impossible to correlate.
+            if getattr(self.cli_runner, "accepts_run_id", None) is True:
+                launch_kwargs["run_id"] = run_id
+            if hasattr(self.cli_runner, "default_permission_mode"):
+                launch_kwargs["permission_mode"] = _runner_permission_mode(self.cli_runner)
             if launch_env is not None:
                 # Passed only when a credential was actually bound: a
                 # runner without the parameter (a cassette, a fake) must

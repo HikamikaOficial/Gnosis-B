@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +56,8 @@ from ..kernel.convergence import (
 )
 from ..kernel.credentials import CredentialKind, CredentialPool
 from ..kernel.engine import TaskExecutionOutcome
+from ..kernel.execution_scope import ExecutionScope
+from ..kernel.file_lock import FileLock
 from ..kernel.ids import new_task_id
 from ..kernel.integration import (
     IntegrationOutcome,
@@ -65,7 +67,9 @@ from ..kernel.integration import (
 from ..kernel.ordering import LandingCoordinator
 from ..kernel.policy import ApprovalStore, PolicyDecision, PolicyEngine
 from ..kernel.scheduler import ScheduleOutcome, TaskScheduler
+from ..kernel.subject import observe_subject
 from ..kernel.verification import (
+    Evidence,
     VerificationVerdict,
     Verifier,
     evidence_name,
@@ -73,9 +77,21 @@ from ..kernel.verification import (
     verification_verdict,
 )
 from ..kernel.worktree import WorktreeError, WorktreeManager
+from ..runner.capture import RecordedAttempt
 from ..runner.gated_runner import CredentialHeld, GatedAgentRunner, LaunchRefused
+from ..runner.recorded import RecordedAgentRunner
+from ..trust.launch_spec import LaunchSpec
+from ..trust.worker_launcher import LaunchedWorkerIdentity
 from .brief_record import BriefRecordState, BriefRecordStore
+from .checkpoint import (
+    CheckpointError,
+    CheckpointSession,
+    PipelineCheckpoint,
+    PipelineCheckpointStore,
+    TrustedAttempt,
+)
 from .inbox import DirectorInbox
+from .trusted_runner import TrustedExecutionRunner
 
 REVIEW_STAGE = "convergence_review"
 # A re-review is its own stage: an operator approving a convergence
@@ -153,6 +169,12 @@ class GovernedPipeline:
         integrator: WorkIntegrator | None = None,
         budget: Budget | None = None,
         stale_review_authorised: set[str] | None = None,
+        bind_review_subject: bool = False,
+        fix_runner: Any | None = None,
+        checkpoint_store: PipelineCheckpointStore | None = None,
+        checkpoint_context: str | None = None,
+        scope: ExecutionScope | None = None,
+        commit_before_review: bool = False,
     ) -> None:
         self.inbox = DirectorInbox(director_root)
         self.records = BriefRecordStore(director_root / "state" / "briefs")
@@ -185,10 +207,22 @@ class GovernedPipeline:
                 "different provider."
             )
         self.review_runner = review_runner
+        self.fix_runner = fix_runner if fix_runner is not None else implementer
+        if self.fix_runner is review_runner:
+            raise ValueError("the reviewer cannot also be the correcting implementer")
         self.convergence_policy = convergence_policy or ConvergencePolicy(max_rounds=3)
         self.approvals = approvals
         self.policy_actor = policy_actor
         self.worktrees = worktrees
+        self.bind_review_subject = bind_review_subject or checkpoint_store is not None
+        self.checkpoints = checkpoint_store
+        self.checkpoint_context = checkpoint_context
+        self.scope = scope
+        self.commit_before_review = commit_before_review
+        if commit_before_review and worktrees is None:
+            raise ValueError("committed review requires an isolated task worktree")
+        if checkpoint_store is not None and checkpoint_context is None:
+            raise ValueError("durable pipeline requires a bound checkpoint context")
         self.prompt_builder = prompt_builder or _default_prompt_builder
         self.reviewer_id = reviewer_id
         self.focus = tuple(focus or ())
@@ -219,6 +253,7 @@ class GovernedPipeline:
     # -- the whole path ---------------------------------------------------
 
     def run_pending(self) -> list[PipelineOutcome]:
+        self._guard()
         outcomes: list[PipelineOutcome] = []
         for path in self.inbox.list_pending():
             claim = self.inbox.claim(path)
@@ -228,6 +263,24 @@ class GovernedPipeline:
         return outcomes
 
     def run_brief(self, brief: DirectorBrief) -> PipelineOutcome:
+        self._guard()
+        if self.checkpoints is None:
+            return self._run_brief(brief)
+        operation = self.checkpoints.path_for(brief.brief_id).with_suffix(".operation.lock")
+        with FileLock(operation):
+            self._guard()
+            previous = self.checkpoints.load(brief.brief_id)
+            if previous is None and self.records.exists(brief.brief_id):
+                raise CheckpointError("legacy brief has no protected phase checkpoint; refusing reassignment")
+            assert self.checkpoint_context is not None
+            current = self.checkpoints.create(PipelineCheckpoint(
+                brief, previous.task_id if previous else new_task_id(), self.checkpoint_context))
+            recovery = CheckpointSession(self.checkpoints, current)
+            return self._run_brief(brief, recovery)
+
+    def _run_brief(self, brief: DirectorBrief,
+                   recovery: CheckpointSession | None = None) -> PipelineOutcome:
+        self._guard()
         # `run_pending` dedups through the inbox claim, but this is the
         # public method and it did not: a second call minted a new task id
         # and OVERWROTE the record, making the first task's runs and
@@ -235,24 +288,69 @@ class GovernedPipeline:
         # record is still live is refused; one that finished or parked may
         # legitimately be resubmitted.
         existing = self._live_record(brief.brief_id)
-        if existing is not None:
+        if existing is not None and recovery is None:
             raise BriefAlreadyRunning(
                 f"brief {brief.brief_id} is already {existing} as task "
                 f"{self.records.get(brief.brief_id).task_id}"
             )
-        task_id = new_task_id()
-        self.records.create(brief.brief_id, task_id, BriefRecordState.ASSIGNED)
+        task_id = recovery.current.task_id if recovery else new_task_id()
+        if recovery is not None and self.records.exists(brief.brief_id):
+            if self.records.get(brief.brief_id).task_id != task_id:
+                raise CheckpointError("brief record differs from protected task assignment")
+        else:
+            self.records.create(brief.brief_id, task_id, BriefRecordState.ASSIGNED)
+        if recovery is not None:
+            for run_id in recovery.current.attempt_ids:
+                runner = self.scheduler.engine.cli_runner
+                if isinstance(runner, TrustedExecutionRunner):
+                    paths = self.scheduler.engine.run_store.paths_for(run_id)
+                    runner.recover_outputs(paths.stdout, paths.stderr, run_id=run_id)
+                self.records.add_run(brief.brief_id, task_id, run_id)
         self.records.update(brief.brief_id, state=BriefRecordState.IN_PROGRESS)
 
-        ledger = self.budget_store.ledger_for(brief.brief_id, self.budget)
+        ledger = (BudgetLedger(self.budget, prior_launches=recovery.current.launches,
+                               prior_elapsed_s=recovery.current.elapsed_s) if recovery else
+                  self.budget_store.ledger_for(brief.brief_id, self.budget))
+
+        def reserve_implementation(run_id: str) -> None:
+            self._guard()
+            assert recovery is not None
+            count = recovery.current.implementation_attempts
+            limit = self.scheduler.engine.retry_policy.max_attempts
+            if count >= limit:
+                raise BudgetExhausted("implementation_attempts", count, limit)
+            ledger.check()
+            ledger.spend_launch()
+            recovery.save(attempt_ids=(*recovery.current.attempt_ids, run_id),
+                          implementation_attempts=count + 1, launches=ledger.launches,
+                          elapsed_s=ledger.elapsed_s)
+            self.records.add_run(brief.brief_id, task_id, run_id)
+            self.budget_store.record(brief.brief_id, ledger)
+
+        restored = recovery is not None and recovery.current.implementation is not None
         try:
             # Checked BEFORE the implementation too. The implementation's
             # launches can only be charged after the fact (the pipeline
             # does not own the engine's runner), so this is what stops a
             # brief that has already spent everything from starting yet
             # another implementation phase.
-            ledger.check()
-            schedule = self._implement(brief, task_id)
+            if restored:
+                assert recovery is not None and recovery.current.implementation is not None
+                schedule = recovery.current.implementation
+            else:
+                ledger.check()
+                schedule = (self._implement(brief, task_id, reserve_implementation) if recovery
+                            else self._implement(brief, task_id))
+                if (recovery is not None and not schedule.parked and schedule.execution is not None
+                        and schedule.execution.execution_result is not None):
+                    ids = tuple(dict.fromkeys((*recovery.current.attempt_ids,
+                                               *schedule.execution.run_ids)))
+                    recovery.save(implementation=schedule, attempt_ids=ids,
+                                  trusted_attempt=self._trusted_attempt(), elapsed_s=ledger.elapsed_s)
+        except BudgetExhausted as spent:
+            return self._finish(brief, task_id, ReportStatus.PARTIAL, f"budget:{spent.kind}",
+                                problems=(str(spent),),
+                                next_step="Inspect the preserved work and the exhausted attempt budget.")
         except Exception as exc:  # noqa: BLE001 - a consumed brief must never strand
             return self._finish(brief, task_id, ReportStatus.BLOCKED,
                                 f"pipeline_error:{type(exc).__name__}",
@@ -270,6 +368,8 @@ class GovernedPipeline:
 
         implementation = schedule.execution
         if implementation is not None:
+            for run_id in implementation.run_ids:
+                self.records.add_run(brief.brief_id, task_id, run_id)
             # The implementation's launches are charged to the ledger too,
             # or the budget would bound only half a brief. They are
             # charged AFTER the fact — unlike a convergence launch, which
@@ -278,8 +378,9 @@ class GovernedPipeline:
             # sound only because the engine has its own hard bound
             # (`RetryPolicy.max_attempts`), so this phase cannot run away;
             # what the budget then bounds exactly is everything after it.
-            for _ in implementation.run_ids:
-                ledger.spend_launch()
+            if recovery is None:
+                for _ in implementation.run_ids:
+                    ledger.spend_launch()
             self.budget_store.record(brief.brief_id, ledger)
 
         if implementation is None or implementation.execution_result is None:
@@ -298,7 +399,7 @@ class GovernedPipeline:
             # `run_brief` and stranded the consumed brief — reintroducing
             # the exact defect the guard exists to prevent.
             convergence = self._converge(
-                brief, task_id, self._exec_root(task_id), ledger)
+                brief, task_id, self._exec_root(task_id), ledger, recovery)
         except CredentialHeld as held:
             return self._finish(
                 brief, task_id, ReportStatus.PARTIAL, "rate_limited:convergence",
@@ -429,6 +530,24 @@ class GovernedPipeline:
 
     # -- halves -----------------------------------------------------------
 
+    def _guard(self) -> None:
+        if self.scope is not None:
+            self.scope.check()
+
+    def _verify(self, path: Path) -> Evidence:
+        self._guard()
+        evidence = self.verifier.run(path)
+        self._guard()
+        return evidence
+
+    def _prepare_review(self, task_id: str) -> None:
+        self._guard()
+        if self.commit_before_review:
+            assert self.worktrees is not None
+            self.worktrees.autosave(self.worktrees.load_handle(task_id),
+                                    reason=f"before-review:{task_id}")
+        self._guard()
+
     def _live_record(self, brief_id: str) -> str | None:
         """The state of an in-flight record for this brief, if any."""
         try:
@@ -438,7 +557,14 @@ class GovernedPipeline:
         live = {BriefRecordState.ASSIGNED.value, BriefRecordState.IN_PROGRESS.value}
         return record.state if record.state in live else None
 
-    def _implement(self, brief: DirectorBrief, task_id: str) -> ScheduleOutcome:
+    def _implement(self, brief: DirectorBrief, task_id: str,
+                   before_attempt: Callable[[str], None] | None = None) -> ScheduleOutcome:
+        kwargs: dict[str, Any] = {}
+        if self.scope is not None:
+            kwargs.update(ownership_guard=self.scope.check,
+                          cancellation_token=self.scope.cancellation)
+        if before_attempt is not None:
+            kwargs["before_attempt"] = before_attempt
         return self.scheduler.submit(
             task_id=task_id,
             objective=brief.title,
@@ -449,7 +575,15 @@ class GovernedPipeline:
             policy=self.policy,
             approvals=self.approvals,
             policy_actor=self.policy_actor,
+            **kwargs,
         )
+
+    def _trusted_attempt(self) -> TrustedAttempt | None:
+        spec = getattr(self.fix_runner, "last_spec", None)
+        launched = getattr(self.fix_runner, "last_launched", None)
+        if isinstance(spec, LaunchSpec) and isinstance(launched, LaunchedWorkerIdentity):
+            return TrustedAttempt(spec, launched, self.scope.epoch if self.scope else None)
+        return None
 
     def _exec_root(self, task_id: str) -> Path:
         """Where the work actually landed.
@@ -478,9 +612,10 @@ class GovernedPipeline:
         return path
 
     def _converge(self, brief: DirectorBrief, task_id: str,
-                  exec_root: Path, ledger: BudgetLedger) -> ConvergenceResult:
+                  exec_root: Path, ledger: BudgetLedger,
+                  recovery: CheckpointSession | None = None) -> ConvergenceResult:
         evidence_dir = self.inbox.layout.outbox / f"{task_id}-convergence"
-        objective = brief.title
+        objective = _default_prompt_builder(brief)
 
         # Every verdict on a convergence launch is written down, allowed
         # ones included. `GatedAgentRunner.decisions` was transient and
@@ -489,13 +624,33 @@ class GovernedPipeline:
         # calls "governed and recorded" (Codex review).
         decisions: list[dict[str, Any]] = []
 
+        initial = recovery.current.convergence if recovery else None
+        if initial is not None and initial.outcome is ConvergenceOutcome.CONVERGED:
+            if recovery is None or observe_subject(exec_root) != recovery.current.subject:
+                raise CheckpointError("reviewed work changed since its phase checkpoint")
+            self._guard()
+            # A crash may have happened after the protected checkpoint but before
+            # the display/proof copy. Reconstitute it from the trusted record.
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            _atomic_write(evidence_dir / "convergence.json", json.dumps(
+                initial.to_dict(), indent=2, sort_keys=True))
+            return initial
+
+        def record_launch() -> None:
+            self._guard()
+            self.budget_store.record(brief.brief_id, ledger)
+            if recovery is not None:
+                recovery.save(launches=ledger.launches, elapsed_s=ledger.elapsed_s)
+
         def record(stage: str, decision: PolicyDecision) -> None:
             decisions.append({"stage": stage, **decision.to_dict()})
 
-        def gated(stage: str) -> GatedAgentRunner:
+        def gated(stage: str, runner: Any) -> GatedAgentRunner:
             return GatedAgentRunner(
                 on_decision=record,
-                inner=self.review_runner, policy=self.policy, exec_root=exec_root,
+                on_launch=record_launch,
+                scope=self.scope,
+                inner=runner, policy=self.policy, exec_root=exec_root,
                 stage=stage, task_id=task_id, approvals=self.approvals,
                 policy_actor=self.policy_actor, holds=self.scheduler,
                 budget=ledger, credentials=self.credentials,
@@ -505,26 +660,69 @@ class GovernedPipeline:
                 ),
             )
 
-        result = ConvergenceLoop(
-            policy=self.convergence_policy,
-            verify_fn=lambda: self.verifier.run(exec_root),
-            review_fn=CliReviewer(
-                gated(REVIEW_STAGE), exec_root, evidence_dir, objective,
-                reviewer_id=self.reviewer_id, focus=self.focus,
-            ),
-            fix_fn=CliFixer(
-                gated(FIX_STAGE), exec_root, evidence_dir, objective,
-                fixer_id=self.reviewer_id,
-            ),
-            fingerprint_fn=lambda: git_fingerprint(exec_root),
-        ).run()
+        if self.fix_runner is None:
+            raise ValueError("convergence requires an implementer for corrections")
 
-        evidence_dir.mkdir(parents=True, exist_ok=True)
-        (evidence_dir / "convergence.json").write_text(
-            json.dumps({**result.to_dict(), "policy_decisions": decisions},
-                       indent=2, sort_keys=True),
-            encoding="utf-8")
-        return result
+        def attach_attempt(run_id: str) -> None:
+            self._guard()
+            if recovery is not None:
+                recovery.save(attempt_ids=(*recovery.current.attempt_ids, run_id))
+            self.records.add_run(brief.brief_id, task_id, run_id)
+
+        def finish_attempt(attempt: RecordedAttempt) -> None:
+            self._guard()
+            if recovery is not None:
+                trusted = self._trusted_attempt()
+                if trusted is not None and trusted.spec.run_id != attempt.run_id:
+                    trusted = None  # refused launch must not inherit its predecessor
+                recovery.save(rework_attempts=(*recovery.current.rework_attempts, attempt),
+                              trusted_attempt=trusted, elapsed_s=ledger.elapsed_s)
+
+        rework = RecordedAgentRunner(
+            gated(FIX_STAGE, self.fix_runner), self.scheduler.engine.run_store,
+            task_id=task_id, stage=FIX_STAGE,
+            on_started=attach_attempt, on_finished=finish_attempt)
+
+        def started_round(index: int) -> None:
+            self._guard()
+            if recovery is not None:
+                recovery.save(rounds_started=index, elapsed_s=ledger.elapsed_s)
+
+        def save_progress(progress: ConvergenceResult) -> None:
+            self._guard()
+            if recovery is not None:
+                bound = replace(progress, rework_attempts=recovery.current.rework_attempts)
+                subject = progress.rounds[-1].subject if progress.rounds else None
+                recovery.save(convergence=bound, subject=subject, elapsed_s=ledger.elapsed_s)
+        result: ConvergenceResult | None = None
+        try:
+            result = ConvergenceLoop(
+                policy=self.convergence_policy,
+                verify_fn=lambda: self._verify(exec_root),
+                review_fn=CliReviewer(
+                    gated(REVIEW_STAGE, self.review_runner), exec_root, evidence_dir, objective,
+                    reviewer_id=self.reviewer_id, focus=self.focus,
+                ),
+                fix_fn=CliFixer(rework, exec_root, evidence_dir, objective,
+                                fixer_id=f"implementer:{rework.binary}"),
+                fingerprint_fn=lambda: git_fingerprint(exec_root),
+                subject_fn=(lambda: observe_subject(exec_root)) if self.bind_review_subject else None,
+                prepare_fn=lambda: self._prepare_review(task_id),
+            ).run(initial=initial,
+                  start_index=recovery.current.rounds_started + 1 if recovery else 1,
+                  on_round_started=started_round, on_progress=save_progress)
+            result = replace(result, rework_attempts=(recovery.current.rework_attempts if recovery
+                                                      else tuple(rework.attempts)))
+            return result
+        finally:
+            self._guard()
+            # A hold/refusal/crash must not erase the rounds or attempts already
+            # observed. The run store contains raw output and per-attempt audit.
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            payload = (result.to_dict() if result is not None else {
+                "outcome": "INTERRUPTED", "rework_attempts": [a.to_dict() for a in rework.attempts]})
+            _atomic_write(evidence_dir / "convergence.json", json.dumps(
+                {**payload, "policy_decisions": decisions}, indent=2, sort_keys=True))
 
     def _integrate(self, task_id: str, convergence: ConvergenceResult,
                    ledger: BudgetLedger | None = None) -> IntegrationResult | None:
@@ -577,7 +775,9 @@ class GovernedPipeline:
         )
 
     def _rereviewer_for(self, task_id: str,
-                        ledger: BudgetLedger | None = None) -> Callable[[Path], Any]:
+                        ledger: BudgetLedger | None = None,
+                        on_launch: Callable[[], None] | None = None,
+                        integration_attempt: int | None = None) -> Callable[[Path], Any]:
         """An independent reviewer that judges whatever tree it is handed.
 
         Deliberately built per task and pointed at the STAGING tree the
@@ -585,8 +785,16 @@ class GovernedPipeline:
         re-review answers is "is this correct in the tree that will
         land", and the task worktree is not that tree.
         """
+        evidence_dir = self.inbox.layout.outbox / f"{task_id}-rereview"
+        if integration_attempt is not None:
+            if type(integration_attempt) is not int or integration_attempt < 1:
+                raise ValueError("integration attempt must be a positive integer")
+            evidence_dir = evidence_dir / f"attempt-{integration_attempt:04d}"
+
         def review(tree: Path) -> Any:
             runner = GatedAgentRunner(
+                on_launch=on_launch,
+                scope=self.scope,
                 inner=self.review_runner, policy=self.policy, exec_root=tree,
                 stage=REREVIEW_STAGE, task_id=task_id, approvals=self.approvals,
                 policy_actor=self.policy_actor, holds=self.scheduler,
@@ -601,7 +809,7 @@ class GovernedPipeline:
             )
             reviewer = CliReviewer(
                 runner, tree,
-                self.inbox.layout.outbox / f"{task_id}-rereview",
+                evidence_dir,
                 objective=f"Re-review {task_id} against the merged tree",
                 reviewer_id=self.reviewer_id, focus=self.focus,
             )
@@ -624,8 +832,14 @@ class GovernedPipeline:
         problems: tuple[str, ...] = (),
         next_step: str = "",
     ) -> PipelineOutcome:
+        self._guard()
         implementation = schedule.execution if schedule else None
-        run_ids = list(implementation.run_ids) if implementation else []
+        run_ids = list(self.records.get(brief.brief_id).run_ids)
+        # The callback records correction IDs BEFORE their launch. Retain these
+        # even if convergence raised and no ConvergenceResult could be returned.
+        for rid in implementation.run_ids if implementation else ():
+            if rid not in run_ids:
+                run_ids.append(rid)
         report = EngineerReport(
             task_id=task_id,
             # A report needs a non-empty run id, and a brief parked
@@ -668,6 +882,8 @@ class GovernedPipeline:
 
 
 def _first_failure_of(convergence: ConvergenceResult, error_type: str) -> EvidenceFailure | None:
+    if converged_on_valid_evidence(convergence):
+        return None  # prior holds/refusals remain history; the final round passed its gates
     return next((f for f in convergence.evidence_failures
                  if f.error_type == error_type), None)
 

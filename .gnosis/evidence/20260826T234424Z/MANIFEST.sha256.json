@@ -1,0 +1,19 @@
+{
+  "bundle_digest": "4cfb63712ae4ad2372b4265b16a912a1c047dac1dd73468c2240bf3398b4aefb",
+  "files": {
+    "CAPTURE-NOTE.md": "d5ecb69da48f59a760c2e3f309fc21a1f74ddc7e1c6b6d616d539be105a32f6b",
+    "PROBE-RESULTS.txt": "d2f66897983bc4a3b81d743543b2a6f66fc1e4c66aac35e990e1b91ab2176f3a",
+    "p2_cleanup.ps1": "4cabb502878aeafde523acb00f596d67f6e7f014d61fca58c4a3ec0eafc786e7",
+    "p2_probe.ps1": "a62604ee052151e90944bc316fc40fc4b58e7803af9fb4cfff476a16cd4e684d",
+    "squat.ps1": "9d9568d64f743525b6970ec88f87f2746a1131a1261d7172e4a895cb94aae179",
+    "trust_src/main.py": "788345be9016e6120df8ae6792a614131a2a3fbb64e12692f6a82e272d61250a",
+    "trust_src/trust/bundle_verify.py": "4e719c5e56e0ab36c5210b653ed1aa3f8fd2e199b94358f006983e6d3826961d",
+    "trust_src/trust/pipeserver.py": "055cf5b404ece1db19ad0c27965b92fd0ec01119fbe63dcadeffdea882f9d288",
+    "trust_src/trust/publisher.py": "59d63ba36cfef7d8c9905fa219e0a7d8877f62b81f337c44eb548b331e6b844f",
+    "trust_src/trust/scmhost.py": "bc8474094eeff6852f3620a6b01c4e3cdcb51b85ddea9a00b4d2b4e20e05d3d8",
+    "trust_src/trust/tokendump.py": "b0f9ec32992ab0c497a10e84374e8aaf40dfe3bfbbf6d9aa93db832eda925cbc",
+    "worker_attacks.ps1": "a58223f4fa71259abe8cd7e273a8177663bff9134b92463c4a1fc5d5546b99eb"
+  },
+  "note": "SHA-256 of every file in this bundle. bundle_digest is one hash over the whole map. Re-derive it with verify_bundle(): any file added, removed or changed after capture is detected. The manifest cannot hash itself, so it is the one file not listed; a cryptographic signature over bundle_digest \u2014 which would also stop an editor from recomputing this manifest \u2014 needs key management that is out of scope and is a declared limitation, not a claim.",
+  "unlisted": "MANIFEST.sha256.json"
+}

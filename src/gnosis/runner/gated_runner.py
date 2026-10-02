@@ -27,6 +27,8 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
+from gnosis.kernel.execution_scope import ExecutionScope
+
 from ..kernel.budget import BudgetLedger
 from ..kernel.credentials import CredentialKind, CredentialPool, Rotation
 from ..kernel.engine import DEFAULT_PERMISSION_MODE, agent_launch_snapshot
@@ -130,6 +132,8 @@ class GatedAgentRunner:
         # authority that said so.
         authorised_kinds: frozenset[CredentialKind] = frozenset(),
         base_environment: Mapping[str, str] | None = None,
+        on_launch: Callable[[], None] | None = None,
+        scope: ExecutionScope | None = None,
     ) -> None:
         self.inner = inner
         self.policy = policy
@@ -143,6 +147,8 @@ class GatedAgentRunner:
         # Every verdict is handed to the caller to record. An allowed
         # launch is evidence too, not just a refused one.
         self.on_decision = on_decision
+        self.on_launch = on_launch
+        self.scope = scope
         self.failure_chain = failure_chain or DEFAULT_CHAIN
         # Consulted at the same moment as the policy gate, for the same
         # reason: it is the last point at which refusing still costs
@@ -159,9 +165,14 @@ class GatedAgentRunner:
         # logs, records or evidence).
         self.rotations: list[dict[str, Any]] = []
         self.classification: FailureClassification | None = None
+        self.last_result: ExecutionResult | None = None
         self.decisions: list[tuple[str, PolicyDecision]] = []
         # Per-launch, so two rounds of the same stage cannot share a probe.
         self._probe_seq = 0
+
+    @property
+    def accepts_run_id(self) -> bool:
+        return getattr(self.inner, "accepts_run_id", None) is True
 
     @property
     def binary(self) -> str:
@@ -186,6 +197,10 @@ class GatedAgentRunner:
         extra_args: Sequence[str] | None = None,
         **kwargs: Any,
     ) -> ExecutionResult:
+        if self.scope is not None:
+            self.scope.check()
+        self.last_result = None
+        self.classification = None
         if self.budget is not None:
             # BEFORE the hold question and before the verdict: a brief
             # that has spent its budget must not consume a policy
@@ -304,7 +319,12 @@ class GatedAgentRunner:
             # consumed the thing being bounded, and counting on the way
             # out would let a crash-looping brief spend forever.
             self.budget.spend_launch()
+        if self.on_launch is not None:
+            self.on_launch()
         launch_kwargs = dict(kwargs)
+        if self.scope is not None:
+            self.scope.check()
+            launch_kwargs["cancellation_token"] = self.scope.cancellation
         if rotation is not None:
             # THE BINDING. Deciding which credential to use and then
             # launching with the ambient environment is not rotation — the
@@ -323,6 +343,9 @@ class GatedAgentRunner:
             permission_mode=permission_mode, mcp=mcp, model=model,
             extra_args=extra_args, **launch_kwargs,
         )
+        self.last_result = result
+        if self.scope is not None:
+            self.scope.check()
 
         # Classify what came back, and tell the hold plane. Without this a
         # rate limit hit by a review or fix round was invisible to it: the

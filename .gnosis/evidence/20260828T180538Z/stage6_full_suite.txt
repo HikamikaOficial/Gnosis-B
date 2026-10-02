@@ -1,0 +1,11 @@
+FULL SUITE — STAGE 6
+======================================================================
+
+One run, GREEN, reported as it happened. The project's known work-queue
+flake (NEXT_ACTIONS 0-XXIII) did not fire this time; that it can is
+recorded there and is not restated here as though it had.
+
+SKIPPED [1] tests\test_worker_launcher.py:966: the refusal is the non-Windows path
+1438 passed, 1 skipped, 156 subtests passed in 1273.01s (0:21:13)
+SUITE_EXIT=0
+SUITE_DONE

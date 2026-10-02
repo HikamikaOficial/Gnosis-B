@@ -1,0 +1,170 @@
+F-17 — adversarial audit of `.git/` during a capture (OS-real)
+==========================================================================
+tree: fe029f985d5cedd890fefdf7d7b0e0c5876c0c81
+
+The observer already SEES .git/ writes; F-17 judges the execute/redirect
+surface (hooks, config) and counts the rest. A hook create+delete inside
+the interval is caught by the observer but blind to a before/after
+machinery fingerprint, the same lesson as F-14's endpoints.
+
+--- output ------------------------------------------------------------
+F-17 — adversarial audit of `.git/` during a capture
+python 3.12.14
+
+1. NORMAL capture (a trivial check):
+   boundary verdict            : CLEAN
+   evidence_valid              : True
+   machinery_events (counted)  : 28
+   machinery fp stable         : True
+   config in fp                : True
+   hooks tracked               : []
+
+2. ADVERSARIAL: a check installs .git/hooks/pre-commit:
+   boundary verdict            : MACHINERY_MUTATED
+   evidence_valid              : False  <- currently CLEAN?
+   machinery fp changed        : True  <- detector WOULD catch it
+   hooks added                 : ['pre-commit']
+
+3. ADVERSARIAL: a check rewrites .git/config:
+   boundary verdict            : MACHINERY_MUTATED
+   evidence_valid              : False
+   machinery config changed    : True
+
+4. ADVERSARIAL: a check creates then deletes a hook (ABA):
+   boundary verdict            : MACHINERY_MUTATED
+   machinery fp before==after  : True  <- a before/after check is BLIND to this ABA
+   -> like the F-14 ABA: only an interval observer catches a create+delete; a before/after fingerprint sees A==A.
+
+INTERPRETATION
+  The observer already SEES .git/ events (counted as machinery). The
+  question F-17 poses for .git/ is judging vs counting. A before/after
+  machinery fingerprint catches a persisted hook/config tamper but is
+  blind to a create+delete ABA, exactly as the endpoints were for F-14.
+
+--- source ------------------------------------------------------------
+
+"""F-17 adversarial audit of `.git/`: what git writes legitimately during a
+capture, versus what a machinery tamper looks like, and whether the
+existing `_machinery_fingerprint` (config + hooks) is a clean detector.
+
+No production code modified. Read-only against the product; temp repos only.
+"""
+from __future__ import annotations
+
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+REPO = Path(r"C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi")
+sys.path.insert(0, str(REPO / "src"))
+from gnosis.kernel.evidence_capture import CheckCommand, run_capture  # noqa: E402
+from gnosis.kernel.git_evidence import tamper_fingerprint  # noqa: E402
+
+
+def git(repo, *a):
+    subprocess.run(["git", *a], cwd=repo, capture_output=True, text=True, check=True)
+
+
+def make_repo(tmp: Path) -> Path:
+    repo = tmp / "repo"; repo.mkdir()
+    for a in (["init"], ["config", "user.email", "t@e.com"], ["config", "user.name", "T"],
+              ["config", "commit.gpgsign", "false"]):
+        git(repo, *a)
+    (repo / "a.txt").write_text("A\n", encoding="utf-8")
+    git(repo, "add", "-A"); git(repo, "commit", "-m", "init")
+    return repo
+
+
+def _script(*lines):
+    return CheckCommand("check", (sys.executable, "-c", "\n".join(lines)))
+
+
+def machinery(repo: Path):
+    return tamper_fingerprint(repo).get("machinery")
+
+
+def dot_git_events(capture):
+    return [f"{e['action']}:{e['path']}" for e in capture.summary["boundary"].get("violations", [])]
+
+
+def main() -> int:
+    print("F-17 — adversarial audit of `.git/` during a capture")
+    print(f"python {sys.version.split()[0]}")
+
+    # 1. Normal capture: is the machinery fingerprint stable, and what does
+    #    the observer see under .git/ (currently 'machinery', counted not judged)?
+    with tempfile.TemporaryDirectory(dir=r"C:\Users\nicol\AppData\Local\Temp") as t:
+        repo = make_repo(Path(t))
+        before = machinery(repo)
+        cap = run_capture(repo, [_script("pass")], Path(t) / "s")
+        after = machinery(repo)
+        print("\n1. NORMAL capture (a trivial check):")
+        print(f"   boundary verdict            : {cap.boundary.verdict.value}")
+        print(f"   evidence_valid              : {cap.evidence_valid}")
+        print(f"   machinery_events (counted)  : {cap.summary['boundary']['machinery_events']}")
+        print(f"   machinery fp stable         : {before == after}")
+        print(f"   config in fp                : {before is not None and 'config' in before}")
+        print(f"   hooks tracked               : {sorted((before or {}).get('hooks', {}))}")
+
+    # 2. Adversarial: a check installs a hook during the interval.
+    with tempfile.TemporaryDirectory(dir=r"C:\Users\nicol\AppData\Local\Temp") as t:
+        repo = make_repo(Path(t))
+        before = machinery(repo)
+        cap = run_capture(repo, [_script(
+            "import os",
+            "hook = os.path.join('.git', 'hooks', 'pre-commit')",
+            "open(hook, 'w', encoding='utf-8').write('#!/bin/sh\\nexfiltrate\\n')",
+        )], Path(t) / "s")
+        after = machinery(repo)
+        print("\n2. ADVERSARIAL: a check installs .git/hooks/pre-commit:")
+        print(f"   boundary verdict            : {cap.boundary.verdict.value}")
+        print(f"   evidence_valid              : {cap.evidence_valid}  <- currently CLEAN?")
+        print(f"   machinery fp changed        : {before != after}  <- detector WOULD catch it")
+        b_hooks = set((before or {}).get("hooks", {}))
+        a_hooks = set((after or {}).get("hooks", {}))
+        print(f"   hooks added                 : {sorted(a_hooks - b_hooks)}")
+
+    # 3. Adversarial: a check rewrites .git/config (e.g. a filter/remote).
+    with tempfile.TemporaryDirectory(dir=r"C:\Users\nicol\AppData\Local\Temp") as t:
+        repo = make_repo(Path(t))
+        before = machinery(repo)
+        cap = run_capture(repo, [_script(
+            "import subprocess, sys",
+            "subprocess.run(['git','config','core.fsmonitor','evil'], check=True)",
+        )], Path(t) / "s")
+        after = machinery(repo)
+        print("\n3. ADVERSARIAL: a check rewrites .git/config:")
+        print(f"   boundary verdict            : {cap.boundary.verdict.value}")
+        print(f"   evidence_valid              : {cap.evidence_valid}")
+        print(f"   machinery config changed    : "
+              f"{(before or {}).get('config') != (after or {}).get('config')}")
+
+    # 4. Adversarial: create -> delete a hook inside the interval (ABA).
+    with tempfile.TemporaryDirectory(dir=r"C:\Users\nicol\AppData\Local\Temp") as t:
+        repo = make_repo(Path(t))
+        before = machinery(repo)
+        cap = run_capture(repo, [_script(
+            "import os",
+            "hook = os.path.join('.git', 'hooks', 'pre-commit')",
+            "open(hook, 'w', encoding='utf-8').write('#!/bin/sh\\nevil\\n')",
+            "os.remove(hook)",
+        )], Path(t) / "s")
+        after = machinery(repo)
+        print("\n4. ADVERSARIAL: a check creates then deletes a hook (ABA):")
+        print(f"   boundary verdict            : {cap.boundary.verdict.value}")
+        print(f"   machinery fp before==after  : {before == after}  "
+              f"<- a before/after check is BLIND to this ABA")
+        print("   -> like the F-14 ABA: only an interval observer catches a "
+              "create+delete; a before/after fingerprint sees A==A.")
+
+    print("\nINTERPRETATION")
+    print("  The observer already SEES .git/ events (counted as machinery). The")
+    print("  question F-17 poses for .git/ is judging vs counting. A before/after")
+    print("  machinery fingerprint catches a persisted hook/config tamper but is")
+    print("  blind to a create+delete ABA, exactly as the endpoints were for F-14.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,57 @@
+{
+  "mode": "dry",
+  "real_ops_constructed": false,
+  "gates": [
+    "HEAD checked"
+  ],
+  "orchestration": {
+    "stages": [
+      "base_provision",
+      "composed_deployment",
+      "trusted_record",
+      "acls",
+      "service_start",
+      "pipe_ready",
+      "route_selected",
+      "operator_launch",
+      "anchored_check",
+      "success"
+    ],
+    "success": true,
+    "operator_exit": 0,
+    "anchored": true,
+    "rollback_ok": true,
+    "launch_argv": [
+      "C:\\Users\\nicol\\AppData\\Local\\Temp\\f33-b1-dry-untsywjf\\code\\releases\\B1\\runtime\\python.exe",
+      "-I",
+      "-B",
+      "C:\\Users\\nicol\\AppData\\Local\\Temp\\f33-b1-dry-untsywjf\\code\\releases\\B1\\publisher\\operator_entry.py",
+      "run",
+      "--config",
+      "C:\\Users\\nicol\\AppData\\Local\\Temp\\f33-b1-dry-untsywjf\\GnosisStage2CBRecovery\\inputs\\operator_config.json",
+      "--brief",
+      "C:\\Users\\nicol\\AppData\\Local\\Temp\\f33-b1-dry-untsywjf\\GnosisStage2CBRecovery\\inputs\\operator_brief.json"
+    ],
+    "error": null
+  },
+  "bindings": {
+    "expected_head": "042a7a9aba8226eec7587f94a758a55c6f7dd6aa",
+    "runtime_src": "C:\\Users\\nicol\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none",
+    "reviewer_executable": "C:\\Users\\nicol\\.local\\bin\\claude.exe",
+    "worker_username": "GnosisWkrS2CB",
+    "service_name": "GnosisPubS2CBProbe",
+    "pipe_name": "gnosis-s2cb-probe",
+    "residue_record_path": "C:\\Users\\nicol\\AppData\\Local\\Temp\\f33-b1-dry-untsywjf\\GnosisStage2CBRecovery\\run-b1-1.residue.json",
+    "f17_observer": "gnosis.trust.deployment.observe_deployment",
+    "os_backend": "stage2cb_ops.WindowsRealOperations",
+    "live_ledger": "1 used / 4 remaining",
+    "operator_argv": [
+      "run",
+      "--config",
+      "C:\\Users\\nicol\\AppData\\Local\\Temp\\f33-b1-dry-untsywjf\\GnosisStage2CBRecovery\\inputs\\operator_config.json",
+      "--brief",
+      "C:\\Users\\nicol\\AppData\\Local\\Temp\\f33-b1-dry-untsywjf\\GnosisStage2CBRecovery\\inputs\\operator_brief.json"
+    ]
+  },
+  "result": "DRY-TRACE-OK"
+}

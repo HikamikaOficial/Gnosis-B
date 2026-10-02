@@ -140,23 +140,26 @@ class TestParksReturnWorkToTheQueue(_QueueTestCase):
 class TestACrashedWorkerLosesNothing(_QueueTestCase):
     """Reclaimed ownership is not enough: the record has to come back too."""
 
-    def _short_lived(self) -> WorkQueue:
+    def _short_lived(self, clock=time.time) -> WorkQueue:
         authority = WorkAuthority(
-            ClaimStore(self.root / "c2.json"), LeaseStore(self.root / "l2.json"),
-            default_ttl_s=0.05, reclaim_grace_s=0.0,
+            ClaimStore(self.root / "c2.json", clock=clock),
+            LeaseStore(self.root / "l2.json", clock=clock),
+            default_ttl_s=0.05, reclaim_grace_s=0.0, clock=clock,
         )
-        return WorkQueue(self.root / "q2", authority)
+        return WorkQueue(self.root / "q2", authority, clock=clock)
 
     def test_a_brief_whose_worker_died_becomes_claimable_again(self):
         # Verified before shipping: the claims plane reclaimed the claim
         # through the lease TTL, and the brief still sat in `running/`
         # where no worker looks — ownership free, record unreachable,
         # which is the ghost rule 4 forbids.
-        queue = self._short_lived()
+        clock = [1000.0]
+        queue = self._short_lived(clock=lambda: clock[0])
         queue.enqueue(_brief("BRIEF-1"))
-        queue.claim("worker-that-dies")
+        self.assertIsNotNone(queue.claim("worker-that-dies"))
 
-        time.sleep(0.15)
+        # Expire an acquired lease, independent of CI disk write latency.
+        clock[0] += 0.15
         queue.authority.sweep()
         self.assertEqual(queue.running_ids(), ["BRIEF-1"])
         self.assertIsNone(queue.claim("worker-b"), "should be invisible before recovery")
@@ -167,7 +170,8 @@ class TestACrashedWorkerLosesNothing(_QueueTestCase):
         self.assertEqual(again.brief_id, "BRIEF-1")
 
     def test_recovery_never_takes_a_brief_from_a_live_worker(self):
-        queue = self._short_lived()
+        # The premise is a LIVE lease, not "all Windows disk writes take <50ms".
+        queue = self._short_lived(clock=lambda: 1000.0)
         queue.enqueue(_brief("BRIEF-1"))
         live = queue.claim("worker-a")
 
@@ -178,10 +182,11 @@ class TestACrashedWorkerLosesNothing(_QueueTestCase):
         self.assertEqual(queue.done_ids(), ["BRIEF-1"])
 
     def test_recovery_is_idempotent(self):
-        queue = self._short_lived()
+        clock = [1000.0]
+        queue = self._short_lived(clock=lambda: clock[0])
         queue.enqueue(_brief("BRIEF-1"))
-        queue.claim("worker-that-dies")
-        time.sleep(0.15)
+        self.assertIsNotNone(queue.claim("worker-that-dies"))
+        clock[0] += 0.15
         queue.authority.sweep()
 
         self.assertEqual(queue.recover(), ["BRIEF-1"])
@@ -190,12 +195,13 @@ class TestACrashedWorkerLosesNothing(_QueueTestCase):
 
 
 class TestRepairsFromTheIndependentReview(_QueueTestCase):
-    def _short_lived(self, **kwargs):
+    def _short_lived(self, clock=time.time, **kwargs):
         authority = WorkAuthority(
-            ClaimStore(self.root / "c3.json"), LeaseStore(self.root / "l3.json"),
-            default_ttl_s=0.05, reclaim_grace_s=0.0,
+            ClaimStore(self.root / "c3.json", clock=clock),
+            LeaseStore(self.root / "l3.json", clock=clock),
+            default_ttl_s=0.05, reclaim_grace_s=0.0, clock=clock,
         )
-        return WorkQueue(self.root / "q3", authority, **kwargs)
+        return WorkQueue(self.root / "q3", authority, clock=clock, **kwargs)
 
     def test_a_crash_after_completing_does_not_re_execute_the_work(self):
         # `complete` resolves the claim and THEN moves the file. A crash
@@ -203,7 +209,7 @@ class TestRepairsFromTheIndependentReview(_QueueTestCase):
         # `running/`, and my own recovery returned it to `pending` — which
         # would re-execute finished work, worse than the ghost recovery
         # exists to prevent (independent review caught it in the fix).
-        queue = self._short_lived()
+        queue = self._short_lived(clock=lambda: 1000.0)
         queue.enqueue(_brief("BRIEF-1"))
         work = queue.claim("worker-a")
         queue.authority.resolve(work.grant, outcome="COMPLETED")   # then the crash
@@ -214,7 +220,7 @@ class TestRepairsFromTheIndependentReview(_QueueTestCase):
         self.assertIsNone(queue.claim("worker-b"))
 
     def test_a_crash_after_releasing_returns_the_work(self):
-        queue = self._short_lived()
+        queue = self._short_lived(clock=lambda: 1000.0)
         queue.enqueue(_brief("BRIEF-1"))
         work = queue.claim("worker-a")
         queue.authority.release(work.grant)                        # then the crash
@@ -226,7 +232,7 @@ class TestRepairsFromTheIndependentReview(_QueueTestCase):
         # Rule 8. `release` returns work to pending and `drain` re-offers
         # it immediately; the per-brief budget does NOT bound that,
         # because parking launches nothing and spends nothing.
-        queue = self._short_lived(max_attempts=3)
+        queue = self._short_lived(clock=lambda: 1000.0, max_attempts=3)
         queue.enqueue(_brief("BRIEF-1"))
         for _ in range(3):
             work = queue.claim("worker-a")
@@ -272,10 +278,11 @@ class TestRepairsFromTheIndependentReview(_QueueTestCase):
         # A mechanism nothing calls is a parallel fiction; a worker
         # starting up is when a previous worker's stranded record should
         # come back.
-        queue = self._short_lived()
+        clock = [1000.0]
+        queue = self._short_lived(clock=lambda: clock[0])
         queue.enqueue(_brief("BRIEF-1"))
-        queue.claim("worker-that-dies")
-        time.sleep(0.15)
+        self.assertIsNotNone(queue.claim("worker-that-dies"))
+        clock[0] += 0.15
         queue.authority.sweep()
 
         claimed = [w.brief_id for w in drain(queue, "worker-b")]

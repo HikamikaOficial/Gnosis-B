@@ -1,0 +1,38 @@
+F-33 B1 OS-REAL QUALIFICATION (R3E.1 baseline) — post-run verification
+=====================================================================
+Baseline HEAD : 5c3fcc4f5c8566bb78ef8b80d4a63c9295908422
+Command       : PYTHONUTF8=1 .venv/Scripts/python.exe scripts/run_f33_stage2c_b1_osreal.py \
+                --execute-os-real --confirm EXECUTE-F33-2CB1-OS-REAL \
+                --expected-head 5c3fcc4f5c8566bb78ef8b80d4a63c9295908422
+
+STAGES REACHED: base_provision, composed_deployment, trusted_record, acls,
+                service_start, pipe_ready, route_selected, operator_launch, anchored_check
+R3E.1 VALIDATED OS-REAL: the operator's build_operator_composition + observe_deployment
+                PASSED (release_id=B1 reconstructed; NO releases\current winerr-3). The
+                historical release-id blocker is RESOLVED. The operator fully composed the
+                governed pipeline and produced a structured governed result.
+OPERATOR RESULT: {"run_id": null, "task_id": "TASK-20260903T011001153Z-c92f51ba",
+                "work_status": "BLOCKED", "publication_state": null, "success": false,
+                "detail": "governed work not COMPLETED (pipeline_error:WorkerLaunchFailed);
+                no publication attempted"}  ; operator_exit=3
+
+NEW BLOCKER   : WorkerLaunchFailed (src/gnosis/trust/worker_launcher.py) at the REAL
+                Worker-launch frontier — CreateProcessAsUser / token / Job / credential
+                path failed OS-real. The governed pipeline caught it as BLOCKED
+                (pipeline.py:258 -> pipeline_error:WorkerLaunchFailed). The exact winerr
+                is not in the operator summary (handled result) and the deployment (with
+                any logs) was rolled back. NOT R3E.1 (operator self-observation passed),
+                NOT the release-id path. First time B1 reaches the Worker boundary.
+L2 CONSUMED   : NO (failed at worker launch, before reviewer). Ledger 1 used / 4 remaining.
+
+Rollback verification:
+  service GnosisPubS2CBProbe : sc query -> ERROR 1060 -> ABSENT
+  worker  GnosisWkrS2CB      : net user -> not found -> ABSENT
+  deployment/scaffold root   : gnosis-2cb-b1-run-b1-1 -> ABSENT
+  RESIDUAL OS STATE          : NONE
+  AUTOMATED ROLLBACK         : PASS (rollback_ok=true, scaffold_cleanup=removed)
+  MANUAL CLEANUP REQUIRED    : NO
+
+Source freeze (post-run): HEAD unchanged; src/gnosis diff unchanged (R3E.1 baseline);
+  hashes pre==post: composition=1848005 cli=6990532 run_f33=ae5277a. No implementation
+  change during the run. F-17 + gnosis_deployment regression 118 passed.

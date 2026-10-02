@@ -1,0 +1,2 @@
+?? .stfolder/
+?? PROJECT_REPORT.md

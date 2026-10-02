@@ -1,0 +1,10 @@
+NPM1: APPLIED / CAUGHT  (restore pathlib existence probe)
+NPM2: APPLIED / CAUGHT  (treat any Win32 error as ordinary not-ready)
+NPM3: APPLIED / CAUGHT  (treat access denied as READY)
+NPM4: APPLIED / CAUGHT  (invalid name treated as transient)
+NPM5: APPLIED / CAUGHT  (reprefix / mangle the pipe name)
+NPM6: APPLIED / CAUGHT  (ignore service death)
+NPM7: APPLIED / CAUGHT  (unbounded wait (drop the deadline))
+NPM8: APPLIED / CAUGHT  (invert busy semantics (busy -> READY))
+
+8/8 applied observation mutants CAUGHT

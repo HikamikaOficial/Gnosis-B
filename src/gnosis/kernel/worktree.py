@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -132,10 +133,19 @@ class WorktreeManager:
     each checked out from `source_repo` on its own `gnosis/<task_id>`
     branch."""
 
-    def __init__(self, source_repo: Path, worktrees_root: Path):
+    def __init__(self, source_repo: Path, worktrees_root: Path, *,
+                 provenance_root: Path | None = None,
+                 prepare_directory: Callable[[Path], None] | None = None,
+                 populate_worktree: Callable[[Path], None] | None = None):
         self.source_repo = Path(source_repo)
         self.worktrees_root = Path(worktrees_root)
+        self._prepare_directory = prepare_directory
+        self._populate_worktree = populate_worktree
+        # Production keeps these authority records outside Worker-writable trees.
+        self.provenance_root = (Path(provenance_root) if provenance_root is not None
+                                else self.worktrees_root)
         self.worktrees_root.mkdir(parents=True, exist_ok=True)
+        self.provenance_root.mkdir(parents=True, exist_ok=True)
 
     def planned_path(self, task_id: str) -> Path:
         """Where this task's worktree WOULD live. Creates nothing.
@@ -212,14 +222,34 @@ class WorktreeManager:
         return handle
 
     def _worktree_add(self, target: Path, branch: str, base_ref: str) -> None:
+        if self._prepare_directory is not None:
+            if target.exists() or target.is_symlink():
+                raise WorktreeError("workspace preparation requires a new directory")
+            self._prepare_directory(target)
+            if (not target.is_dir() or target.is_symlink()
+                    or (hasattr(target, "is_junction") and target.is_junction())):
+                raise WorktreeError("workspace preparation did not create an ordinary directory")
+        # Keep Git metadata under the Director while allowing a different token
+        # to create checked-out files. In Windows the sandbox must be able to
+        # authorize existing files, not just newly created files in an owned root.
+        checkout_options = ["--no-checkout"] if self._populate_worktree is not None else []
         if self._branch_exists(branch):
             # Adopt the surviving kernel-minted branch rather than deleting
             # or shadowing it: its commits are recoverable work.
-            proc = _run_git(self.source_repo, ["worktree", "add", str(target), branch])
+            proc = _run_git(self.source_repo, ["worktree", "add", *checkout_options, str(target), branch])
         else:
-            proc = _run_git(self.source_repo, ["worktree", "add", "-b", branch, str(target), base_ref])
+            proc = _run_git(self.source_repo, ["worktree", "add", *checkout_options,
+                                              "-b", branch, str(target), base_ref])
         if proc.returncode != 0:
             raise WorktreeError(f"git worktree add failed: {proc.stderr.strip()}")
+        if self._populate_worktree is not None:
+            indexed = _run_git(target, ["read-tree", "HEAD"])
+            if indexed.returncode != 0:
+                raise WorktreeError(f"worktree index initialization failed: {indexed.stderr.strip()}")
+            self._populate_worktree(target)
+            checked = _run_git(target, ["diff", "--quiet", "--exit-code"])
+            if checked.returncode != 0:
+                raise WorktreeError("Worker checkout does not match the assigned Git index")
 
     # -- resume-state loading (hostile input) ---------------------------------
 
@@ -476,7 +506,7 @@ class WorktreeManager:
     # -- shared helpers --------------------------------------------------------
 
     def _handle_marker(self, task_id: str) -> Path:
-        return self.worktrees_root / f".{task_id}.worktree.json"
+        return self.provenance_root / f".{task_id}.worktree.json"
 
     def _branch_exists(self, branch: str) -> bool:
         proc = _run_git(self.source_repo, ["rev-parse", "--verify", "--quiet",

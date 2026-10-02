@@ -1,0 +1,241 @@
+F-17 IMPLEMENTATION — STAGE 5
+TRUSTED DEDICATED-WORKER LAUNCHER — GATE RESULTS
+======================================================================================
+Stage 4 CLOSED at 2b865f2. Stage 5 authorized WITH HARD GATES.
+
+    STAGE 5 STOPPED AT GATE 1, BEFORE ANY WINDOWS PRIMITIVE WAS IMPLEMENTED.
+
+    WORKER LAUNCH COMMAND-LINE CONTRACT NOT QUALIFIED
+
+The review placed the runner audit BEFORE the implementation precisely so this
+could be discovered without building on a disqualified foundation. It was, and
+nothing was built on it. No launcher exists, no account was created, no DPAPI
+blob was written, no ACL was changed, no production source was modified.
+
+
+1. THE REAL ClaudeCliRunner LAUNCH CONTRACT
+--------------------------------------------------------------------------------------
+Read off src/gnosis/runner/claude_cli_runner.py (CLIRunner.run,
+ClaudeCodeCLIRunner.build_argv) and its call sites in kernel/engine.py and
+adapters/cli_review.py.
+
+  executable   argv[0] = `self.binary`, DEFAULT the BARE NAME "claude" — resolved
+               by PATH search, not an absolute path
+  PROMPT       argv[2], immediately after `-p`         <-- THE WHOLE PROMPT
+  flags        --output-format / --session-id / --permission-mode / --model
+  mcp          --mcp-config <path>... [--strict-mcp-config]
+  extra_args   appended verbatim
+  stdin        NOT SET -> INHERITED from the Director (live probe: the child
+               receives fd 0 with isatty=True)
+  stdout       a FILE opened by the runner ("wb") and passed as a handle
+  stderr       a FILE opened by the runner ("wb") and passed as a handle
+  env          `env=None` -> full OS inheritance; or the explicit dict built by
+               `Credential.environment`, which is `dict(base)` — a copy of the
+               ENTIRE Director environment plus/minus specific names
+  cwd          explicit: the per-run worktree (`exec_root`)
+  timeout      cooperative poll loop in the PARENT; terminate() then kill()
+  cancel       CancellationToken polled in the same loop
+
+2. PAYLOAD TRANSPORT
+--------------------------------------------------------------------------------------
+The prompt travels ON THE COMMAND LINE. There is no separate payload channel.
+`effective_prompt` in engine.py is the code-intelligence context block
+(max_context_chars, DEFAULT 12000) PREPENDED to the caller's prompt, which is
+itself unbounded. The review adapter builds its prompt from
+REVIEW_SCHEMA_INSTRUCTIONS (734 chars) plus objective, round, focus and
+verification summary.
+
+    THIS IS CASE B.
+
+3. COMMAND-LINE MAXIMUM OBSERVED
+--------------------------------------------------------------------------------------
+Measured with the production `build_argv`, rendered through the same Windows
+quoting Popen uses (subprocess.list2cmdline).
+
+  argv scaffolding alone, empty prompt                            56 chars
+  build_review_prompt, minimal objective                        1127 chars
+  build_review_prompt, focus + verification summary             1239 chars
+  review prompt + --mcp-config + --strict-mcp-config            1231 chars
+  no context, a modest 2 kB task brief                          2054 chars
+  DEFAULT engine path: 12000-char context + one-line task      12128 chars   <-- WORST
+
+  Largest prompt that would still fit in 1024: 970 characters.
+
+4. CreateProcessWithLogonW COMPATIBILITY VERDICT
+--------------------------------------------------------------------------------------
+    CreateProcessWithLogonW lpCommandLine limit : 1024 characters (documented)
+    worst measured command line                 : 12128 characters
+
+    VERDICT: INCOMPATIBLE.
+
+Not marginally. The SMALLEST prompt production actually builds — the minimal
+review prompt at 1023 characters — already exceeds the entire limit once the
+56-character argv scaffolding is added. The default engine path is 12x over. No
+tuning, no flag, no reordering closes a gap of that shape.
+
+Per the review's own instruction, CreateProcessWithLogonW was NOT silently
+adopted, the payload was NOT truncated, and the prompt was NOT split.
+
+5. THE MINIMAL SOLUTION — three candidates, none implementable under this
+--------------------------------------------------------------------------------------
+   stage's authorization
+
+  (A) MOVE THE PAYLOAD TO STDIN
+      Evidence FOR: the installed CLI is claude 2.1.247; `claude --help` gives
+      `Usage: claude [options] [command] [prompt]`, documents `-p/--print` as
+      "Print response and exit (useful for pipes)", and documents
+      `--input-format <format>  Input format (only works with --print): "text"
+      (default), or "stream-json"`. A text input channel in print mode is
+      therefore a documented feature.
+      WHY NOT NOW: proving the EXACT semantic equivalence needs a real turn,
+      which is a PROVIDER CALL — explicitly out of scope for this stage. And it
+      changes the Claude invocation contract: `ExecutionResult.command` records
+      argv as provenance and the replay/cassette system keys on it, so moving
+      the prompt out of argv changes recorded provenance and every argv-asserting
+      test. The review says "NO cambies semántica de Claude por conveniencia."
+      COST: a semantic change to the runner + a provider-call validation.
+
+  (B) TRUSTED SHORT BOOTSTRAP, PAYLOAD ON A SEPARATE CHANNEL   <-- RECOMMENDED
+      CreateProcessWithLogonW launches a SHORT (<1024) trusted bootstrap under
+      the Worker SID; the bootstrap reads the exact argv from a file the Director
+      wrote before the launch and CreateProcess-es the real CLI **as itself** —
+      already the Worker SID, so the ordinary 32767-character limit applies and
+      NO additional privilege is needed.
+      WHY IT IS THE MINIMAL ONE: it changes NEITHER Claude's semantics (the argv
+      is reconstructed byte-for-byte) NOR the privilege set (still
+      CreateProcessWithLogonW, still no SeImpersonatePrivilege).
+      COST, STATED: a new trusted component enters the TCB, and the argv payload
+      file becomes LOAD-BEARING FOR INTEGRITY — anything that could rewrite it
+      between write and exec would control the Worker's own argv. Its ACL and
+      its position relative to the worktree need a design decision, which is
+      exactly the kind of decision this stage may not take alone.
+
+  (C) A DIFFERENT WINDOWS PRIMITIVE
+      Measured on this machine (see the caller-context audit):
+        CreateProcessWithLogonW  reachable  cap  1024   DISQUALIFIED by payload
+        CreateProcessWithTokenW  reachable  cap 32767   needs SeImpersonate
+        CreateProcessAsUserW     NOT reach. cap 32767   needs SeAssignPrimaryToken
+      The Director holds SeImpersonatePrivilege ENABLED, so LogonUserW +
+      CreateProcessWithTokenW WOULD fit the payload.
+      WHY NOT NOW: reachability is not authorization. This makes the trusted
+      launcher DEPEND on SeImpersonatePrivilege, a privilege the review itself
+      enumerates as dangerous and which was never approved as a launcher
+      dependency; it also forecloses the "broker/service" option that
+      docs/F17_DEDICATED_WORKER_PROBE_PLAN.md §4 marks as PREFERRED for
+      production. The review is explicit: "No cambies silenciosamente a una API
+      con privilegios mayores", and STOP if "only solution requires dangerous
+      trusted privileges not previously approved".
+
+  No candidate is clean AND within this stage's authority. Hence the named STOP.
+
+6. DIRECTOR CALLER CONTEXT (read-only; nothing launched, nothing created)
+--------------------------------------------------------------------------------------
+  TokenUser SID : S-1-5-21-1160728320-3593568380-93362170-1000
+  integrity     : High
+  elevated      : True
+  privileges    : 24 held
+
+  SeImpersonatePrivilege          ENABLED             -> CreateProcessWithTokenW reachable
+  SeAssignPrimaryTokenPrivilege   ABSENT              -> CreateProcessAsUserW NOT reachable
+  SeIncreaseQuotaPrivilege        present-disabled
+  SeTcbPrivilege                  ABSENT
+
+  Also held and ENABLED: SeBackupPrivilege, SeRestorePrivilege, SeDebugPrivilege,
+  SeChangeNotifyPrivilege, SeCreateGlobalPrivilege. The Director is a fully
+  elevated administrator; that is the context any launcher would inherit, and it
+  is recorded here because the review requires it before a primitive is chosen.
+
+7. PRIMITIVE-INDEPENDENT FINDINGS (audited anyway; none of these is blocked by
+--------------------------------------------------------------------------------------
+   the gate, and all three are Stage-5 requirements that are UNMET today)
+
+  E1  ENVIRONMENT. Both launch paths hand the Worker the Director's ENTIRE
+      environment. 62 variables on this machine, 9 of them credential-shaped by
+      name — including CLAUDE_CODE_MESSAGING_TOKEN, CLAUDE_CODE_MESSAGING_SOCKET
+      and CLAUDE_CODE_SESSION_ID (NAMES ONLY; no value was read or recorded).
+      There is no allowlist anywhere. The required "Director sentinel ABSENT from
+      the Worker environment" property is not achievable without building one.
+
+  H1  STDIN. The runner never sets `stdin=`, so the child inherits the
+      Director's stdin handle. Live probe: the child sees fd 0, isatty=True.
+      No designed read-only endpoint exists.
+
+  D1  DESCENDANT CONTAINMENT. No Windows Job Object anywhere in src/. Timeout and
+      cancellation call terminate() then kill() on the DIRECT CHILD ONLY.
+      PROVEN BY LIVE PROBE: a grandchild spawned by the child kept running after
+      the run was cancelled (marker advanced '9' -> '16' after cancellation
+      returned). A Worker's descendants outlive the run today.
+      WORKER DESCENDANT CONTAINMENT GAP — recorded, not designed around.
+
+      Probe honesty note: the FIRST version of this probe reported "contained".
+      It was wrong — `open(p,'w').write(i) or time.sleep(...)` short-circuits,
+      because `write` returns a truthy character count, so the grandchild
+      finished instantly and the probe measured its own bug. Corrected, re-run,
+      and recorded rather than quietly fixed: it is L-0061 arriving from the
+      probe side within a day of being written.
+
+8. WHAT WAS NOT REACHED, AND WHY
+--------------------------------------------------------------------------------------
+Every item below depends on a launcher that Gate 1 disqualified. None was
+attempted, none was faked, and no partial implementation was left behind:
+
+  launcher architecture · DPAPI model · blob ACL · plaintext lifecycle · child
+  creation flags · CREATE_SUSPENDED validation sequence · observed child SID ·
+  child integrity/groups/privileges · environment allowlist · profile model ·
+  cwd enforcement · executable/path model · quoting model · std-handle endpoints ·
+  handle inheritance audit · process-tree containment · cross-process
+  revalidation · toolchain compatibility from the new launcher · runner
+  integration · same-user-fallback defense · mutation results · OS-real probe ·
+  rollback.
+
+  No OS-real probe was run: no GnosisWorkerStage5Probe account was created, no
+  profile, no DPAPI blob, no scratch ACL. There is therefore nothing to roll
+  back, and "CLEAN" is trivially true because nothing was created — stated that
+  way rather than presented as a successful rollback.
+
+9. TCB / STATIC / REGRESSION
+--------------------------------------------------------------------------------------
+  production source changed          : NONE
+  TRUST_ALLOWLIST delta              : NONE
+  TCB delta                          : NONE
+  dynamic-loading result             : unchanged, rule still enforced
+  mypy --strict over src             : Success, 65 source files
+  ruff on changed files              : no source files were changed
+  full suite                         : NOT re-run — the tree is byte-identical to
+                                       2b865f2, whose full suite is GREEN at
+                                       1290 passed / 101 subtests. Re-running an
+                                       unchanged tree would be evidence theatre.
+
+10. RESIDUAL RISKS CARRIED FORWARD
+--------------------------------------------------------------------------------------
+  S1  Until a launcher exists, the Worker still runs as the DIRECTOR. Every
+      F-17 property that depends on `owner_worker_sid` being an OS-observed SID
+      is contractual, not enforced.
+  S2  E1/H1/D1 are live properties of the CURRENT runner, not hypothetical
+      future gaps. They are true today, in production, with no launcher involved.
+  S3  Candidate (B) makes an argv payload file integrity-critical. If it is
+      chosen, that file's ACL is as load-bearing as the anchor store's.
+  S4  Candidate (C) would bind the trusted launcher to an elevated Director
+      holding SeImpersonatePrivilege, foreclosing the preferred broker/service
+      model.
+
+11. DECISIONS REQUIRING INDEPENDENT REVIEW
+--------------------------------------------------------------------------------------
+  G1  Which of (A), (B), (C) is authorized. This is the blocking decision.
+  G2  If (A): authorization for ONE provider call to qualify stdin-prompt
+      semantic equivalence, and acceptance that `ExecutionResult.command`
+      provenance changes shape.
+  G3  If (B): the trusted bootstrap enters the TCB, and the argv payload file's
+      location and ACL must be specified before implementation.
+  G4  If (C): explicit approval for the trusted launcher to depend on
+      SeImpersonatePrivilege, and an explicit ruling on the broker/service model
+      it forecloses.
+  G5  Whether E1/H1/D1 — which are current production defects, not Stage-5
+      speculation — should be repaired independently of the launcher, or must
+      wait for it.
+
+
+======================================================================================
+STAGE 5 RESULT: FAIL
+RECOMMENDATION: DO NOT CLOSE F-17
+======================================================================================

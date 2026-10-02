@@ -167,19 +167,21 @@ class ClaimStore:
             self._save_locked(state)
             return claim
 
-    def release(self, task_id: str, holder: str, expected_version: int) -> TaskClaim:
+    def release(self, task_id: str, holder: str, expected_version: int, *,
+                commit_guard: Callable[[Callable[[], None]], None] | None = None) -> TaskClaim:
         """Voluntary hand-back of an ACTIVE claim (ownership mutation)."""
         return self._mutate_locked(
             task_id, holder, expected_version, ClaimStatus.RELEASED,
-            outcome=None, action="release",
+            outcome=None, action="release", commit_guard=commit_guard,
         )
 
     def resolve(self, task_id: str, holder: str, expected_version: int,
-                outcome: str) -> TaskClaim:
+                outcome: str, *,
+                commit_guard: Callable[[Callable[[], None]], None] | None = None) -> TaskClaim:
         """Terminal: the claimed work concluded with ``outcome``."""
         return self._mutate_locked(
             task_id, holder, expected_version, ClaimStatus.RESOLVED,
-            outcome=outcome, action="resolve",
+            outcome=outcome, action="resolve", commit_guard=commit_guard,
         )
 
     def reclaim_if(self, task_id: str, expected_version: int,
@@ -225,7 +227,20 @@ class ClaimStore:
         """Write guard: the live grant must be ACTIVE, by this holder, at
         this fencing epoch — anything else is a deposed worker."""
         with self._locked():
-            raw = self._load_locked()["claims"].get(task_id)
+            return self._assert_active_locked(task_id, holder, epoch)
+
+    def while_active(self, task_id: str, holder: str, epoch: int,
+                     action: Callable[[], None]) -> None:
+        """Run a bounded commit without allowing ownership replacement.
+
+        Action must not reenter this store or acquire a lock ordered before it.
+        """
+        with self._locked():
+            self._assert_active_locked(task_id, holder, epoch)
+            action()
+
+    def _assert_active_locked(self, task_id: str, holder: str, epoch: int) -> TaskClaim:
+        raw = self._load_locked()["claims"].get(task_id)
         if raw is None:
             raise StaleClaimError(f"No claim exists for task '{task_id}'")
         current = TaskClaim.from_dict(raw)
@@ -251,7 +266,8 @@ class ClaimStore:
 
     def _mutate_locked(self, task_id: str, holder: str, expected_version: int,
                        new_status: ClaimStatus, outcome: str | None,
-                       action: str) -> TaskClaim:
+                       action: str,
+                       commit_guard: Callable[[Callable[[], None]], None] | None = None) -> TaskClaim:
         with self._locked():
             state = self._load_locked()
             raw = state["claims"].get(task_id)
@@ -280,7 +296,12 @@ class ClaimStore:
             )
             state["claims"][task_id] = mutated.to_dict()
             self._append_history_locked(state, mutated, action=action)
-            self._save_locked(state)
+            # The claims lock is already held. A two-plane caller acquires
+            # the lease lock next and retains it through durable persistence.
+            if commit_guard is None:
+                self._save_locked(state)
+            else:
+                commit_guard(lambda: self._save_locked(state))
             return mutated
 
     def _append_history_locked(self, state: dict[str, Any], claim: TaskClaim,
@@ -382,6 +403,17 @@ class WorkAuthority:
             task_resource(grant.task_id), grant.lease.lease_id, extend_s=extend,
         )
 
+    def commit(self, grant: WorkGrant, action: Callable[[], None]) -> None:
+        """Linearize short persistence under claims -> leases locks.
+
+        Callbacks must not reenter authority/stores. A grant must be live on
+        entry; replacement cannot interleave even if expiry crosses mid-write.
+        Never hold these locks across agent execution.
+        """
+        self.claims.while_active(grant.task_id, grant.holder, grant.claim.epoch,
+            lambda: self.leases.while_current(task_resource(grant.task_id),
+                                              grant.lease.lease_id, action))
+
     def resolve(self, grant: WorkGrant, outcome: str) -> TaskClaim:
         """Terminal success path: verify both planes, resolve the claim,
         release the lease."""
@@ -389,6 +421,8 @@ class WorkAuthority:
         current = self.claims.assert_active(grant.task_id, grant.holder, grant.claim.epoch)
         resolved = self.claims.resolve(
             grant.task_id, grant.holder, expected_version=current.version, outcome=outcome,
+            commit_guard=lambda action: self.leases.while_current(
+                task_resource(grant.task_id), grant.lease.lease_id, action),
         )
         self._release_lease_after_commit(grant)
         return resolved
@@ -401,6 +435,8 @@ class WorkAuthority:
         current = self.claims.assert_active(grant.task_id, grant.holder, grant.claim.epoch)
         released = self.claims.release(
             grant.task_id, grant.holder, expected_version=current.version,
+            commit_guard=lambda action: self.leases.while_current(
+                task_resource(grant.task_id), grant.lease.lease_id, action),
         )
         self._release_lease_after_commit(grant)
         return released

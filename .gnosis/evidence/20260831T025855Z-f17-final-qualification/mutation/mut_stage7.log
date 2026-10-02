@@ -1,0 +1,82 @@
+F-17 STAGE 7 — MUTATION CHECK OVER THE CLASSIFIER, GATE AND ENFORCEMENT
+==========================================================================
+BASELINE: exit=0  51 passed, 104 subtests passed in 15.59s
+
+S7M01: an unqualified .git surface defaults to bookkeeping, not UNKNOWN
+  result: exit=1  14 failed, 4 passed, 29 subtests passed in 0.41s
+  verdict: CAUGHT
+
+S7M02: the overlap guard is disabled (first-match instead of raise)
+  result: exit=1  1 failed, 14 passed, 84 subtests passed in 0.46s
+  verdict: CAUGHT
+
+S7M03: refs/heads broadened to a blanket refs/ rule
+  result: exit=1  3 failed, 3 passed, 26 subtests passed in 0.46s
+  verdict: CAUGHT
+
+S7M04: loose-object broadened to a blanket objects/ rule
+  result: exit=1  2 failed, 1 passed, 10 subtests passed in 0.44s
+  verdict: CAUGHT
+
+S7M05: packed-refs downgraded from trust-sensitive to bookkeeping
+  result: exit=1  1 failed, 3 passed, 28 subtests passed in 0.42s
+  verdict: CAUGHT
+
+S7M06: replace refs downgraded to bookkeeping
+  result: exit=1  1 failed, 3 passed, 28 subtests passed in 0.41s
+  verdict: CAUGHT
+
+S7M07: HEAD downgraded to bookkeeping
+  result: exit=1  1 failed, 3 passed, 28 subtests passed in 0.44s
+  verdict: CAUGHT
+
+S7M08: info/exclude downgraded to bookkeeping
+  result: exit=1  1 failed, 3 passed, 28 subtests passed in 0.42s
+  verdict: CAUGHT
+
+S7M09: canonicalization no longer case-folds (Windows case bypass)
+  result: exit=1  2 failed, 1 passed, 10 subtests passed in 0.42s
+  verdict: CAUGHT
+
+S7M10: canonicalization no longer strips trailing dot/space
+  result: exit=1  1 failed, 19 passed, 84 subtests passed in 0.45s
+  verdict: CAUGHT
+
+S7M11: the git version gate accepts any version
+  result: exit=1  1 failed, 35 passed, 104 subtests passed in 0.95s
+  verdict: CAUGHT
+
+S7M12: an unqualified ref backend (reftable) is accepted
+  result: exit=1  1 failed, 34 passed, 104 subtests passed in 0.89s
+  verdict: CAUGHT
+
+S7M13: the replace-ref probe fails open again
+  result: exit=1  1 failed, 39 passed, 104 subtests passed in 1.63s
+  verdict: CAUGHT
+
+S7M14: the shallow probe fails open again
+  result: exit=1  1 failed, 40 passed, 104 subtests passed in 1.61s
+  verdict: CAUGHT
+
+S7M15: the build_anchor_record boundary gate is removed
+  result: exit=1  7 failed, 25 passed, 97 subtests passed in 0.53s
+  verdict: CAUGHT
+
+S7M16: an absent boundary verdict reads as CLEAN
+  result: exit=1  1 failed, 25 passed, 104 subtests passed in 0.54s
+  verdict: CAUGHT
+
+S7M17: the authorize_publishable boundary gate is removed
+  result: exit=1  1 failed, 28 passed, 104 subtests passed in 0.58s
+  verdict: CAUGHT
+
+S7M18: an unqualified .git write is counted, not judged (kernel routing)
+  result: exit=1  1 failed, 43 passed, 104 subtests passed in 6.29s
+  verdict: CAUGHT
+
+S7M19: MACHINERY_UNQUALIFIED maps to exit 0
+  result: exit=1  1 failed, 43 passed, 104 subtests passed in 6.40s
+  verdict: CAUGHT
+
+RESTORED: exit=0  51 passed, 104 subtests passed in 15.78s
+mutants: 19  survived/aborted: 0

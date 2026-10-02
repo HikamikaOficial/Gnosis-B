@@ -1,0 +1,30 @@
+FULL SUITE - STAGE 5 ENVIRONMENT HARDENING
+======================================================================
+
+Three runs are recorded because three runs happened. The first went
+red, and that is reported before the green one rather than after it.
+
+RUN 1 (working tree, foreground background-task)
+----------------------------------------------------------------------
+SKIPPED [1] tests\test_worker_launcher.py:966: the refusal is the non-Windows path
+FAILED tests/test_work_queue.py::TestRepairsFromTheIndependentReview::test_a_brief_is_not_re_offered_forever
+1 failed, 1364 passed, 1 skipped, 98 subtests passed in 850.11s (0:14:10)
+SUITE_EXIT=1
+
+RUN 2 (background task) - KILLED BY THE HARNESS AT 73%, NO VERDICT.
+  Discarded. A half-finished suite is not evidence, and it is not
+  reported as one.
+
+RUN 3 (DETACHED from the tool-task lifetime, which is why it finished)
+----------------------------------------------------------------------
+SKIPPED [1] tests\test_worker_launcher.py:966: the refusal is the non-Windows path
+1365 passed, 1 skipped, 98 subtests passed in 1115.99s (0:18:35)
+SUITE_EXIT=0
+
+======================================================================
+The single run-1 failure is the project's PRE-EXISTING work-queue
+flake. It was attributed by measurement, not by assertion - see
+stage5_env_flake_attribution.txt: 4 failures in 20 on THIS tree and
+4 in 20 on 466fb3d BEFORE this change, with the root cause in the
+test's own 50 ms fixture TTL. tests/test_work_queue.py was NOT
+modified: it is outside this stage's authorised scope.

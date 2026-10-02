@@ -1,0 +1,68 @@
+﻿===== PRE-FLIGHT =====
+HEAD = 4ceb667
+git_status = ?? .stfolder/|?? PROJECT_REPORT.md
+pre_gnosis_svcs  = 
+pre_gnosis_users = 
+pre_gnosis_tasks = 
+pre_pf=False pre_pd=False pre_work=False
+pre_pipe = False
+svc_sid = S-1-5-80-1825151969-3162896072-2544212440-2481728344-4131771609
+===== PROVISION =====
+worker_sid = S-1-5-21-1160728320-3593568380-93362170-1013  admin=False
+python.exe effective ACL: C:\Program Files\Gnosis\TrustProbe\runtime\python.exe NT SERVICE\GnosisTrustedPublisherProbe:(I)(RX)                                                       NT AUTHORITY\SYSTEM:(I)(F)                                                       BUILTIN\Administradores:(I)(F)  Se procesaron correctamente 1 archivos; error al procesar 0 archivos
+anchorstore dir ACL: C:\ProgramData\Gnosis\TrustProbe\anchors NT SERVICE\GnosisTrustedPublisherProbe:(I)(OI)(CI)(F)                                          NT AUTHORITY\SYSTEM:(I)(OI)(CI)(F)                                          BUILTIN\Administradores:(I)(OI)(CI)(F)  Se procesaron correctamente 1 archivos; error al procesar 0 archivos
+===== SERVICE =====
+service sidtype: [SC] QueryServiceConfig2 CORRECTO
+service privs:   [SC] QueryServiceConfig2 CORRECTO NOMBRE_DE_SERVICIO: GnosisTrustedPublisherProbe  PRIVILEGIOS : SeChangeNotifyPrivilege
+service SDDL:     D:(A;;CCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCLCSWRPWPDTLOCRSDRCWDWO;;;BA)S:(AU;FA;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;WD)
+service_state = RUNNING
+publisher_pid = 35008
+TOKEN: { "user_sid": "S-1-5-80-1825151969-3162896072-2544212440-2481728344-4131771609", "account": "NT SERVICE\\GnosisTrustedPublisherProbe", "groups": [ "S-1-1-0", "S-1-16-12288", "S-1-2-0", "S-1-2-1", "S-1-5-11", "S-1-5-15", "S-1-5-32-545", "S-1-5-33", "S-1-5-5-1-4096591803", "S-1-5-6", "S-1-5-80-0" ], "privileges_present": [ "SeChangeNotifyPrivilege" ], "privileges_enabled": [ "SeChangeNotifyPrivilege" ], "privileges_disabled": [], "integrity_sid": "S-1-16-12288", "integrity_level": "High", "is_token_restricted": true, "restricted_sids": [ "S-1-1-0", "S-1-5-33", "S-1-5-5-1-4096591803", "S-1-5-80-1825151969-3162896072-2544212440-2481728344-4131771609" ] }
+===== WORKER ATTACKS =====
+worker launch rc=0
+  WORKER = desktop-vtqpqvl\gnosisp2worker
+  01_legit_publish = ANCHORED:38a17990f0da:seq=0
+  02_duplicate = ALREADY_ANCHORED
+  03_cross_run_ownerB = REJECTED:owner-mismatch
+  04_unknown_run = REJECTED:unknown-run
+  05_bad_verb = REJECTED:bad-verb
+  06_bad_run_id = REJECTED:bad-run-id
+  07_oversized = REJECTED:read-failed
+  08_worker_create_pipe = DENIED:MethodInvocationException
+  09_write_service_main = DENIED:UnauthorizedAccessException
+  10_write_trust_python = DENIED:UnauthorizedAccessException
+  11_write_anchor_code = DENIED:UnauthorizedAccessException
+  12_write_runidentity = DENIED:UnauthorizedAccessException
+  13_write_anchorstore = DENIED:UnauthorizedAccessException
+  14_plant_shadow_mod = DENIED:UnauthorizedAccessException
+  15_svc_change_config = [SC] OpenService ERROR 5: Acceso denegado.
+  16_svc_stop = [SC] OpenService ERROR 5: Acceso denegado.
+  17_svc_delete = [SC] OpenService ERROR 5: Acceso denegado.
+  18_open_vm_write = DENIED err=5
+  19_open_dup_handle = DENIED err=5
+  20_open_create_thread = DENIED err=5
+  21_open_vm_operation = DENIED err=5
+  22_open_create_proc = DENIED err=5
+  DONE = 1
+ledger_records = 1
+watermark = 0
+===== PIPE SQUATTING =====
+squat_marker = WORKER-CREATED-PIPE
+service_state_with_squatter = STOPPED
+squat_publisher_log = workload error: OSError('CreateNamedPipe FIRST_INSTANCE failed err=5 (name taken? refuse to attach)')
+===== CRASH CONSISTENCY =====
+injected_unconfirmed_line (seq=99 beyond watermark=0); ledger now 2 lines
+service_state_after_crash_restart = RUNNING
+recovery_log = recovery: {'recovered': True, 'committed': 0, 'records': 1, 'chain_ok': True}
+ledger_after_recovery = 1 (before crash-inject = 1)
+===== ROLLBACK =====
+===== POST-FLIGHT =====
+post_svc_present  = False
+post_user_present = False
+post_profile_left = False
+post_pf=False post_pd=False post_work=False
+post_pipe = False
+post_gnosis_svcs  = 
+post_gnosis_users = 
+post_gnosis_tasks = 
+post_HEAD = 4ceb667

@@ -1,0 +1,53 @@
+F-17 STAGE 5 D3 - FULL-SUITE REGRESSION
+======================================================================
+D3 changes the launcher's process-creation call and the LaunchSpec schema,
+so the full suite was run rather than argued about.
+
+run   tree b729b92 (D3 hardening HEAD)
+      1353 passed, 1 skipped, 99 subtests passed in 831.71s (0:13:51)   exit 0
+
+GREEN. Zero failures, zero errors.
+
+The one SKIP is deliberate and named: `TestOffWindowsThereIsNoFallback`
+asserts the launcher REFUSES on a non-Windows platform, so it can only run
+off Windows.
+
+Continuity, for the record:
+  tree 8b58509 (Stage 4)          1290 passed, 101 subtests   exit 0
+  tree 6494eb6 (Stage 5)          1346 passed,  98 subtests   exit 0
+  tree b729b92 (Stage 5 D3)       1353 passed,  99 subtests   exit 0
++7 tests: the sealed-overlay contract, the child-environment rule, and the
+four D3 privilege-dependency assertions.
+
+STATIC CHECKS on the same tree
+  mypy --strict over src            Success: no issues found in 68 source files
+  ruff on every Stage-5 file        All checks passed
+    src/gnosis/trust/launch_spec.py · bootstrap.py · worker_launcher.py ·
+    launch.py · runner/claude_cli_runner.py · runner/capture.py ·
+    tests/test_worker_launcher.py · tests/test_trust_boundary.py ·
+    scripts/probe_stage5_worker_launcher.py ·
+    scripts/mutation_check_worker_launcher.py ·
+    scripts/experiment_stage5_d3_profile.py
+
+  SCOPE STATED HONESTLY: `ruff check src tests` over the WHOLE tree still
+  reports pre-existing findings in files this stage never touched
+  (contracts/, runner/retry.py, kernel/file_lock.py and others). None is in
+  a Stage-5 file. That baseline is unchanged by D3 and is not silently
+  folded into a "clean" claim.
+
+DIRECTED SUITE
+  tests/test_worker_launcher.py     62 passed, 1 skipped   exit 0
+
+FRESH CHECKOUT of b729b92
+  5 trust/runner suites            186 passed, 1 skipped, 28 subtests  exit 0
+  privilege-requiring APIs in the launcher/bootstrap/spec, by AST:  NONE
+  userenv.dll loaded:                                               False
+  CREATE_UNICODE_ENVIRONMENT present:                               False
+
+OS-REAL PROBE
+  68 checks, ALL PASSED, rollback verified clean
+
+MUTATION
+  30 mutants, 30 CAUGHT, 0 SURVIVED (WM26-WM31 are the D3 additions)
+
+F-14 remains CLOSED. Nothing in D3 reopens it.

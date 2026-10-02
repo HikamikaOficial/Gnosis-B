@@ -1,0 +1,7 @@
+gnosis
+gnosis.kernel
+gnosis.kernel.canonical
+gnosis.trust
+gnosis.trust.anchor
+gnosis.trust.launch
+

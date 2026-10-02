@@ -1,0 +1,356 @@
+{
+  "summary": "F-17 final qualification: structural security proofs on the exact tree (single publication path, V1/V2 reachability, fault-seam inaccessibility, publisher closure, dynamic-loading closed world)",
+  "agentCount": 10,
+  "logs": [],
+  "result": [
+    {
+      "key": "single-path",
+      "finding": {
+        "claim": "Exactly one production-reachable authoritative F-17 publication path exists (worker PUBLISH over pipe -> Publisher.handle -> durable_publish -> build_anchor_record -> Anchor V2 record + committed watermark); every other anchor/watermark writer is test-only, recovery-only, a re-export shim, or an unwired probe harness.",
+        "verdict": "PASS",
+        "evidence": [
+          "THE ONE PATH, END TO END: provisioned Windows service entry is ONLY 'from gnosis.trust.publisher_service import main' (src/gnosis/provision/provisioner.py:334); run_service builds the single PipeServer wired to publisher.handle (src/gnosis/trust/publisher_service.py:155-159); PipeServer dispatches every request through exactly one handler call self.handler(request, client_pid) (src/gnosis/trust/pipe_server.py:251).",
+          "Publisher is the sole handler: exactly one class Publisher (src/gnosis/trust/publisher.py:108) and one def handle (publisher.py:122); the grammar accepts only 'PUBLISH <run_id>' (publisher.py:59); _handle calls durable_publish (publisher.py:201) and is the ONLY construction site of PublicationRequest (publisher.py:144).",
+          "durable_publish has exactly ONE caller in src/gnosis: publisher.py:201 (grep for 'durable_publish(' across src returns only its def at publication.py:706 and this call). Inside _publish_locked it is the single site that does all three authoritative writes: build_anchor_record (publication.py:774), store.append (publication.py:777), _commit_watermark (publication.py:813), then mark_anchored (publication.py:828).",
+          "AnchorStore.append (the low-level ledger writer, anchor.py:263) has exactly two callers: publish_anchor at anchor.py:525 and _publish_locked at publication.py:777. The many other '.append(' hits are Python list.append or the kernel run-event Ledger.append (signature append(run_id,event_type,data)), a different class, not the anchor ledger.",
+          "publish_anchor (Stage-3 writer, anchor.py:513; appends a record but writes NO watermark) is TEST-ONLY: its only call sites repo-wide are tests/test_authority_boundary.py (lines 171,182,194,212,228,239,424,436,446,463,499). No caller exists in src/gnosis, so it is not a second production path.",
+          "The watermark writer _commit_watermark (publication.py:270) has two callers: initialise_durable_store (publication.py:320) and _publish_locked (publication.py:813). initialise_durable_store only ever commits the GENESIS watermark (committed_seq=-1, commits nothing; publication.py:235,320) and is called at startup (publisher_service.py:136) and inside _publish_locked (publication.py:731). The only authoritative (record-naming) commit is publication.py:813 in the one path.",
+          "reconcile_publication_state's ledger write atomic_write_bytes(store.ledger, split.raw[:committed_end_offset]) (publication.py:661) only TRUNCATES a provably-uncommitted tail, gated by _assert_tail_is_provably_uncommitted (publication.py:460,656); it never appends a new anchor nor advances the watermark. mark_anchored (publication.py:642,828; run_identity.py:279) is the RunIdentity state consequence of the commit, explicitly 'never a second authority' (publication.py:22-24,36-39) — not a ledger/watermark writer.",
+          "No Anchor V1 writer in production: the writer emits V2 only (CURRENT_ANCHOR_SCHEMA = ANCHOR_SCHEMA_V2, anchor.py:46; build_anchor_record sets schema=CURRENT_ANCHOR_SCHEMA, anchor.py:509). V1 is read-only historical evidence. Both build routes (publish_anchor, durable_publish) go through build_anchor_record (anchor.py:524, publication.py:774), the single record-construction chokepoint (only two callers, grep confirmed).",
+          "kernel/authority.py is a pure compatibility RE-EXPORT with NO implementation of its own (authority.py:1-17,20-46) and is imported by NO production module — grep for 'kernel.authority'/'import authority' across src/gnosis returns only docstring mentions (anchor.py:4-5, launch.py:4-5). It is not a live bypass. publish_anchor reached through it is still only called by tests.",
+          "No alternate/fallback writers: src/gnosis/director/* has ZERO references to AnchorStore/publish_anchor/durable_publish/watermark/mark_anchored (grep no matches) — no direct Director append; src/gnosis/trust/worker_launcher.py has ZERO anchor/AnchorStore/watermark references (grep no matches) — no same-user launcher fallback; src/gnosis/transport/* has ZERO anchor references — no alternate publisher. AnchorStore is instantiated only in the publisher service (publisher.py:115, publisher_service.py:128), PipeServer only at publisher_service.py:156.",
+          "The scripts/ hits (probe_stage6/7/8, mutation_check_*) call AnchorStore/build_anchor_record directly (e.g. probe_stage7_git_matrix.py:241) but are manual verification/mutation harnesses, not wired into the service entry (which is publisher_service.main only) and not reachable from a worker PUBLISH request — test/probe-only, not production-reachable."
+        ],
+        "details": "Files read in full: src/gnosis/trust/{publisher.py, publisher_service.py, publication.py, anchor.py, orchestration.py} and src/gnosis/kernel/authority.py; plus transport wiring in trust/pipe_server.py and the service entry generation in provision/provisioner.py.\n\nINTENDED PATH VERIFIED EXACTLY AS SPECIFIED: worker writes \"PUBLISH <run_id>\" to the DACL-gated named pipe -> PipeServer.handler dispatch (pipe_server.py:251) -> Publisher.handle/_handle (publisher.py:122/155) -> durable_publish (publisher.py:201) -> _publish_locked -> build_anchor_record (publication.py:774) -> Anchor V2 AnchorRecord appended (store.append, publication.py:777) and the committed watermark written (_commit_watermark, publication.py:813), with mark_anchored (publication.py:828) as the state consequence. This is the only chain that produces a record-naming committed watermark.\n\nCANDIDATE SECOND-WRITERS EXAMINED AND EXCLUDED (each with file:line above):\n- publish_anchor (Stage-3, no watermark): callers only in tests/test_authority_boundary.py -> TEST-ONLY.\n- AnchorStore.append: only publish_anchor (test) + _publish_locked (prod).\n- _commit_watermark / initialise_durable_store: genesis watermark commits nothing; only authoritative commit is in _publish_locked.\n- reconcile_publication_state ledger write: uncommitted-tail truncation only, gated; never a new anchor.\n- mark_anchored / mark_publishable: RunIdentity lifecycle state, explicitly never a second authority.\n- kernel.authority: re-export shim, imported by no production module.\n- Director, worker_launcher, transport: zero anchor/watermark references (no direct Director append, no same-user launcher fallback, no alternate Publisher).\n- scripts/probe_* and mutation_check_*: unwired verification harnesses, not reachable from a worker request.\n\nAnchor V1 is read-only historical; the sole production writer emits V2 (CURRENT_ANCHOR_SCHEMA). Exactly one class Publisher, one def handle, one PipeServer, one durable_publish caller, one PublicationRequest construction. Method: static grep/read analysis of the checked-out tree (no execution). Verdict: PASS — exactly one production-reachable authoritative path; all other writers are test-only, recovery-only, a dead re-export, or unwired probes."
+      },
+      "verify": {
+        "agrees": true,
+        "corrected_verdict": "PASS",
+        "reason": "Verified by reading the actual files and grepping the full src/gnosis tree. The single authoritative path holds: durable_publish has exactly one caller (publisher.py:201), reached only via the one PipeServer->Publisher.handle dispatch (publisher_service.py:155-159, pipe_server.py:251) wired to the sole provisioned service entry publisher_service.main (provisioner.py:330-334). _publish_locked is the only site doing build_anchor_record (774) + store.append (777) + _commit_watermark record-naming commit (813) + mark_anchored (828). Every candidate second-writer is correctly excluded: store.append callers = publish_anchor (TEST-ONLY; src has no caller, only tests/test_authority_boundary.py + a dead .gnosis/evidence snapshot) and _publish_locked; _commit_watermark callers = initialise_durable_store (GENESIS-only, gated on empty ledger, commits nothing) and _publish_locked; the reconcile write (publication.py:661) only truncates a provably-uncommitted tail (gated, re-verified) and never appends/advances a watermark; sole writer emits Anchor V2 (build_anchor_record sets CURRENT_ANCHOR_SCHEMA; the only other AnchorRecord construction is the reader parse_record_line); kernel/authority.py is a pure re-export imported by no production module; director/runner/transport/worker_launcher/bootstrap have zero anchor-ledger/watermark writers (other .append hits are list.append or the distinct kernel RunLedger). No refutation found on any requested axis: no second production path, no V1 production writer, no worker-reachable fault seam (_FAULT_HOOK defaults None with no worker-settable path; grammar is only PUBLISH <run_id>), no dynamic import/getattr dispatch, and AnchorStore exposes exactly one ledger write method (append). PASS is correct."
+      }
+    },
+    {
+      "key": "v1-v2",
+      "finding": {
+        "claim": "The anchor writer reachable from the production F-17 publication path emits Anchor SCHEMA V2 (\"gnosis.anchor.v2\") ONLY; V1 support is read/verify-only (historical).",
+        "verdict": "PASS",
+        "evidence": [
+          "src/gnosis/trust/anchor.py:36-37 — schema constants: ANCHOR_SCHEMA = \"gnosis.anchor.v1\" (V1), ANCHOR_SCHEMA_V2 = \"gnosis.anchor.v2\" (V2).",
+          "src/gnosis/trust/anchor.py:46-47 — CURRENT_ANCHOR_SCHEMA = ANCHOR_SCHEMA_V2 (the writer's schema is V2); SUPPORTED_ANCHOR_SCHEMAS = {V1, V2} is the READ set only.",
+          "src/gnosis/trust/anchor.py:501-510 — build_anchor_record constructs the AnchorRecord with schema=CURRENT_ANCHOR_SCHEMA (line 509) and populates the V2-only fields deployment_digest=identity.deployment_digest and run_identity_digest=identity.digest() (lines 507-508). This is the single shared record-builder for both protocols.",
+          "src/gnosis/trust/anchor.py:524-525 — publish_anchor (Stage-3) = build_anchor_record(...) then store.append(record): writes V2.",
+          "src/gnosis/trust/publication.py:774-777 — durable_publish (Stage-4) = build_anchor_record(store, identity, bundle_dir, verify) then store.append(record, fault=_FAULT_HOOK): writes V2 (no schema override; grep for 'schema' + anchor in publication.py returns nothing).",
+          "src/gnosis/trust/anchor.py:263-286 — AnchorStore.append is the ONLY method that writes the ledger to disk (record_line(record).encode, fh.write, fsync). Grep of src/gnosis/trust for store.append shows exactly two production callers: anchor.py:525 and publication.py:777 — both fed by build_anchor_record.",
+          "src/gnosis/trust/publisher.py:201 — the production entry point calls durable_publish(self.store, self.run_store, ...), confirming the reachable path is durable_publish -> build_anchor_record (V2) -> AnchorStore.append.",
+          "Grep across src/ for AnchorRecord( yields exactly two sites: anchor.py:501 (the V2 writer) and anchor.py:194 (parse_record_line, a READER). No writer passes schema=ANCHOR_SCHEMA / \"gnosis.anchor.v1\".",
+          "Grep across src/ for schema= constants shows the only assignments are CURRENT_ANCHOR_SCHEMA (=V2) at anchor.py:135 (dataclass default) and anchor.py:509 (build_anchor_record). There is no code path that assigns the V1 schema on write.",
+          "src/gnosis/trust/anchor.py:186-198 (parse_record_line) + 244-253 (records) + 255-261 (verify_chain) + 288-297 (lookup) + 532-569 (verify_anchored_bundle) — V1 is reachable ONLY through these read/verify paths that reconstruct historical records from disk lines; none of them write.",
+          "src/gnosis/trust/publication.py:125,139 — _FAULT_HOOK defaults to None (crash-test seam, not a production writer); it does not affect the emitted schema."
+        ],
+        "details": "Production writes V2 only. There is exactly one method that writes an anchor to disk: AnchorStore.append (anchor.py:263-286). It writes whatever AnchorRecord it is handed. Both production protocols that reach it construct that record through the single shared builder build_anchor_record (anchor.py:450-510), which hardcodes schema=CURRENT_ANCHOR_SCHEMA (line 509), and CURRENT_ANCHOR_SCHEMA = ANCHOR_SCHEMA_V2 = \"gnosis.anchor.v2\" (lines 46, 37). The builder also sets the two V2-only binding fields (deployment_digest, run_identity_digest) at lines 507-508. The Stage-3 protocol publish_anchor (anchor.py:513-529) and the Stage-4 durable_publish (publication.py:706-777, invoked by the real publisher at publisher.py:201) both call build_anchor_record then store.append — so every production write is V2.\n\nV1 is read/verify-only, historical. The V1 constant is present only in the SUPPORTED (read) set (line 47) and is instantiable only via parse_record_line (line 194), the disk reader used by records()/verify_chain()/lookup()/verify_anchored_bundle(). No production code passes schema=ANCHOR_SCHEMA on a write; the exhaustive greps for AnchorRecord(, store.append, and schema= confirm no second/V1 writer exists. Defence-in-depth in the record itself reinforces the split: __post_init__ (lines 141-149) rejects a V1 record carrying V2 fields and a V2 record missing them (anti-masquerade); to_dict (lines 159-165) emits V2 keys only for V2 so historical V1 digests still re-derive byte-for-byte; and is_deployment_bound (line 176) returns True only for V2, so verify_anchored_bundle refuses to let a V1 record satisfy a bound (F-17) verification (lines 560-563). Note: build_anchor_record additionally gates on a CLEAN boundary verdict (lines 482-488) before producing the V2 record, so the V2 writer is the single F-17 Stage-7 chokepoint. Conclusion: the production writer emits gnosis.anchor.v2 exclusively; V1 is historical read/verify support only. PASS."
+      },
+      "verify": {
+        "agrees": true,
+        "corrected_verdict": "PASS",
+        "reason": "Verified against the actual source at C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi/src. The anchor record writer is unique and emits V2 only: AnchorRecord(...) is constructed at exactly two sites — anchor.py:501 (build_anchor_record, schema=CURRENT_ANCHOR_SCHEMA hardcoded line 509) and anchor.py:194 (parse_record_line, a reader). CURRENT_ANCHOR_SCHEMA = ANCHOR_SCHEMA_V2 = \"gnosis.anchor.v2\" (lines 46,37). The only ledger-writing method, AnchorStore.append (opens anchors.jsonl at anchor.py:281), has exactly two production callers, anchor.py:525 (publish_anchor) and publication.py:777 (durable_publish), both fed solely by build_anchor_record. I tried to refute along all five axes and failed: (1) No second production writer — both AnchorStore consumers (publisher.py:115, publisher_service.py:128) route to the same Publisher->durable_publish (publisher.py:201); publisher_service's own store use is startup reconcile/read only; publish_anchor has no wired production caller and would emit V2 anyway. (2) No V1 writer — the V1 constant ANCHOR_SCHEMA appears only in its definition, the SUPPORTED read set, an error string, and the static re-export kernel/authority.py (which has no implementation). (3) Fault seam not worker-reachable — _FAULT_HOOK defaults None (publication.py:139), never assigned anywhere in src. (4) No closure leak — schema is a module constant applied at the call site. (5) No dynamic import/exec/eval in anchor.py. The only other ledger mutation, publication.py:661 atomic_write_bytes, writes back only the already-committed prefix bytes during tail discard (constructs no record, emits no schema), consistent with V1 being historical/read-only. Reinforcing controls verified: publisher.py:188 refuses non-V2 identities, plus __post_init__ anti-masquerade (137-149), to_dict V2-key-only (159-165), is_deployment_bound V2-only (176), verify_anchored_bundle refusing V1 for bound checks (560-563), and the CLEAN boundary-verdict gate (482-488). All cited line numbers match. No counterexample found."
+      }
+    },
+    {
+      "key": "fault-seam",
+      "finding": {
+        "claim": "The Stage 4 durable-publication fault-injection seam is settable only by trusted (non-worker) in-process code; no worker-controlled input (IPC request string, LaunchSpec fields, candidate evidence bytes, worker environment, or run_id) can activate it.",
+        "verdict": "PASS",
+        "evidence": [
+          "The seam has two surfaces that reduce to ONE root. (1) publication._FAULT_HOOK: module-private global defined `_FAULT_HOOK: Any = None` at src/gnosis/trust/publication.py:139; fired via `_fault(point, **context)` at publication.py:142-145, which calls the hook ONLY `if hook is not None` (hook = _FAULT_HOOK). (2) anchor.AnchorStore.append(record, *, fault=None) at src/gnosis/trust/anchor.py:263, fired via `_fire(fault, point, ...)` at anchor.py:87-89 only `if fault is not None`.",
+          "The anchor seam is fed exclusively by the same global. Only production caller passing fault= is src/gnosis/trust/publication.py:777 `store.append(record, fault=_FAULT_HOOK)`. The only other append() with a possible fault in src is the Stage-3 path src/gnosis/trust/anchor.py:525 `store.append(record)` which passes nothing (-> None). Grep of `.append(` across src/gnosis/trust confirms no other fault-bearing caller.",
+          "Every way to SET the seam is trusted-only. The sole assignments to _FAULT_HOOK anywhere in the tree are the `= None` default at publication.py:139 and test files under tests/ (test_durable_publication.py:651,677,959,1071; test_publisher_service.py). No src module other than publication.py assigns it (grep `_FAULT_HOOK\\s*=` in src returns only publication.py:139 def + :777 read). AST guard tests/test_publisher_service.py:490-499 (test_only_the_publication_module_assigns_the_hook) enforces this and passes.",
+          "Channel 1 (IPC request string): the ENTIRE request grammar is `_REQUEST = re.compile(r\"^PUBLISH (?P<run_id>[A-Za-z0-9][A-Za-z0-9._-]{0,127})$\")` at src/gnosis/trust/publisher.py:59. Anchored ^...$, one verb, one run_id token; any other shape -> `_refused(\"bad-request\")` at publisher.py:158-162. There is no --fault / key=value / hook parse. Captured run_id flows to durable_publish(store, run_store, request, bundle_dir, *, verify, repair_uncommitted_tail) at publication.py:706 — signature has NO fault parameter, nor does _publish_locked (publication.py:724). Runtime-proven: tests/test_publisher_service.py:460-470 (test_no_request_installs_a_fault_hook) feeds `PUBLISH F5`, `PUBLISH run-1 --fault=F5`, `_FAULT_HOOK F5`, `FAULT F5`, etc. and asserts publication._FAULT_HOOK stays None — PASSED.",
+          "Channel 2 (worker-facing LaunchSpec fields): identity.launch_spec_digest/epoch/repository_id/head_sha/tree_identity come from the TRUSTED run store (record.identity at publisher.py:163-167) and are used only as expected_* comparison fields in PublicationRequest (publisher.py:131-153). None is a fault selector and durable_publish exposes no fault parameter, so a LaunchSpec digest is compared, never routed to _FAULT_HOOK.",
+          "Channel 3 (candidate evidence bytes): bundle bytes are consumed by build_anchor_record(store, identity, bundle_dir, verify) at publication.py:774 and verify_bundle to compute bundle_digest; no code path assigns _FAULT_HOOK from bundle content. The _fault/_fire firing decision is `hook/fault is not None` (publication.py:144, anchor.py:88), independent of any evidence byte.",
+          "Channel 4 (worker environment): publication.py and anchor.py contain no environ/getenv/argv/argparse/input/stdin reads (only the words appear in comments). AST-proven by tests/test_publisher_service.py:471-479 (test_the_seam_reads_no_environment_and_no_configuration) and tests/test_durable_publication.py:1289-1304 (test_no_environment_or_argument_can_switch_a_fault_on) — both PASSED. Service configuration itself comes only from an admin-provisioned JSON file named on the service command line, never from the wire (src/gnosis/trust/publisher_service.py:12-20 docstring, ServiceConfig.load at :64-95), and _REQUIRED (:44-48) contains no fault field.",
+          "Channel 5 (run_id): run_id is a pure selector (publisher.py:163 `run_id = match.group('run_id')`), flows into durable_publish (no fault param) and appears in _fault(...)/_fire(...) calls only as forwarded **context (publication.py:773, 826, 827, 833; anchor.py:282, 284). Context is passed to an ALREADY-installed hook; it never decides whether the hook fires — the `is not None` gate does. So no worker-derived context value (run_id, identity, record) can activate the seam.",
+          "Clean-interpreter default is None: runtime-proven by tests/test_durable_publication.py:1280-1287 (test_the_hook_is_none_in_a_clean_interpreter) which imports publication in a fresh subprocess and prints None — PASSED. The seam is inert with no hook installed (test_the_seam_is_inert_with_no_hook_installed, :1307-1311).",
+          "Runtime confirmation: `.venv/Scripts/python -m unittest tests.test_publisher_service` -> all guard tests OK (including test_no_request_installs_a_fault_hook, test_only_the_publication_module_assigns_the_hook, test_the_seam_reads_no_environment_and_no_configuration); `-m unittest tests.test_durable_publication.TestTheFaultSeamIsNotReachableFromAnyInput` -> Ran 4 tests, OK."
+        ],
+        "details": "Files: C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi/src/gnosis/trust/publication.py, /anchor.py, /publisher.py, /publisher_service.py; guards in tests/test_publisher_service.py and tests/test_durable_publication.py.\n\nReduction: The seam is a single root — the module-private global publication._FAULT_HOOK (publication.py:139), which defaults to None. Both firing sites are None-gated: _fault fires only `if hook is not None` (publication.py:144) and _fire only `if fault is not None` (anchor.py:88). anchor.AnchorStore.append's `fault` keyword-only parameter (anchor.py:263) is the second surface, but its only production caller is publication.py:777 `store.append(record, fault=_FAULT_HOOK)`, so it is driven entirely by the same global; the Stage-3 caller anchor.py:525 omits it. Therefore proving the seam safe reduces to proving _FAULT_HOOK is set only by trusted code and that append() has no other fault-passing caller — both confirmed.\n\nSet-paths: The only assignments to _FAULT_HOOK are the `= None` default and test-suite assignments; no src module besides publication.py assigns it (AST-enforced by test_only_the_publication_module_assigns_the_hook, which handles AnnAssign specifically). durable_publish/_publish_locked, the public entrypoints reachable from IPC, have no fault parameter.\n\nWorker channels, each blocked: (1) IPC string — grammar `^PUBLISH <run_id>$` (publisher.py:59) admits only one selector token; anything else is refused; no fault parse exists; durable_publish has no fault arg. (2) LaunchSpec fields — arrive from the trusted store as comparison-only expected_* values. (3) evidence bytes — only hashed into a digest; firing is content-independent. (4) environment — no environ/getenv/argv/argparse/stdin anywhere in the two modules (AST-proven), and service config is an admin JSON file, never the wire. (5) run_id — a selector that, at most, is forwarded as **context to an already-installed trusted hook; context never gates firing.\n\nTrusted test code setting it directly (e.g. tests/test_durable_publication.py:650-655) is the accepted, permitted mechanism.\n\nVerification: ran the dedicated guard suites under the project venv (Python 3.13); all passed, including a fresh-subprocess check that the hook imports as None and AST checks that no worker-influenceable input can install one. Verdict: PASS — the seam is settable only by trusted, in-process (TCB) code."
+      },
+      "verify": {
+        "agrees": true,
+        "corrected_verdict": "PASS",
+        "reason": "Verified in-code and by running the suites. The seam reduces to one root, publication._FAULT_HOOK, which defaults to None (publication.py:139) and gates both firing sites (publication.py:144 `if hook is not None`; anchor.py:88 `if fault is not None`). AnchorStore.append's `fault` kwarg (anchor.py:263) is fed in production ONLY by publication.py:777 `fault=_FAULT_HOOK`; the Stage-3 caller anchor.py:525 passes nothing. Repo-wide grep shows the only assignments to _FAULT_HOOK are the `=None` default and 6 save/restore lines in tests/test_durable_publication.py — no production module assigns it (AST-guarded by test_only_the_publication_module_assigns_the_hook, which handles AnnAssign). durable_publish/_publish_locked have no fault parameter, and the only caller (publisher.py:201) drives them from a `^PUBLISH <run_id>$` grammar (publisher.py:59) that admits one selector token and refuses anything else; verify is hardcoded to verify_bundle. Neither seam module reads environ/getenv/argv/stdin (anchor.py imports os only for os.fsync; publication.py imports no os), and the trust package contains no setattr/globals/importlib/exec/eval. authority.py is a pure re-export adding no writer or fault path. Worker-derived context (run_id, identity, record) is only forwarded to an already-installed hook and never gates firing. All 42 guard tests passed under the project venv (Python 3.13), including the clean-subprocess check that the hook imports as None. Tried the requested refutations (second publication path, V1 writer, worker-reachable seam, closure leak, dynamic import) and found no counterexample."
+      }
+    },
+    {
+      "key": "closure",
+      "finding": {
+        "claim": "The static import closure of gnosis.trust.publisher_service is minimal (15 gnosis modules), contains none of the forbidden engine/provider/worker/deployment/orchestration/legacy-evidence modules, and reaches no dynamic-import mechanism that could widen it at runtime.",
+        "verdict": "PASS",
+        "evidence": [
+          "Closure (15 gnosis modules): gnosis, gnosis.kernel, gnosis.kernel.atomic_io, gnosis.kernel.canonical, gnosis.kernel.file_lock, gnosis.trust, gnosis.trust.anchor, gnosis.trust.bundle_verify, gnosis.trust.launch, gnosis.trust.pipe_server, gnosis.trust.publication, gnosis.trust.publisher, gnosis.trust.publisher_service, gnosis.trust.run_identity, gnosis.trust.service_host. COUNT = 15.",
+          "Cross-validation: AST static closure (15) == runtime sys.modules diff after `import gnosis.trust.publisher_service` (15). Identical module sets.",
+          "Absence confirmed for all required targets: gnosis.trust.deployment, gnosis.trust.orchestration, gnosis.trust.worker_launcher, gnosis.engine* (no such package exists; gnosis.kernel.engine also absent from closure), planner/provider-client modules (none exist in the package at all), gnosis.kernel.evidence_capture and gnosis.kernel.write_observer (legacy stack).",
+          "Absence is a real boundary, not missing code: trust/deployment.py, trust/orchestration.py, trust/worker_launcher.py, kernel/engine.py, kernel/evidence_capture.py, kernel/write_observer.py all EXIST on disk yet none are imported by the closure.",
+          "Dynamic-import scan (importlib, __import__, pkgutil, entry_points, import_module, load_module, exec/eval) across all 15 closure files: NO MATCHES. AST Call-node scan for __import__() and dynamic attribute calls: none.",
+          "Package __init__ side effects are inert: src/gnosis/__init__.py only sets __version__; src/gnosis/trust/__init__.py is docstring-only; src/gnosis/kernel/__init__.py is empty — none import submodules.",
+          "Boundary is self-documented and test-enforced: gnosis/trust/__init__.py docstring forbids importing worker-plane code (engine, planner, scheduler, policy, runner, adapters, plugins) and cites tests/test_trust_boundary.py as the enforcing test."
+        ],
+        "details": "Method: AST-based static closure from entry gnosis.trust.publisher_service (analyzer written to scratchpad/closure.py), resolving absolute and relative imports, including every ancestor package __init__.py that executes on import, and expanding `from gnosis.pkg import name` into a submodule whenever a matching file exists. Root mapped src/ -> gnosis per pyproject (wheel packages=['src/gnosis'], pytest pythonpath=['src']). Python 3.13 available; runtime cross-check run with PYTHONPATH=src.\n\nEdge dependency map (internal gnosis imports only): publisher_service -> {anchor, launch, pipe_server, publication, publisher, run_identity, service_host}; anchor -> {kernel.canonical, bundle_verify, launch}; bundle_verify -> {kernel.canonical}; pipe_server -> {launch}; publication -> {kernel.atomic_io, kernel.canonical, kernel.file_lock, anchor, launch, run_identity}; publisher -> {anchor, bundle_verify, launch, publication, run_identity}; run_identity -> {kernel.atomic_io, kernel.canonical, kernel.file_lock, anchor, launch}. Leaves with no internal gnosis imports: launch, service_host, kernel.atomic_io, kernel.canonical, kernel.file_lock. The kernel package contributes ONLY atomic_io, canonical, file_lock to the closure; kernel.engine / kernel.evidence_capture / kernel.write_observer are never reached.\n\nMinimality verified: no gnosis.engine*, no planner/provider-client, no worker_launcher/deployment/orchestration, no legacy evidence-capture/write-observer. No dynamic-import widening is reachable — zero importlib/__import__/pkgutil/entry_points usage in any closure module, so the static closure equals the runtime closure and cannot expand at load time. Static and runtime closures agree exactly (15 == 15).\n\nRelevant absolute paths: entry C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi/src/gnosis/trust/publisher_service.py; forbidden-but-present files under the same src/gnosis tree (trust/deployment.py, trust/orchestration.py, trust/worker_launcher.py, kernel/engine.py, kernel/evidence_capture.py, kernel/write_observer.py). Verdict: PASS."
+      },
+      "verify": {
+        "agrees": true,
+        "corrected_verdict": "PASS",
+        "reason": "Independently verified and could not refute. Runtime cross-check (Python 3.13, PYTHONPATH=src): importing gnosis.trust.publisher_service loads exactly 15 gnosis modules, identical to the claimed set. Static imports in all 15 files reference only closure modules; multi-line `from gnosis... import (...)` blocks import names (anchor/launch/run_identity are modules, not packages) so no submodule expansion. Dynamic-import scan (importlib, __import__, pkgutil, entry_points, import_module, load_module, exec/eval, spec_from_file, SourceFileLoader, runpy) = zero matches. No TYPE_CHECKING blocks, no module-level __getattr__/PEP-562 hooks, no in-function gnosis imports. __init__ files inert (version-only / docstring-only / empty). All six forbidden files (deployment, orchestration, worker_launcher, engine, evidence_capture, write_observer) exist on disk but none are imported — real boundary. The one reference to gnosis.kernel.evidence_capture is a bundle_verify docstring note documenting that the heavy ~3400-line evidence/write-observer path was deliberately removed and isolated — i.e., the exact worker-reachable fault seam was engineered out, not left latent. launch.py's subprocess/ctypes spawn processes, not Python imports, so they do not widen the import closure. Static closure == runtime closure == 15; minimal, no forbidden modules, no dynamic widening reachable."
+      }
+    },
+    {
+      "key": "dynamic-world",
+      "finding": {
+        "claim": "No worker-triggerable dynamic import can load code outside the measured trust package at publication time; the publish path contains no dynamic code-loading mechanism at all.",
+        "verdict": "PASS",
+        "evidence": [
+          "ZERO dynamic-loader primitives in the entire source tree: `grep -rInE \"importlib|import_module|__import__|iter_modules|entry_points|pkgutil|spec_from_file_location|SourceFileLoader|runpy|marshal.loads\" src/gnosis --include=*.py` returns 0 matches.",
+          "ZERO exec()/eval() calls: the only textual hit is a docstring at src/gnosis/trust/bootstrap.py:31 explicitly stating 'no eval/exec, no dynamic import, no ...'.",
+          "Worker request surface is one regex-bounded verb: src/gnosis/trust/publisher.py:59 `_REQUEST = re.compile(r\"^PUBLISH (?P<run_id>[A-Za-z0-9][A-Za-z0-9._-]{0,127})$\")` — run_id is a store selector whose char class cannot express a path or module name.",
+          "Publish handler is fully static dispatch: src/gnosis/trust/publisher.py:122-210 (handle -> _handle) calls only self.run_store.read(run_id) (l.166), durable_publish(...) (l.201) and verify_bundle (l.201, passed in) — no importlib/getattr-based dispatch.",
+          "Publisher imports are all static top-level, trust-plane only: src/gnosis/trust/publisher.py:41-54 (os, re, dataclasses, pathlib, gnosis.trust.anchor/bundle_verify/launch/publication/run_identity).",
+          "Every publish-path module imports statically from stdlib + gnosis.trust.* / gnosis.kernel.{canonical,atomic_io,file_lock} only: publication.py:68-90, run_identity.py:47-59, bundle_verify.py:27-32 (json + kernel.canonical only), anchor.py:20-30, publisher_service.py:24-41, pipe_server.py:31-37, service_host.py:23-27.",
+          "The three kernel modules pulled into the publish path have no dynamic loaders: grep of atomic_io.py, canonical.py, file_lock.py for importlib/import_module/__import__/exec/eval/spec_from_file/SourceFileLoader/runpy/marshal -> none.",
+          "ServiceConfig.load (src/gnosis/trust/publisher_service.py:63-95) is JSON config parsing at service startup (json.loads of a provisioned file), NOT code loading, and is not on the worker-triggerable request path.",
+          "Enforced closure probe: tests/test_trusted_orchestration.py:272-290 imports gnosis.trust.publisher_service in a CLEAN subprocess and asserts the writer/launcher modules (orchestration, deployment, worker_launcher, kernel.evidence_capture — FORBIDDEN at l.269-270) are absent from the closure while publisher_service and bundle_verify are present.",
+          "Enforced closed-world allowlist: tests/test_trust_boundary.py:18-31,56 — any loaded gnosis.* module not in TRUST_ALLOWLIST fails the test, and test_the_trust_plane_pulls_in_no_third_party_code forbids third-party code entering the trust closure.",
+          "Live re-measurement I ran: importing gnosis.trust.publisher_service yields exactly these 15 gnosis modules — gnosis, kernel, kernel.atomic_io, kernel.canonical, kernel.file_lock, trust, trust.anchor, trust.bundle_verify, trust.launch, trust.pipe_server, trust.publication, trust.publisher, trust.publisher_service, trust.run_identity, trust.service_host — all inside the measured trust package (kernel entries are the allowlisted primitives); the forbidden-writers set was empty."
+        ],
+        "details": "Threat model matches the code: under T2 the Worker is assumed compromised and its only wire input is `PUBLISH <run_id>` (publisher.py:59), where run_id is a selector, not a path or module name. The handler (publisher.py:122-210) resolves everything from trusted service config and the trusted run-identity store, then makes purely static calls; there is no importlib/__import__/exec/eval/pkgutil/entry_points/spec_from_file/SourceFileLoader/runpy/marshal anywhere in src/gnosis (confirmed by a repo-wide grep returning 0). So there is no dynamic-import surface to be reachable in the first place — the strongest possible form of the property.\\n\\nThe trust plane's load-time closure is not merely asserted but MEASURED and pinned by two enforced tests: a subprocess closure probe that proves the writer/launcher seam (orchestration, deployment, worker_launcher, evidence_capture) never enters the publisher's closure (test_trusted_orchestration.py:272-290), and a closed-world allowlist that fails if any un-allowlisted gnosis.* module or any third-party module appears (test_trust_boundary.py). I re-ran the core measurement live: the publisher_service closure is 15 modules, all within the trust package plus the three explicitly allowlisted kernel primitives (canonical, atomic_io, file_lock), with the forbidden set empty.\\n\\nSecondary code-execution vectors were also checked and are clean: bundle_verify.py imports only json + kernel.canonical and does not eval/exec bundle content; ServiceConfig.load is startup JSON parsing, not code loading and not worker-triggerable; no PEP 562 module-level __getattr__ lazy-import trick exists in the trust package. Plugin/adapter discovery lives in gnosis.adapters, which is outside the trust closure and unreachable from publish (blocked by the allowlist and confirmed by the closure probe).\\n\\nCaveat (does not change the verdict): the closure control governs gnosis.* internal modules and third-party packages; stdlib is out of scope by design (test_trust_boundary.py:30-31). Since the publish path contains no dynamic-import call whatsoever, no stdlib loader is invoked at publication time regardless. Verdict: PASS."
+      },
+      "verify": {
+        "agrees": true,
+        "corrected_verdict": "PASS",
+        "reason": "Independently verified and could not refute. (1) Repo-wide grep for dynamic-loader primitives (importlib/import_module/__import__/iter_modules/entry_points/pkgutil/spec_from_file_location/SourceFileLoader/runpy/marshal.loads) over src/gnosis returns 0; I separately confirmed the three closure kernel modules (canonical/atomic_io/file_lock) have zero loaders and zero exec/eval/compile/__getattr__. (2) The only getattr uses in trust/ are benign attribute reads with constant names; no PEP 562 module-level __getattr__ lazy-import trick exists. (3) Full worker-path trace: publisher._handle -> durable_publish(verify=verify_bundle) -> build_anchor_record(verify=verify_bundle) -> verify_bundle; verify is explicitly bound and even its None-fallback points at the trust-plane verify_bundle, never evidence_capture (Stage-6 direction flip confirmed: anchor.py imports bundle_verify statically and never imports evidence_capture). (4) Only one IPC endpoint exists (single CreateNamedPipeW pipe); no sockets/HTTP/second pipe. publish_anchor (Stage-3) has no production caller and is not worker-triggerable; production writer emits V2 only. (5) Worker-controlled bundle content is only json.loads'd and hashed (no pickle/yaml/marshal). (6) Fault seams (_FAULT_HOOK, fault=) default to None, are TCB-settable only, and are not exercised on the worker path. (7) The lone subprocess in the closure (launch.py icacls) is a fixed OS binary with a trusted-config path arg, gated behind require_high=True which the publisher never sets (require_high=False), and is not Python code loading anyway. (8) Live re-measurement reproduced evidence #11 exactly: importing gnosis.trust.publisher_service loads exactly 15 gnosis modules, all inside the measured trust package plus the three allowlisted kernel primitives, with orchestration/deployment/worker_launcher/evidence_capture all absent. The closed-world allowlist, subprocess closure probe, and AST dynamic-loading tests are genuine enforced controls. The stdlib-out-of-scope caveat is honest and does not weaken the property since no dynamic-import call exists to invoke any loader at publication time."
+      }
+    }
+  ],
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Analyze"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Adversarial-verify"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "analyze:single-path",
+      "phaseIndex": 1,
+      "phaseTitle": "Analyze",
+      "agentId": "a7e21d06ce0d03f6d",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1788144461821,
+      "queuedAt": 1788144459907,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Exactly one production-reachable authoritative F-17 publica…",
+      "promptPreview": "In the repo at C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi, on the current checked-out tree, PROVE there is exactly ONE production-reachable authoritative F-17 publication path. The intended single path is: worker sends \"PUBLISH <run_id>\" over the named pipe -> gnosis.trust.publisher.Publisher.handle -> gnosis.trust.publication.durable_publish -> gnosis.trust.anchor.build_anchor_rec…",
+      "lastProgressAt": 1788144819097,
+      "tokens": 106114,
+      "toolCalls": 38,
+      "durationMs": 354754,
+      "resultPreview": "{\"claim\":\"Exactly one production-reachable authoritative F-17 publication path exists (worker PUBLISH over pipe -> Publisher.handle -> durable_publish -> build_anchor_record -> Anchor V2 record + committed watermark); every other anchor/watermark writer is test-only, recovery-only, a re-export shim, or an unwired probe harness.\",\"verdict\":\"PASS\",\"evidence\":[\"THE ONE PATH, END TO END: provisioned W…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "analyze:v1-v2",
+      "phaseIndex": 1,
+      "phaseTitle": "Analyze",
+      "agentId": "a5d88f6d89d775837",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1788144461819,
+      "queuedAt": 1788144459908,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "The anchor writer reachable from the production F-17 public…",
+      "promptPreview": "In the repo at C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi, PROVE that the anchor writer reachable from the production F-17 publication path emits Anchor SCHEMA V2 ONLY. Read src/gnosis/trust/anchor.py: find the V1 and V2 schema constants and every code path that WRITES an anchor record. Confirm build_anchor_record / durable_publish produce V2 (e.g. gnosis.anchor.v2) and that any V1…",
+      "lastProgressAt": 1788144533282,
+      "tokens": 51741,
+      "toolCalls": 5,
+      "durationMs": 68940,
+      "resultPreview": "{\"claim\":\"The anchor writer reachable from the production F-17 publication path emits Anchor SCHEMA V2 (\\\"gnosis.anchor.v2\\\") ONLY; V1 support is read/verify-only (historical).\",\"verdict\":\"PASS\",\"evidence\":[\"src/gnosis/trust/anchor.py:36-37 — schema constants: ANCHOR_SCHEMA = \\\"gnosis.anchor.v1\\\" (V1), ANCHOR_SCHEMA_V2 = \\\"gnosis.anchor.v2\\\" (V2).\",\"src/gnosis/trust/anchor.py:46-47 — CURRENT_ANCHO…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "analyze:fault-seam",
+      "phaseIndex": 1,
+      "phaseTitle": "Analyze",
+      "agentId": "ac2def5ab8f002a7b",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1788144462074,
+      "queuedAt": 1788144459908,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "The Stage 4 durable-publication fault-injection seam is set…",
+      "promptPreview": "In the repo at C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi, the Stage 4 durable publication has a TEST fault-injection seam (for crash/restart testing). PROVE that NO worker-controlled input can activate it. Grep src/gnosis/trust/{publication.py,anchor.py} and related for fault/inject/_fault/hook/FAULT/fault_point seams. Then determine every way the seam can be set, and prove none o…",
+      "lastProgressAt": 1788144679388,
+      "tokens": 65940,
+      "toolCalls": 24,
+      "durationMs": 215044,
+      "resultPreview": "{\"claim\":\"The Stage 4 durable-publication fault-injection seam is settable only by trusted (non-worker) in-process code; no worker-controlled input (IPC request string, LaunchSpec fields, candidate evidence bytes, worker environment, or run_id) can activate it.\",\"verdict\":\"PASS\",\"evidence\":[\"The seam has two surfaces that reduce to ONE root. (1) publication._FAULT_HOOK: module-private global defin…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 4,
+      "label": "analyze:closure",
+      "phaseIndex": 1,
+      "phaseTitle": "Analyze",
+      "agentId": "a5772df5c1fb8ea0b",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1788144461779,
+      "queuedAt": 1788144459908,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "The static import closure of gnosis.trust.publisher_service…",
+      "promptPreview": "In the repo at C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi, statically compute the import closure of the publisher service entry (gnosis.trust.publisher_service and what it imports transitively within gnosis). List the gnosis modules in the closure. Then CONFIRM these are ABSENT from it: gnosis.trust.deployment, gnosis.trust.orchestration, gnosis.trust.worker_launcher, any gnosis.en…",
+      "lastProgressAt": 1788144641055,
+      "tokens": 54962,
+      "toolCalls": 15,
+      "durationMs": 179273,
+      "resultPreview": "{\"claim\":\"The static import closure of gnosis.trust.publisher_service is minimal (15 gnosis modules), contains none of the forbidden engine/provider/worker/deployment/orchestration/legacy-evidence modules, and reaches no dynamic-import mechanism that could widen it at runtime.\",\"verdict\":\"PASS\",\"evidence\":[\"Closure (15 gnosis modules): gnosis, gnosis.kernel, gnosis.kernel.atomic_io, gnosis.kernel.…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 5,
+      "label": "analyze:dynamic-world",
+      "phaseIndex": 1,
+      "phaseTitle": "Analyze",
+      "agentId": "a0d22064de166f8b4",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1788144462023,
+      "queuedAt": 1788144459908,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "No worker-triggerable dynamic import can load code outside …",
+      "promptPreview": "In the repo at C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi, search the production trust-plane code (src/gnosis/trust/ and the kernel modules it uses) for dynamic code-loading mechanisms reachable from the publisher/publication path: importlib.import_module, __import__, exec/eval that imports, pkgutil.iter_modules, importlib.metadata entry_points, plugin discovery. For each, determin…",
+      "lastProgressAt": 1788144641325,
+      "tokens": 57258,
+      "toolCalls": 17,
+      "durationMs": 176982,
+      "resultPreview": "{\"claim\":\"No worker-triggerable dynamic import can load code outside the measured trust package at publication time; the publish path contains no dynamic code-loading mechanism at all.\",\"verdict\":\"PASS\",\"evidence\":[\"ZERO dynamic-loader primitives in the entire source tree: `grep -rInE \\\"importlib|import_module|__import__|iter_modules|entry_points|pkgutil|spec_from_file_location|SourceFileLoader|ru…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 6,
+      "label": "verify:v1-v2",
+      "phaseIndex": 2,
+      "phaseTitle": "Adversarial-verify",
+      "agentId": "a3a252a44d3a2494a",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1788144541313,
+      "queuedAt": 1788144535122,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "PASS",
+      "promptPreview": "Adversarially re-check this claimed PASS about the repo at C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi. Claim: \"The anchor writer reachable from the production F-17 publication path emits Anchor SCHEMA V2 (\"gnosis.anchor.v2\") ONLY; V1 support is read/verify-only (historical).\". Evidence given: [\"src/gnosis/trust/anchor.py:36-37 — schema constants: ANCHOR_SCHEMA = \\\"gnosis.anchor.v1\\…",
+      "lastProgressAt": 1788144712188,
+      "tokens": 83191,
+      "toolCalls": 17,
+      "durationMs": 170874,
+      "resultPreview": "{\"agrees\":true,\"corrected_verdict\":\"PASS\",\"reason\":\"Verified against the actual source at C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi/src. The anchor record writer is unique and emits V2 only: AnchorRecord(...) is constructed at exactly two sites — anchor.py:501 (build_anchor_record, schema=CURRENT_ANCHOR_SCHEMA hardcoded line 509) and anchor.py:194 (parse_record_line, a reader). CU…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 7,
+      "label": "verify:closure",
+      "phaseIndex": 2,
+      "phaseTitle": "Adversarial-verify",
+      "agentId": "aa0b04631b7cf69d8",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1788144644407,
+      "queuedAt": 1788144642591,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "PASS",
+      "promptPreview": "Adversarially re-check this claimed PASS about the repo at C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi. Claim: \"The static import closure of gnosis.trust.publisher_service is minimal (15 gnosis modules), contains none of the forbidden engine/provider/worker/deployment/orchestration/legacy-evidence modules, and reaches no dynamic-import mechanism that could widen it at runtime.\". Evi…",
+      "lastProgressAt": 1788144743770,
+      "tokens": 49569,
+      "toolCalls": 7,
+      "durationMs": 99363,
+      "resultPreview": "{\"agrees\":true,\"corrected_verdict\":\"PASS\",\"reason\":\"Independently verified and could not refute. Runtime cross-check (Python 3.13, PYTHONPATH=src): importing gnosis.trust.publisher_service loads exactly 15 gnosis modules, identical to the claimed set. Static imports in all 15 files reference only closure modules; multi-line `from gnosis... import (...)` blocks import names (anchor/launch/run_ident…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 8,
+      "label": "verify:dynamic-world",
+      "phaseIndex": 2,
+      "phaseTitle": "Adversarial-verify",
+      "agentId": "ada49b5284408c6d6",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1788144644851,
+      "queuedAt": 1788144642828,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "PASS",
+      "promptPreview": "Adversarially re-check this claimed PASS about the repo at C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi. Claim: \"No worker-triggerable dynamic import can load code outside the measured trust package at publication time; the publish path contains no dynamic code-loading mechanism at all.\". Evidence given: [\"ZERO dynamic-loader primitives in the entire source tree: `grep -rInE \\\"import…",
+      "lastProgressAt": 1788144847918,
+      "tokens": 106682,
+      "toolCalls": 15,
+      "durationMs": 203066,
+      "resultPreview": "{\"agrees\":true,\"corrected_verdict\":\"PASS\",\"reason\":\"Independently verified and could not refute. (1) Repo-wide grep for dynamic-loader primitives (importlib/import_module/__import__/iter_modules/entry_points/pkgutil/spec_from_file_location/SourceFileLoader/runpy/marshal.loads) over src/gnosis returns 0; I separately confirmed the three closure kernel modules (canonical/atomic_io/file_lock) have ze…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 9,
+      "label": "verify:fault-seam",
+      "phaseIndex": 2,
+      "phaseTitle": "Adversarial-verify",
+      "agentId": "a6226ca4f98c3ab60",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1788144683956,
+      "queuedAt": 1788144681652,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "PASS",
+      "promptPreview": "Adversarially re-check this claimed PASS about the repo at C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi. Claim: \"The Stage 4 durable-publication fault-injection seam is settable only by trusted (non-worker) in-process code; no worker-controlled input (IPC request string, LaunchSpec fields, candidate evidence bytes, worker environment, or run_id) can activate it.\". Evidence given: [\"T…",
+      "lastProgressAt": 1788144884110,
+      "tokens": 109298,
+      "toolCalls": 19,
+      "durationMs": 200153,
+      "resultPreview": "{\"agrees\":true,\"corrected_verdict\":\"PASS\",\"reason\":\"Verified in-code and by running the suites. The seam reduces to one root, publication._FAULT_HOOK, which defaults to None (publication.py:139) and gates both firing sites (publication.py:144 `if hook is not None`; anchor.py:88 `if fault is not None`). AnchorStore.append's `fault` kwarg (anchor.py:263) is fed in production ONLY by publication.py:7…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 10,
+      "label": "verify:single-path",
+      "phaseIndex": 2,
+      "phaseTitle": "Adversarial-verify",
+      "agentId": "a500cf6a480a3e84e",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1788144822505,
+      "queuedAt": 1788144820630,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "PASS",
+      "promptPreview": "Adversarially re-check this claimed PASS about the repo at C:/Users/nicol/Desktop/Claude Code Proyectos/GnosisAgentAi. Claim: \"Exactly one production-reachable authoritative F-17 publication path exists (worker PUBLISH over pipe -> Publisher.handle -> durable_publish -> build_anchor_record -> Anchor V2 record + committed watermark); every other anchor/watermark writer is test-only, recovery-only, …",
+      "lastProgressAt": 1788145083722,
+      "tokens": 84055,
+      "toolCalls": 28,
+      "durationMs": 261217,
+      "resultPreview": "{\"agrees\":true,\"corrected_verdict\":\"PASS\",\"reason\":\"Verified by reading the actual files and grepping the full src/gnosis tree. The single authoritative path holds: durable_publish has exactly one caller (publisher.py:201), reached only via the one PipeServer->Publisher.handle dispatch (publisher_service.py:155-159, pipe_server.py:251) wired to the sole provisioned service entry publisher_service.…"
+    }
+  ],
+  "totalTokens": 768810,
+  "totalToolCalls": 185
+}

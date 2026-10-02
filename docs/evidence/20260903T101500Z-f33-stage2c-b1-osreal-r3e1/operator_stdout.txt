@@ -1,0 +1,8 @@
+{
+  "run_id": null,
+  "task_id": "TASK-20260903T011001153Z-c92f51ba",
+  "work_status": "BLOCKED",
+  "publication_state": null,
+  "success": false,
+  "detail": "governed work not COMPLETED (pipeline_error:WorkerLaunchFailed); no publication attempted"
+}

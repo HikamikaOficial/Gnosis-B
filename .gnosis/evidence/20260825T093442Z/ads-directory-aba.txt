@@ -1,0 +1,174 @@
+F-14.10 — the directory named-stream A->B->A through run_capture, before and after
+==================================================================================
+
+The SAME script (scratchpad/aba_capture.py) is run twice: once with
+GNOSIS_SRC pointing at `git archive 8dd621c` (the code the tenth review
+examined, before this unit) and once against the repaired tree. The
+script prints the src it loaded, so a reader can see which code ran.
+
+==================================================================================
+BEFORE — pre-repair 8dd621c   exit=0
+==================================================================================
+code under test: C:\Users\nicol\AppData\Local\Temp\claude\C--Users-nicol-Desktop-Claude-Code-Proyectos-GnosisAgentAi\ba84ae2b-5d49-4a96-9684-7eed6b029c27\scratchpad\head_export_r10\src
+F-14.10 — directory-stream ABA through run_capture
+==========================================================================
+--- CHILD directory stream ABA (pkg:secret create->read->delete)
+    check tail        : ALLOW
+    boundary verdict  : CLEAN
+    violations        : []
+    evidence_valid    : True
+    exit_code         : 0
+
+--- ROOT directory stream ABA (<repo>:secret create->read->delete)
+    check tail        : ALLOW
+    boundary verdict  : CLEAN
+    violations        : []
+    evidence_valid    : True
+    exit_code         : 0
+
+--- CLEAN run (no streams, no transient writes)
+    check tail        : clean
+    boundary verdict  : CLEAN
+    violations        : []
+    evidence_valid    : True
+    exit_code         : 0
+
+EXPECTED after the repair: both ABAs -> STREAMS_MUTATED, exit 8,
+evidence_valid False; CLEAN -> CLEAN, exit 0, evidence_valid True.
+
+==================================================================================
+AFTER — repaired 534bda2d09a26226c29ac404cc631b2dc9764e75   exit=0
+==================================================================================
+code under test: C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\src
+F-14.10 — directory-stream ABA through run_capture
+==========================================================================
+--- CHILD directory stream ABA (pkg:secret create->read->delete)
+    check tail        : ALLOW
+    boundary verdict  : STREAMS_MUTATED
+    violations        : ['added_stream: pkg:secret']
+    evidence_valid    : False
+    exit_code         : 8
+
+--- ROOT directory stream ABA (<repo>:secret create->read->delete)
+    check tail        : ALLOW
+    boundary verdict  : STREAMS_MUTATED
+    violations        : ['added_stream: :secret']
+    evidence_valid    : False
+    exit_code         : 8
+
+--- CLEAN run (no streams, no transient writes)
+    check tail        : clean
+    boundary verdict  : CLEAN
+    violations        : []
+    evidence_valid    : True
+    exit_code         : 0
+
+EXPECTED after the repair: both ABAs -> STREAMS_MUTATED, exit 8,
+evidence_valid False; CLEAN -> CLEAN, exit 0, evidence_valid True.
+
+==================================================================================
+the script, identical across both runs
+==================================================================================
+
+"""F-14.10: the directory-stream ABA through run_capture, before/after.
+
+The reviewer's minimal adversarial case, driven through the real capture:
+
+    inventory has no dir:stream
+    a check creates dir:stream, reads it, deletes it   (A -> B -> A)
+    inventory still has no dir:stream
+
+Run against the working tree (GNOSIS_SRC unset) it exercises the repair;
+point GNOSIS_SRC at an export of an older commit to see the old behaviour.
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+REPO = Path(r"C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi")
+SRC = Path(os.environ.get("GNOSIS_SRC", str(REPO / "src")))
+sys.path.insert(0, str(SRC))
+print(f"code under test: {SRC}")
+
+from gnosis.kernel.evidence_capture import CheckCommand, run_capture  # noqa: E402
+
+
+def git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=True)
+
+
+def make_repo(root: Path) -> Path:
+    repo = root / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.email", "t@e.com")
+    git(repo, "config", "user.name", "T")
+    git(repo, "config", "commit.gpgsign", "false")
+    (repo / "keep.txt").write_text("x\n", encoding="utf-8")
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "mod.txt").write_text("y\n", encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "init")
+    return repo
+
+
+def run(label: str, script: str, root: Path) -> None:
+    with tempfile.TemporaryDirectory(dir=r"C:\Users\nicol\AppData\Local\Temp") as tmp:
+        repo = make_repo(Path(tmp))
+        check = CheckCommand("aba", (sys.executable, "-c", script))
+        cap = run_capture(repo, [check], Path(tmp) / "staging")
+        b = cap.boundary
+        print(f"--- {label}")
+        print(f"    check tail        : {cap.checks[0].tail if cap.checks else '(none)'}")
+        print(f"    boundary verdict  : {b.verdict.value}")
+        print(f"    violations        : {list(b.violations)[:4]}")
+        print(f"    evidence_valid    : {cap.evidence_valid}")
+        print(f"    exit_code         : {cap.exit_code}")
+        print()
+
+
+CHILD_ABA = (
+    "import os\n"
+    "open('pkg:secret', 'w', encoding='utf-8').write('ALLOW')\n"
+    "verdict = open('pkg:secret', encoding='utf-8').read().strip()\n"
+    "os.remove('pkg:secret')\n"
+    "print(verdict)\n"
+)
+ROOT_ABA = (
+    "import os\n"
+    "root = os.getcwd()\n"
+    "open(root + ':secret', 'w', encoding='utf-8').write('ALLOW')\n"
+    "verdict = open(root + ':secret', encoding='utf-8').read().strip()\n"
+    "os.remove(root + ':secret')\n"
+    "print(verdict)\n"
+)
+BENIGN = (
+    "open('pkg/newfile.txt', 'w', encoding='utf-8').write('z')\n"
+    "import os; os.remove('pkg/newfile.txt')\n"   # a real transient FILE -> already a violation
+    "print('done')\n"
+)
+CLEAN = "print('clean')\n"
+
+
+def main() -> int:
+    print("F-14.10 — directory-stream ABA through run_capture")
+    print("=" * 74)
+    with tempfile.TemporaryDirectory(dir=r"C:\Users\nicol\AppData\Local\Temp") as tmp:
+        root = Path(tmp)
+        run("CHILD directory stream ABA (pkg:secret create->read->delete)",
+            CHILD_ABA, root)
+        run("ROOT directory stream ABA (<repo>:secret create->read->delete)",
+            ROOT_ABA, root)
+        run("CLEAN run (no streams, no transient writes)", CLEAN, root)
+    print("EXPECTED after the repair: both ABAs -> STREAMS_MUTATED, exit 8,")
+    print("evidence_valid False; CLEAN -> CLEAN, exit 0, evidence_valid True.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,16 @@
+>>> RUNNING probe_stage5_worker_launcher  (02:50:43Z)
+PROBE RESULT: ALL CHECKS PASSED
+>>> probe_stage5_worker_launcher EXIT=0  (02:51:15Z)
+>>> RUNNING probe_stage7_git_matrix  (02:51:15Z)
+>>> probe_stage7_git_matrix EXIT=0  (02:51:25Z)
+>>> RUNNING probe_stage6_composition  (02:51:25Z)
+>>> probe_stage6_composition EXIT=0  (02:52:25Z)
+>>> RUNNING probe_stage8_provisioning  (02:52:25Z)
+PROBE RESULT: ALL 140 CHECKS PASSED
+>>> probe_stage8_provisioning EXIT=0  (02:54:40Z)
+OS-REAL CHAIN SUMMARY
+  probe_stage5_worker_launcher: EXIT=0  PROBE RESULT: ALL CHECKS PASSED
+  probe_stage7_git_matrix: EXIT=0  PROBE RESULT: ALL 26 CHECKS PASSED
+  probe_stage6_composition: EXIT=0  PROBE RESULT: ALL 49 CHECKS PASSED
+  probe_stage8_provisioning: EXIT=0  PROBE RESULT: ALL 140 CHECKS PASSED
+OSREAL_ALLOK=YES

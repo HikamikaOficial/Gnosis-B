@@ -1,0 +1,38 @@
+=== F-33 Stage 2C-B — composed qualification DRY-RUN (filesystem only) ===
+no OS provisioning · no provider/live calls · F-17 unchanged
+
+[PASS] PROVISION.returns_verified_composed  
+[PASS] PROVISION.trusted_record_outside_tree  C:\Users\nicol\AppData\Local\Temp\f33-2cb-dry-m8t87j1p\state\GNOSIS_COMPOSED.json
+[PASS] PROVISION.record_binds_app_and_f17  
+[PASS] PROVISION.gate_fail_closed_and_rollback  
+[PASS] PRELAUNCH.isolated_argv  python -I -B <entry> run --brief demo
+[PASS] PRELAUNCH.app_tamper_refused  
+[PASS] PRELAUNCH.f17_mismatch_refused  
+[PASS] STARTUP.valid_selfcheck_passes  rc=2
+[PASS] STARTUP.entry_tamper_aborts_70  rc=70
+[PASS] STARTUP.coherent_tamper_aborts_70  rc=70
+[PASS] ONE_TREE.trust_copy_count_1  count=1
+[PASS] ONE_TREE.provenance_under_pkg  director+trust resolve under pkg
+[PASS] ONE_TREE.no_checkout_in_resolution  
+[PASS] ONE_TREE.cwd_shadow_resisted  
+[PASS] GATES.PROVISION_TIME  PASS (dry-run)
+[PASS] GATES.PRE_LAUNCH  PASS (dry-run)
+[PASS] GATES.STARTUP  PASS (dry-run)
+
+--- OS-REAL steps intentionally DEFERRED (privileged/billed) ---
+[DEFER] OSREAL.base_provision  -> privileged F-17 Provisioner (scripts/probe_stage8 machinery) -> BaseDeployment{observed deployment_digest, F-17 uninstall rollback}
+[DEFER] OSREAL.worker_account_sid  -> temporary non-admin Worker account + SID boundary vs Director SID
+[DEFER] OSREAL.acls  -> NTFS ACLs: worker cannot write trusted record / APPLICATION.json / operator_entry.py / deterministic_worker.py / measured bytes
+[DEFER] OSREAL.canonical_launch_spawn_true  -> GnosisDeploymentProvisioner.canonical_launch(spawn=True) -> deployment-bound python -I -B operator_entry -> gnosis.director.cli:main
+[DEFER] OSREAL.real_worker_boundary  -> TrustedExecutionRunner -> TrustedExecutionPort -> F-17 worker_launcher -> real Worker (SID, integrity, Job containment, LaunchSpec seal)
+[DEFER] OSREAL.verifier  -> production governance verifier PASS + fail-closed negative
+[DEFER] OSREAL.live_reviewer  -> adapters.cli_review.CliReviewer over runner.claude_cli_runner (ClaudeCLIRunner) LIVE — consumes L2..L5 (<=5 cumulative)
+[DEFER] OSREAL.real_publisher  -> director.publisher_client.PipePublisherClient -> real named pipe -> F-17 Publisher service (no InProcessPublisherClient fallback)
+[DEFER] OSREAL.anchored  -> create_trusted_run -> authorize_publishable -> PUBLISH -> persisted PublicationState.ANCHORED -> operator exit 0
+[DEFER] OSREAL.negatives_N1_N6  -> N1 worker fail / N2 reviewer refuse / N3 verifier fail / N4 publisher unavailable / N5 identity mismatch / N6 not-anchored -> operator non-zero
+[DEFER] OSREAL.mutation_matrix_F33F  -> F33F-1..12 against the live composed pipeline (reviewer/verifier/worker/publisher/anchor/identity) — filesystem-testable identity mutants already covered by R2 E-M table; pipeline mutants require OS-real
+[DEFER] OSREAL.recovery_CR1_CR3  -> CR1 completed-not-committed / CR2 committed-not-observed / CR3 service restart reconciliation via existing F-17 mechanisms
+[DEFER] OSREAL.rollback_and_verify  -> finally-scoped uninstall of worker/service/roots/blob/pipe + §47 residue verification -> ROLLBACK = PASS
+
+DRY-RUN: 17 PASS · 13 deferred (OS-real) · 0 FAIL
+DRY-RUN RESULT: PASS (composed model wiring validated filesystem-only)

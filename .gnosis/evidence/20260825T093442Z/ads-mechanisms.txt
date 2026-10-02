@@ -1,0 +1,859 @@
+F-14.10 — the measurements that chose the architecture
+==========================================================================
+tree: 534bda2d09a26226c29ac404cc631b2dc9764e75
+Each script here is in the bundle; every architectural claim in
+ADR-0026 addendum 10 rests on one of these runs, not on documentation.
+
+==========================================================================
+RDCW stream actions distinguish a directory stream ABA from an entry move
+==========================================================================
+script: scratchpad/aba_dir_rdcw.py   exit: 0
+
+F-14.10 measurement 1 — ReadDirectoryChangesW on a DIRECTORY stream ABA
+==========================================================================
+python: 3.12.14
+
+--- current observer filter (no stream flags)  (0x15f)
+    DIR stream ABA -> ['modified: subdir', 'modified: subdir']
+    entry move     -> ['modified: subdir\\keep.txt', 'modified: subdir\\keep.txt']
+
+--- STREAM_NAME only (0x200)  (0x200)
+    DIR stream ABA -> ['added_stream: subdir:aba-stream']
+    entry move     -> []
+
+--- STREAM_NAME|SIZE|WRITE (0xE00)  (0xe00)
+    DIR stream ABA -> ['added_stream: subdir:aba-stream', 'modified_stream: subdir:aba-stream', 'modified_stream: subdir:aba-stream', 'modified_stream: subdir:aba-stream', 'modified_stream: subdir:aba-stream']
+    entry move     -> []
+
+--- everything incl. stream flags  (0xf7f)
+    DIR stream ABA -> ['modified: subdir', 'added_stream: subdir:aba-stream', 'modified: subdir', 'modified_stream: subdir:aba-stream', 'modified_stream: subdir:aba-stream', 'modified_stream: subdir:aba-stream', 'modified_stream: subdir:aba-stream']
+    entry move     -> ['modified: subdir\\keep.txt', 'modified: subdir\\keep.txt']
+
+INTERPRETATION
+  If the DIR stream ABA yields added_stream/removed_stream (6/7)
+  and the entry move does not, the two are DISTINGUISHABLE and the
+  observer can judge the stream event without a heuristic.
+  If both yield only `modified: subdir`, ReadDirectoryChangesW
+  cannot tell them apart and the USN journal is the only option.
+
+--- source ------------------------------------------------------------
+
+"""F-14.10 measurement 1: does ReadDirectoryChangesW deliver a DISTINGUISHABLE,
+drainable event for a DIRECTORY named-stream create+delete?
+
+The ABA the tenth review left open is:
+
+    dir has no stream :s      (initial inventory)
+    create dir:s, write it    (during the interval)
+    delete dir:s              (before the final inventory)
+    dir has no stream :s      (final inventory == initial)
+
+The inventory detector sees before == after. The lock cannot pre-open a
+stream that does not exist. The write observer is the only thing that runs
+FOR the whole interval, so the question is entirely: what does
+ReadDirectoryChangesW put in the buffer when a directory's named stream
+appears and disappears, and can it be told apart from an entry move
+(which also arrives as `modified <dir>` and is deliberately forgiven)?
+
+No production code is touched. This only measures the primitive.
+"""
+from __future__ import annotations
+
+import ctypes
+import sys
+import threading
+import time
+from ctypes import wintypes
+from pathlib import Path
+
+k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+FILE_LIST_DIRECTORY = 0x0001
+FILE_SHARE_ALL = 0x07
+OPEN_EXISTING = 3
+BACKUP = 0x02000000
+OVERLAPPED = 0x40000000
+INVALID = ctypes.c_void_p(-1).value
+
+# The stream-specific notify filters and actions, which the current
+# observer does NOT request and does NOT map.
+NOTIFY = {
+    "FILE_NAME": 0x001, "DIR_NAME": 0x002, "ATTRIBUTES": 0x004,
+    "SIZE": 0x008, "LAST_WRITE": 0x010, "LAST_ACCESS": 0x020,
+    "CREATION": 0x040, "SECURITY": 0x100,
+    "STREAM_NAME": 0x200, "STREAM_SIZE": 0x400, "STREAM_WRITE": 0x800,
+}
+ACTIONS = {1: "added", 2: "removed", 3: "modified", 4: "renamed_from",
+           5: "renamed_to", 6: "added_stream", 7: "removed_stream",
+           8: "modified_stream", 9: "removed_by_delete"}
+
+
+class _Overlapped(ctypes.Structure):
+    _fields_ = (("Internal", ctypes.c_void_p), ("InternalHigh", ctypes.c_void_p),
+                ("Offset", wintypes.DWORD), ("OffsetHigh", wintypes.DWORD),
+                ("hEvent", wintypes.HANDLE))
+
+
+k32.CreateFileW.restype = wintypes.HANDLE
+k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                            ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                            wintypes.HANDLE]
+k32.CreateEventW.restype = wintypes.HANDLE
+k32.ReadDirectoryChangesW.argtypes = [
+    wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD, wintypes.BOOL,
+    wintypes.DWORD, wintypes.LPDWORD, ctypes.c_void_p, ctypes.c_void_p]
+k32.GetOverlappedResult.argtypes = [wintypes.HANDLE, ctypes.c_void_p,
+                                    wintypes.LPDWORD, wintypes.BOOL]
+k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+k32.CloseHandle.argtypes = [wintypes.HANDLE]
+k32.CancelIo.argtypes = [wintypes.HANDLE]
+
+
+def drain(root: Path, notify: int, action: "callable", label: str) -> list[str]:
+    """Arm on `root`, run `action()`, drain every record until quiet."""
+    handle = k32.CreateFileW(str(root), FILE_LIST_DIRECTORY, FILE_SHARE_ALL,
+                             None, OPEN_EXISTING, BACKUP | OVERLAPPED, None)
+    if handle == INVALID:
+        return [f"watch failed: {ctypes.get_last_error()}"]
+    buf = ctypes.create_string_buffer(64 * 1024)
+    events: list[str] = []
+
+    def arm() -> _Overlapped:
+        ov = _Overlapped()
+        ov.hEvent = k32.CreateEventW(None, True, False, None)
+        returned = wintypes.DWORD(0)
+        ok = k32.ReadDirectoryChangesW(handle, buf, len(buf), True, notify,
+                                       ctypes.byref(returned), ctypes.byref(ov), None)
+        if not ok:
+            events.append(f"arm failed: {ctypes.get_last_error()}")
+        return ov
+
+    ov = arm()
+    action()
+    # Drain: each completed read is parsed, then re-armed, until a read
+    # times out (nothing more is coming).
+    for _ in range(20):
+        if k32.WaitForSingleObject(ov.hEvent, 400) != 0:
+            break
+        got = wintypes.DWORD(0)
+        if not k32.GetOverlappedResult(handle, ctypes.byref(ov), ctypes.byref(got), False):
+            break
+        if got.value == 0:
+            # overflow: buffer too small, notifications lost
+            events.append("OVERFLOW (buffer returned 0 bytes)")
+            ov = arm()
+            continue
+        offset = 0
+        while True:
+            nxt = int.from_bytes(buf[offset:offset + 4], "little")
+            act = int.from_bytes(buf[offset + 4:offset + 8], "little")
+            length = int.from_bytes(buf[offset + 8:offset + 12], "little")
+            name = bytes(buf[offset + 12:offset + 12 + length]).decode("utf-16-le")
+            events.append(f"{ACTIONS.get(act, f'action-{act}')}: {name}")
+            if not nxt:
+                break
+            offset += nxt
+        ov = arm()
+    k32.CancelIo(handle)
+    k32.CloseHandle(handle)
+    return events
+
+
+def main() -> int:
+    print("F-14.10 measurement 1 — ReadDirectoryChangesW on a DIRECTORY stream ABA")
+    print("=" * 74)
+    print(f"python: {sys.version.split()[0]}")
+    print()
+
+    import tempfile
+    base = Path(tempfile.mkdtemp(dir=r"C:\Users\nicol\AppData\Local\Temp"))
+    try:
+        root = base / "repo"
+        root.mkdir()
+        subdir = root / "subdir"
+        subdir.mkdir()
+        (subdir / "keep.txt").write_text("x\n", encoding="utf-8")
+
+        def aba() -> None:
+            time.sleep(0.15)
+            # create + write + delete a stream on the DIRECTORY
+            with open(f"{subdir}:aba-stream", "w", encoding="utf-8") as fh:
+                fh.write("TRANSIENT")
+            time.sleep(0.05)
+            import os
+            os.remove(f"{subdir}:aba-stream")
+            time.sleep(0.05)
+
+        def entry_move() -> None:
+            # the benign case the classifier forgives: an entry inside the
+            # directory changes, moving the directory's own timestamp.
+            time.sleep(0.15)
+            (subdir / "keep.txt").write_text("y\n", encoding="utf-8")
+            time.sleep(0.05)
+
+        configs = [
+            ("current observer filter (no stream flags)",
+             NOTIFY["FILE_NAME"] | NOTIFY["DIR_NAME"] | NOTIFY["ATTRIBUTES"]
+             | NOTIFY["SIZE"] | NOTIFY["LAST_WRITE"] | NOTIFY["CREATION"]
+             | NOTIFY["SECURITY"]),
+            ("STREAM_NAME only (0x200)", NOTIFY["STREAM_NAME"]),
+            ("STREAM_NAME|SIZE|WRITE (0xE00)",
+             NOTIFY["STREAM_NAME"] | NOTIFY["STREAM_SIZE"] | NOTIFY["STREAM_WRITE"]),
+            ("everything incl. stream flags",
+             sum(NOTIFY.values())),
+        ]
+        for label, notify in configs:
+            print(f"--- {label}  (0x{notify:03x})")
+            print(f"    DIR stream ABA -> {drain(root, notify, aba, label)}")
+            print(f"    entry move     -> {drain(root, notify, entry_move, label)}")
+            print()
+
+        print("INTERPRETATION")
+        print("  If the DIR stream ABA yields added_stream/removed_stream (6/7)")
+        print("  and the entry move does not, the two are DISTINGUISHABLE and the")
+        print("  observer can judge the stream event without a heuristic.")
+        print("  If both yield only `modified: subdir`, ReadDirectoryChangesW")
+        print("  cannot tell them apart and the USN journal is the only option.")
+    finally:
+        import shutil
+        shutil.rmtree(base, ignore_errors=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+==========================================================================
+edges: the watched dir's own streams, delivery reliability, benign churn
+==========================================================================
+script: scratchpad/aba_edges.py   exit: 0
+
+F-14.10 measurement 3 — edges of RDCW stream detection
+==========================================================================
+(a) stream on the WATCHED ROOT itself:
+    []
+
+(a') stream on a nested subdirectory:
+    ['modified: subdir', 'added_stream: subdir:on-sub', 'modified: subdir', 'modified_stream: subdir:on-sub', 'modified_stream: subdir:on-sub', 'modified_stream: subdir:on-sub', 'modified_stream: subdir:on-sub']
+
+(b) five trials of dir-stream create+delete (add & remove):
+    trial 0: add=True remove=False  ['added_stream: subdir:t0', 'modified: subdir', 'modified_stream: subdir:t0', 'modified_stream: subdir:t0', 'modified_stream: subdir:t0', 'modified_stream: subdir:t0']
+    trial 1: add=True remove=False  ['added_stream: subdir:t1', 'modified: subdir', 'modified_stream: subdir:t1', 'modified_stream: subdir:t1', 'modified_stream: subdir:t1', 'modified_stream: subdir:t1']
+    trial 2: add=True remove=False  ['added_stream: subdir:t2', 'modified: subdir', 'modified_stream: subdir:t2', 'modified_stream: subdir:t2', 'modified_stream: subdir:t2', 'modified_stream: subdir:t2']
+    trial 3: add=True remove=False  ['added_stream: subdir:t3', 'modified: subdir', 'modified_stream: subdir:t3', 'modified_stream: subdir:t3', 'modified_stream: subdir:t3', 'modified_stream: subdir:t3']
+    trial 4: add=True remove=False  ['added_stream: subdir:t4', 'modified: subdir', 'modified_stream: subdir:t4', 'modified_stream: subdir:t4', 'modified_stream: subdir:t4', 'modified_stream: subdir:t4']
+
+(c) benign child create+delete (the forgiven `modified dir`):
+    ['added: subdir\\temp.txt', 'modified: subdir\\temp.txt', 'removed: subdir\\temp.txt']
+    stream actions present: False  <- must be False
+
+--- source ------------------------------------------------------------
+
+"""F-14.10 measurement 3: the edges of RDCW stream detection.
+
+Three questions the fix stands or falls on:
+
+  (a) does a recursive watch report a stream on the WATCHED directory
+      itself (the repo root), or only on its children? If the root's own
+      stream ABA is invisible, it escapes.
+  (b) is the create event delivered reliably across repeated trials, and
+      is the delete (removed_stream) delivered too?
+  (c) does the benign child create+delete -- the canonical `modified dir`
+      the classifier forgives -- ever produce a stream action?
+
+No production code touched.
+"""
+from __future__ import annotations
+
+import ctypes
+import os
+import sys
+import tempfile
+import time
+from ctypes import wintypes
+from pathlib import Path
+
+k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+FILE_LIST_DIRECTORY = 0x0001
+FILE_SHARE_ALL = 0x07
+OPEN_EXISTING = 3
+BACKUP = 0x02000000
+OVERLAPPED = 0x40000000
+INVALID = ctypes.c_void_p(-1).value
+STREAM_FLAGS = 0x200 | 0x400 | 0x800
+ALL_FLAGS = 0x001 | 0x002 | 0x004 | 0x008 | 0x010 | 0x040 | 0x100 | STREAM_FLAGS
+ACTIONS = {1: "added", 2: "removed", 3: "modified", 4: "renamed_from",
+           5: "renamed_to", 6: "added_stream", 7: "removed_stream",
+           8: "modified_stream", 9: "removed_by_delete"}
+
+
+class _Overlapped(ctypes.Structure):
+    _fields_ = (("Internal", ctypes.c_void_p), ("InternalHigh", ctypes.c_void_p),
+                ("Offset", wintypes.DWORD), ("OffsetHigh", wintypes.DWORD),
+                ("hEvent", wintypes.HANDLE))
+
+
+for fn, res, args in [
+    ("CreateFileW", wintypes.HANDLE, [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+     ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]),
+    ("CreateEventW", wintypes.HANDLE, None),
+    ("ReadDirectoryChangesW", wintypes.BOOL, [wintypes.HANDLE, ctypes.c_void_p,
+     wintypes.DWORD, wintypes.BOOL, wintypes.DWORD, wintypes.LPDWORD,
+     ctypes.c_void_p, ctypes.c_void_p]),
+    ("GetOverlappedResult", wintypes.BOOL, [wintypes.HANDLE, ctypes.c_void_p,
+     wintypes.LPDWORD, wintypes.BOOL]),
+    ("WaitForSingleObject", wintypes.DWORD, [wintypes.HANDLE, wintypes.DWORD]),
+    ("CloseHandle", wintypes.BOOL, [wintypes.HANDLE]),
+    ("CancelIo", wintypes.BOOL, [wintypes.HANDLE]),
+]:
+    f = getattr(k32, fn)
+    f.restype = res
+    if args:
+        f.argtypes = args
+
+
+def watch(root: Path, action, notify=ALL_FLAGS) -> list[str]:
+    handle = k32.CreateFileW(str(root), FILE_LIST_DIRECTORY, FILE_SHARE_ALL,
+                             None, OPEN_EXISTING, BACKUP | OVERLAPPED, None)
+    if handle == INVALID:
+        return [f"watch failed {ctypes.get_last_error()}"]
+    buf = ctypes.create_string_buffer(64 * 1024)
+    events: list[str] = []
+
+    def arm():
+        ov = _Overlapped()
+        ov.hEvent = k32.CreateEventW(None, True, False, None)
+        n = wintypes.DWORD(0)
+        if not k32.ReadDirectoryChangesW(handle, buf, len(buf), True, notify,
+                                         ctypes.byref(n), ctypes.byref(ov), None):
+            events.append(f"arm failed {ctypes.get_last_error()}")
+        return ov
+
+    ov = arm()
+    action()
+    for _ in range(15):
+        if k32.WaitForSingleObject(ov.hEvent, 400) != 0:
+            break
+        got = wintypes.DWORD(0)
+        if not k32.GetOverlappedResult(handle, ctypes.byref(ov), ctypes.byref(got), False):
+            break
+        if got.value == 0:
+            events.append("OVERFLOW")
+            ov = arm(); continue
+        off = 0
+        while True:
+            nxt = int.from_bytes(buf[off:off + 4], "little")
+            act = int.from_bytes(buf[off + 4:off + 8], "little")
+            ln = int.from_bytes(buf[off + 8:off + 12], "little")
+            name = bytes(buf[off + 12:off + 12 + ln]).decode("utf-16-le")
+            events.append(f"{ACTIONS.get(act, f'action-{act}')}: {name}")
+            if not nxt:
+                break
+            off += nxt
+        ov = arm()
+    k32.CancelIo(handle)
+    k32.CloseHandle(handle)
+    return events
+
+
+def main() -> int:
+    print("F-14.10 measurement 3 — edges of RDCW stream detection")
+    print("=" * 74)
+    base = Path(tempfile.mkdtemp(dir=r"C:\Users\nicol\AppData\Local\Temp"))
+    try:
+        root = base / "repo"
+        root.mkdir()
+        (root / "keep.txt").write_text("x\n", encoding="utf-8")
+        sub = root / "subdir"
+        sub.mkdir()
+        (sub / "inner.txt").write_text("y\n", encoding="utf-8")
+
+        # (a) a stream on the WATCHED directory itself
+        def root_stream():
+            time.sleep(0.15)
+            open(f"{root}:on-root", "w", encoding="utf-8").write("R")
+            time.sleep(0.05)
+            os.remove(f"{root}:on-root")
+            time.sleep(0.05)
+        print("(a) stream on the WATCHED ROOT itself:")
+        print(f"    {watch(root, root_stream)}")
+        print()
+
+        # (a') a stream on a nested subdirectory (child) -- expected to work
+        def sub_stream():
+            time.sleep(0.15)
+            open(f"{sub}:on-sub", "w", encoding="utf-8").write("S")
+            time.sleep(0.05)
+            os.remove(f"{sub}:on-sub")
+            time.sleep(0.05)
+        print("(a') stream on a nested subdirectory:")
+        print(f"    {watch(root, sub_stream)}")
+        print()
+
+        # (b) reliability across 5 trials of create+delete
+        print("(b) five trials of dir-stream create+delete (add & remove):")
+        for i in range(5):
+            def trial():
+                time.sleep(0.12)
+                open(f"{sub}:t{i}", "w", encoding="utf-8").write("T")
+                time.sleep(0.04)
+                os.remove(f"{sub}:t{i}")
+                time.sleep(0.04)
+            ev = watch(root, trial)
+            has_add = any("added_stream" in e for e in ev)
+            has_rem = any("removed_stream" in e for e in ev)
+            print(f"    trial {i}: add={has_add} remove={has_rem}  {ev}")
+        print()
+
+        # (c) benign child create+delete -- must yield NO stream action
+        def child_churn():
+            time.sleep(0.15)
+            (sub / "temp.txt").write_text("z\n", encoding="utf-8")
+            time.sleep(0.04)
+            os.remove(sub / "temp.txt")
+            time.sleep(0.04)
+        ev = watch(root, child_churn)
+        print("(c) benign child create+delete (the forgiven `modified dir`):")
+        print(f"    {ev}")
+        print(f"    stream actions present: "
+              f"{any('stream' in e for e in ev)}  <- must be False")
+    finally:
+        import shutil
+        shutil.rmtree(base, ignore_errors=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+==========================================================================
+catching the root's own stream via a non-recursive parent watch
+==========================================================================
+script: scratchpad/aba_root.py   exit: 0
+
+F-14.10 measurement 4 — catching the ROOT's own stream via the parent
+==========================================================================
+parent watch, NON-recursive, stream flags:
+    ['added_stream: repo:on-root', 'modified_stream: repo:on-root', 'modified_stream: repo:on-root', 'modified_stream: repo:on-root', 'modified_stream: repo:on-root']
+    events naming the root entry: ['added_stream: repo:on-root', 'modified_stream: repo:on-root', 'modified_stream: repo:on-root', 'modified_stream: repo:on-root', 'modified_stream: repo:on-root']
+    root stream ABA caught: True
+
+parent watch with a noisy sibling (must be filterable by name):
+    all: ['added_stream: sibling:noise', 'modified_stream: sibling:noise', 'added_stream: repo:real', 'modified_stream: repo:real', 'modified_stream: sibling:noise', 'modified_stream: sibling:noise', 'modified_stream: sibling:noise', 'modified_stream: repo:real', 'modified_stream: repo:real', 'modified_stream: repo:real']
+    filtered to root entry only: ['added_stream: repo:real', 'modified_stream: repo:real', 'modified_stream: repo:real', 'modified_stream: repo:real', 'modified_stream: repo:real']
+
+degenerate case: can a drive root be opened as a parent watch?
+    open C:\ as watch: OK
+    (a repo AT a drive root has no parent to watch; that case
+     must fail closed rather than pretend coverage.)
+
+--- source ------------------------------------------------------------
+
+"""F-14.10 measurement 4: can the repo ROOT's own stream ABA be caught by
+watching the root's PARENT, filtered to the root entry?
+
+Measurement 3 showed a recursive watch does not report the watched
+directory's own streams. The root is the one directory in the tree that
+is nobody's child within the watch, so it needs a second watch on the
+parent. Question: does a non-recursive parent watch with stream flags
+report `<rootname>:stream` add/remove, and is a drive root (no parent)
+handled?
+
+No production code touched.
+"""
+from __future__ import annotations
+
+import ctypes
+import os
+import sys
+import tempfile
+import time
+from ctypes import wintypes
+from pathlib import Path
+
+k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+FILE_LIST_DIRECTORY = 0x0001
+FILE_SHARE_ALL = 0x07
+OPEN_EXISTING = 3
+BACKUP = 0x02000000
+OVERLAPPED = 0x40000000
+INVALID = ctypes.c_void_p(-1).value
+STREAM_FLAGS = 0x200 | 0x400 | 0x800
+ACTIONS = {1: "added", 2: "removed", 3: "modified", 4: "renamed_from",
+           5: "renamed_to", 6: "added_stream", 7: "removed_stream",
+           8: "modified_stream", 9: "removed_by_delete"}
+
+
+class _Overlapped(ctypes.Structure):
+    _fields_ = (("Internal", ctypes.c_void_p), ("InternalHigh", ctypes.c_void_p),
+                ("Offset", wintypes.DWORD), ("OffsetHigh", wintypes.DWORD),
+                ("hEvent", wintypes.HANDLE))
+
+
+k32.CreateFileW.restype = wintypes.HANDLE
+k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                            ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                            wintypes.HANDLE]
+k32.CreateEventW.restype = wintypes.HANDLE
+k32.ReadDirectoryChangesW.argtypes = [wintypes.HANDLE, ctypes.c_void_p,
+    wintypes.DWORD, wintypes.BOOL, wintypes.DWORD, wintypes.LPDWORD,
+    ctypes.c_void_p, ctypes.c_void_p]
+k32.GetOverlappedResult.argtypes = [wintypes.HANDLE, ctypes.c_void_p,
+                                    wintypes.LPDWORD, wintypes.BOOL]
+k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+k32.CloseHandle.argtypes = [wintypes.HANDLE]
+k32.CancelIo.argtypes = [wintypes.HANDLE]
+
+
+def watch(watched: Path, recursive: bool, action, notify=STREAM_FLAGS) -> list[str]:
+    handle = k32.CreateFileW(str(watched), FILE_LIST_DIRECTORY, FILE_SHARE_ALL,
+                             None, OPEN_EXISTING, BACKUP | OVERLAPPED, None)
+    if handle == INVALID:
+        return [f"watch failed {ctypes.get_last_error()}"]
+    buf = ctypes.create_string_buffer(64 * 1024)
+    events: list[str] = []
+
+    def arm():
+        ov = _Overlapped()
+        ov.hEvent = k32.CreateEventW(None, True, False, None)
+        n = wintypes.DWORD(0)
+        if not k32.ReadDirectoryChangesW(handle, buf, len(buf), recursive, notify,
+                                         ctypes.byref(n), ctypes.byref(ov), None):
+            events.append(f"arm failed {ctypes.get_last_error()}")
+        return ov
+
+    ov = arm()
+    action()
+    for _ in range(15):
+        if k32.WaitForSingleObject(ov.hEvent, 400) != 0:
+            break
+        got = wintypes.DWORD(0)
+        if not k32.GetOverlappedResult(handle, ctypes.byref(ov), ctypes.byref(got), False):
+            break
+        if got.value == 0:
+            events.append("OVERFLOW"); ov = arm(); continue
+        off = 0
+        while True:
+            nxt = int.from_bytes(buf[off:off + 4], "little")
+            act = int.from_bytes(buf[off + 4:off + 8], "little")
+            ln = int.from_bytes(buf[off + 8:off + 12], "little")
+            name = bytes(buf[off + 12:off + 12 + ln]).decode("utf-16-le")
+            events.append(f"{ACTIONS.get(act, f'action-{act}')}: {name}")
+            if not nxt:
+                break
+            off += nxt
+        ov = arm()
+    k32.CancelIo(handle)
+    k32.CloseHandle(handle)
+    return events
+
+
+def main() -> int:
+    print("F-14.10 measurement 4 — catching the ROOT's own stream via the parent")
+    print("=" * 74)
+    base = Path(tempfile.mkdtemp(dir=r"C:\Users\nicol\AppData\Local\Temp"))
+    try:
+        root = base / "repo"
+        root.mkdir()
+        (root / "keep.txt").write_text("x\n", encoding="utf-8")
+
+        def root_stream():
+            time.sleep(0.15)
+            open(f"{root}:on-root", "w", encoding="utf-8").write("R")
+            time.sleep(0.05)
+            os.remove(f"{root}:on-root")
+            time.sleep(0.05)
+
+        print("parent watch, NON-recursive, stream flags:")
+        ev = watch(base, False, root_stream)
+        print(f"    {ev}")
+        rootname = root.name
+        relevant = [e for e in ev if f"{rootname}:" in e]
+        print(f"    events naming the root entry: {relevant}")
+        print(f"    root stream ABA caught: {any('added_stream' in e for e in relevant)}")
+        print()
+
+        # noise check: a sibling of the root changing must be filterable
+        sibling = base / "sibling"
+        sibling.mkdir()
+
+        def sibling_and_root():
+            time.sleep(0.15)
+            open(f"{sibling}:noise", "w", encoding="utf-8").write("N")
+            open(f"{root}:real", "w", encoding="utf-8").write("R")
+            time.sleep(0.05)
+            os.remove(f"{sibling}:noise")
+            os.remove(f"{root}:real")
+            time.sleep(0.05)
+        print("parent watch with a noisy sibling (must be filterable by name):")
+        ev = watch(base, False, sibling_and_root)
+        root_events = [e for e in ev if e.split(': ', 1)[-1].split(':')[0] == rootname]
+        print(f"    all: {ev}")
+        print(f"    filtered to root entry only: {root_events}")
+        print()
+
+        # is a drive root watchable as a parent? (the degenerate case)
+        print("degenerate case: can a drive root be opened as a parent watch?")
+        h = k32.CreateFileW("C:\\", FILE_LIST_DIRECTORY, FILE_SHARE_ALL, None,
+                            OPEN_EXISTING, BACKUP | OVERLAPPED, None)
+        print(f"    open C:\\ as watch: {'OK' if h != INVALID else 'FAILED ' + str(ctypes.get_last_error())}")
+        if h != INVALID:
+            k32.CloseHandle(h)
+        print("    (a repo AT a drive root has no parent to watch; that case")
+        print("     must fail closed rather than pretend coverage.)")
+    finally:
+        import shutil
+        shutil.rmtree(base, ignore_errors=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+==========================================================================
+the USN change journal records the ABA, and its elevation precondition
+==========================================================================
+script: scratchpad/aba_usn.py   exit: 0
+
+F-14.10 measurement 2 — USN change journal, in this privilege context
+==========================================================================
+python: 3.12.14
+volume: C:
+
+open \\.\C: GENERIC_READ -> OK
+FSCTL_QUERY_USN_JOURNAL -> OK
+    journal_id    : 133763934167324775
+    first_usn     : 51606716416
+    next_usn      : 51643754192
+    lowest_valid  : 0
+    max_usn       : 17592185978880
+    max_size      : 33554432
+    alloc_delta   : 8388608
+
+journal id stable across interval: True
+start usn still >= lowest_valid:   True
+
+records read from our start_usn: 28
+of which touch a named stream:   10
+    v2 frn=40800000012fba7 name='subdir'                 STREAM_CHANGE
+    v2 frn=40800000012fba7 name='subdir'                 NAMED_DATA_EXTEND|STREAM_CHANGE
+    v2 frn=40800000012fba7 name='subdir'                 NAMED_DATA_EXTEND|STREAM_CHANGE|CLOSE
+    v2 frn=40800000012fba7 name='subdir'                 STREAM_CHANGE
+    v2 frn=40800000012fba7 name='subdir'                 STREAM_CHANGE|CLOSE
+    v2 frn=2f8000000130ab6 name='file.txt'               STREAM_CHANGE
+    v2 frn=2f8000000130ab6 name='file.txt'               NAMED_DATA_EXTEND|STREAM_CHANGE
+    v2 frn=2f8000000130ab6 name='file.txt'               NAMED_DATA_EXTEND|STREAM_CHANGE|CLOSE
+    v2 frn=2f8000000130ab6 name='file.txt'               STREAM_CHANGE
+    v2 frn=2f8000000130ab6 name='file.txt'               STREAM_CHANGE|CLOSE
+
+INTERPRETATION
+  A STREAM_CHANGE / NAMED_DATA_* record for our directory proves
+  the ABA happened even though before == after. But it depends on
+  the volume handle opening at all, which is the elevation gate
+  shown at the top.
+
+--- source ------------------------------------------------------------
+
+"""F-14.10 measurement 2: the USN change journal as an ABA-proof primitive,
+and its preconditions in THIS process's privilege context.
+
+The USN journal is append-only and monotonic: it records that a change
+happened even when the change is later reverted, which is exactly the
+version-tag that defeats A->B->A. But it has hard preconditions, and the
+whole point of this unit is to find out which of them hold WITHOUT
+assuming: is the journal enabled, can THIS process (unelevated) read it,
+does a directory-stream create+delete leave a STREAM_CHANGE record, and
+can journal deletion/purge be detected.
+
+Read-only against the real volume except for a stream ABA on a temp file
+and directory. No production code touched.
+"""
+from __future__ import annotations
+
+import ctypes
+import struct
+import sys
+import tempfile
+from ctypes import wintypes
+from pathlib import Path
+
+k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+GENERIC_READ = 0x80000000
+FILE_SHARE_ALL = 0x07
+OPEN_EXISTING = 3
+INVALID = ctypes.c_void_p(-1).value
+
+FSCTL_QUERY_USN_JOURNAL = 0x000900F4
+FSCTL_READ_USN_JOURNAL = 0x000900BB
+FSCTL_ENUM_USN_DATA = 0x000900B3
+
+USN_REASON = {
+    0x00000001: "DATA_OVERWRITE", 0x00000002: "DATA_EXTEND",
+    0x00000004: "DATA_TRUNCATION", 0x00000010: "NAMED_DATA_OVERWRITE",
+    0x00000020: "NAMED_DATA_EXTEND", 0x00000040: "NAMED_DATA_TRUNCATION",
+    0x00000100: "FILE_CREATE", 0x00000200: "FILE_DELETE",
+    0x00000400: "EA_CHANGE", 0x00000800: "SECURITY_CHANGE",
+    0x00001000: "RENAME_OLD_NAME", 0x00002000: "RENAME_NEW_NAME",
+    0x00004000: "INDEXABLE_CHANGE", 0x00008000: "BASIC_INFO_CHANGE",
+    0x00010000: "HARD_LINK_CHANGE", 0x00020000: "COMPRESSION_CHANGE",
+    0x00040000: "ENCRYPTION_CHANGE", 0x00080000: "OBJECT_ID_CHANGE",
+    0x00100000: "REPARSE_POINT_CHANGE", 0x00200000: "STREAM_CHANGE",
+    0x00400000: "TRANSACTED_CHANGE", 0x80000000: "CLOSE",
+}
+
+k32.CreateFileW.restype = wintypes.HANDLE
+k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                            ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                            wintypes.HANDLE]
+k32.DeviceIoControl.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p,
+                                wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+                                wintypes.LPDWORD, ctypes.c_void_p]
+k32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+
+def open_volume(drive: str) -> tuple[int | None, int]:
+    handle = k32.CreateFileW(f"\\\\.\\{drive}", GENERIC_READ, FILE_SHARE_ALL,
+                             None, OPEN_EXISTING, 0, None)
+    if handle == INVALID:
+        return None, ctypes.get_last_error()
+    return handle, 0
+
+
+def query_journal(handle: int) -> tuple[dict | None, int]:
+    out = ctypes.create_string_buffer(80)
+    returned = wintypes.DWORD(0)
+    ok = k32.DeviceIoControl(handle, FSCTL_QUERY_USN_JOURNAL, None, 0,
+                             out, len(out), ctypes.byref(returned), None)
+    if not ok:
+        return None, ctypes.get_last_error()
+    # USN_JOURNAL_DATA_V0: journalID, firstUsn, nextUsn, lowestValidUsn,
+    # maxUsn, maximumSize, allocationDelta (all 8 bytes except last two)
+    jid, first, nxt, lowest, maxusn, maxsize, alloc = struct.unpack(
+        "<QqqqqQQ", out.raw[:56])
+    return {"journal_id": jid, "first_usn": first, "next_usn": nxt,
+            "lowest_valid": lowest, "max_usn": maxusn,
+            "max_size": maxsize, "alloc_delta": alloc}, 0
+
+
+def read_journal(handle: int, start_usn: int, jid: int) -> tuple[list, int, int]:
+    """Read records from start_usn forward. Returns (records, next, err)."""
+    # READ_USN_JOURNAL_DATA_V0: StartUsn q, ReasonMask I, ReturnOnlyOnClose I,
+    # Timeout Q, BytesToWaitFor Q, UsnJournalID Q = 40 bytes.
+    read_in = struct.pack("<qIIQQQ", start_usn, 0xFFFFFFFF, 0, 0, 0, jid)
+    buf = ctypes.create_string_buffer(64 * 1024)
+    returned = wintypes.DWORD(0)
+    records: list[tuple[int, int, int]] = []  # (frn, parent_frn, reason)
+    ok = k32.DeviceIoControl(handle, FSCTL_READ_USN_JOURNAL,
+                             read_in, len(read_in), buf, len(buf),
+                             ctypes.byref(returned), None)
+    if not ok:
+        return [], 0, ctypes.get_last_error()
+    if returned.value < 8:
+        return [], start_usn, 0
+    next_usn = struct.unpack("<q", buf.raw[:8])[0]
+    offset = 8
+    data = buf.raw[:returned.value]
+    while offset < returned.value:
+        rec_len = struct.unpack("<I", data[offset:offset + 4])[0]
+        if rec_len == 0:
+            break
+        # USN_RECORD_V2 layout
+        major = struct.unpack("<H", data[offset + 4:offset + 6])[0]
+        frn = struct.unpack("<Q", data[offset + 8:offset + 16])[0]
+        parent = struct.unpack("<Q", data[offset + 16:offset + 24])[0]
+        reason = struct.unpack("<I", data[offset + 40:offset + 44])[0]
+        name_len = struct.unpack("<H", data[offset + 56:offset + 58])[0]
+        name_off = struct.unpack("<H", data[offset + 58:offset + 60])[0]
+        name = data[offset + name_off:offset + name_off + name_len].decode(
+            "utf-16-le", "replace")
+        records.append((frn, parent, reason, name, major))
+        offset += rec_len
+    return records, next_usn, 0
+
+
+def reasons(mask: int) -> str:
+    return "|".join(v for k, v in USN_REASON.items() if mask & k) or "none"
+
+
+def main() -> int:
+    print("F-14.10 measurement 2 — USN change journal, in this privilege context")
+    print("=" * 74)
+    print(f"python: {sys.version.split()[0]}")
+    drive = Path(r"C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi").drive
+    print(f"volume: {drive}")
+    print()
+
+    handle, err = open_volume(drive)
+    if handle is None:
+        print(f"open \\\\.\\{drive} GENERIC_READ -> FAILED err={err} "
+              f"({'ACCESS DENIED - needs elevation' if err == 5 else 'other'})")
+        print()
+        print("CONCLUSION: the USN journal is UNREADABLE in this context.")
+        print("If this is the capture's normal privilege level, the USN journal")
+        print("cannot be a dependency; it would have to be a fail-closed")
+        print("precondition that is essentially always unmet, i.e. useless here.")
+        return 0
+    print(f"open \\\\.\\{drive} GENERIC_READ -> OK")
+    try:
+        info, err = query_journal(handle)
+        if info is None:
+            print(f"FSCTL_QUERY_USN_JOURNAL -> FAILED err={err} "
+                  f"({'journal not active' if err in (1179, 1181) else 'other'})")
+            return 0
+        print(f"FSCTL_QUERY_USN_JOURNAL -> OK")
+        for key, value in info.items():
+            print(f"    {key:14s}: {value}")
+        start = info["next_usn"]
+        jid = info["journal_id"]
+        print()
+
+        # Perform a directory-stream ABA and a file-stream ABA on the volume.
+        base = Path(tempfile.mkdtemp(dir=r"C:\Users\nicol\AppData\Local\Temp"))
+        import os
+        try:
+            d = base / "subdir"; d.mkdir()
+            (d / "keep.txt").write_text("x\n", encoding="utf-8")
+            f = base / "file.txt"; f.write_text("BASE\n", encoding="utf-8")
+            # DIRECTORY stream ABA
+            open(f"{d}:aba", "w", encoding="utf-8").write("T"); os.remove(f"{d}:aba")
+            # FILE stream ABA
+            open(f"{f}:aba", "w", encoding="utf-8").write("T"); os.remove(f"{f}:aba")
+            # benign: child-file create+delete (the forgiven directory bump)
+            (d / "temp.txt").write_text("z\n", encoding="utf-8")
+            os.remove(d / "temp.txt")
+        finally:
+            import shutil
+            shutil.rmtree(base, ignore_errors=True)
+
+        info2, _ = query_journal(handle)
+        print(f"journal id stable across interval: {info2['journal_id'] == jid}")
+        print(f"start usn still >= lowest_valid:   {start >= info2['lowest_valid']}")
+        print()
+
+        records, nxt, err = read_journal(handle, start, jid)
+        if err:
+            print(f"FSCTL_READ_USN_JOURNAL -> FAILED err={err}")
+            return 0
+        stream_records = [r for r in records if r[2] & 0x00200000
+                          or r[2] & 0x00000070]  # STREAM_CHANGE or NAMED_DATA_*
+        print(f"records read from our start_usn: {len(records)}")
+        print(f"of which touch a named stream:   {len(stream_records)}")
+        for frn, parent, reason, name, major in stream_records[:12]:
+            print(f"    v{major} frn={frn:x} name={name!r:24s} {reasons(reason)}")
+        print()
+        print("INTERPRETATION")
+        print("  A STREAM_CHANGE / NAMED_DATA_* record for our directory proves")
+        print("  the ABA happened even though before == after. But it depends on")
+        print("  the volume handle opening at all, which is the elevation gate")
+        print("  shown at the top.")
+    finally:
+        k32.CloseHandle(handle)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+

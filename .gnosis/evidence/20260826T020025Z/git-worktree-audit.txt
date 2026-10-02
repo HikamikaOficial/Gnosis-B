@@ -1,0 +1,158 @@
+F-17 BLOCKER 1 — linked worktree topology and fail-closed (OS-real)
+==========================================================================
+tree: 0629b8b253ff70ae24385709b7e99fd094fb4de3
+
+Real repo + `git worktree add`. All trust-relevant machinery (hooks,
+config, HEAD, index) lives OUTSIDE the watched tree; a capture inside the
+worktree now returns MACHINERY_UNOBSERVABLE / exit 10, running no checks.
+
+--- output ------------------------------------------------------------
+F-17 BLOCKER 1 — linked worktree topology (OS-real, Windows/NTFS)
+python 3.12.14
+
+1. TOPOLOGY
+   worktree toplevel : C:/Users/nicol/AppData/Local/Temp/tmp8nqanivx/wt
+   worktree git-dir  : C:/Users/nicol/AppData/Local/Temp/tmp8nqanivx/main/.git/worktrees/wt
+   worktree common   : C:/Users/nicol/AppData/Local/Temp/tmp8nqanivx/main/.git
+   wt/.git is a FILE : True
+   wt/.git contents  : 'gitdir: C:/Users/nicol/AppData/Local/Temp/tmp8nqanivx/main/.git/worktrees/wt'
+
+2. WHERE TRUST-RELEVANT MACHINERY LIVES
+   HEAD (per-worktree)   : exists=True  inside_worktree=False  C:\Users\nicol\AppData\Local\Temp\tmp8nqanivx\main\.git\worktrees\wt\HEAD
+   index (per-worktree)  : exists=True  inside_worktree=False  C:\Users\nicol\AppData\Local\Temp\tmp8nqanivx\main\.git\worktrees\wt\index
+   logs/HEAD (per-wt)    : exists=True  inside_worktree=False  C:\Users\nicol\AppData\Local\Temp\tmp8nqanivx\main\.git\worktrees\wt\logs\HEAD
+   config (COMMON)       : exists=True  inside_worktree=False  C:\Users\nicol\AppData\Local\Temp\tmp8nqanivx\main\.git\config
+   hooks/ (COMMON)       : exists=True  inside_worktree=False  C:\Users\nicol\AppData\Local\Temp\tmp8nqanivx\main\.git\hooks
+   refs/ (COMMON)        : exists=True  inside_worktree=False  C:\Users\nicol\AppData\Local\Temp\tmp8nqanivx\main\.git\refs
+   packed-refs (COMMON)  : exists=False inside_worktree=False  C:\Users\nicol\AppData\Local\Temp\tmp8nqanivx\main\.git\packed-refs
+
+3. THE BYPASS: a capture INSIDE the worktree, hook installed in the
+   COMMON dir (the real hooks), which is OUTSIDE the watched tree.
+   covered files seen: 1
+   check tail        : (none)
+   boundary verdict  : MACHINERY_UNOBSERVABLE
+   evidence_valid    : False
+   exit_code         : 10
+   hook now exists   : False
+   -> if verdict is CLEAN/valid, a worktree capture is BYPASSABLE:
+      the machinery that runs on the next git op was tampered and
+      the capture did not see it.
+
+4. per-worktree .git redirect file written during the interval
+   verdict           : MACHINERY_UNOBSERVABLE  valid=False  exit=10
+   violations        : ['.git is a redirect file (linked worktree, submodule, or separate-git-dir): the git machinery that runs the checks lives outside the watched tree and cannot be observed']
+
+--- source ------------------------------------------------------------
+
+"""F-17 BLOCKER 1: the real .git topology of a linked worktree on Windows/NTFS,
+and whether a capture run inside one can be bypassed.
+
+OS-real: creates a real repo and a real `git worktree add`. No simulation.
+
+No production code modified.
+"""
+from __future__ import annotations
+
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+REPO = Path(r"C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi")
+sys.path.insert(0, str(REPO / "src"))
+from gnosis.kernel.evidence_capture import (  # noqa: E402
+    CheckCommand, covered_paths, run_capture)
+
+
+def git(cwd, *a, check=True):
+    r = subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True)
+    if check and r.returncode != 0:
+        raise RuntimeError(f"git {a}: {r.stderr}")
+    return r.stdout.strip()
+
+
+def main() -> int:
+    print("F-17 BLOCKER 1 — linked worktree topology (OS-real, Windows/NTFS)")
+    print(f"python {sys.version.split()[0]}")
+    with tempfile.TemporaryDirectory(dir=r"C:\Users\nicol\AppData\Local\Temp") as t:
+        base = Path(t)
+        main = base / "main"; main.mkdir()
+        git(main, "init")
+        git(main, "config", "user.email", "t@e.com")
+        git(main, "config", "user.name", "T")
+        git(main, "config", "commit.gpgsign", "false")
+        (main / "a.txt").write_text("A\n", encoding="utf-8")
+        git(main, "add", "-A"); git(main, "commit", "-m", "init")
+        git(main, "branch", "feature")
+        wt = base / "wt"
+        git(main, "worktree", "add", str(wt), "feature")
+
+        print("\n1. TOPOLOGY")
+        print(f"   worktree toplevel : {git(wt, 'rev-parse', '--show-toplevel')}")
+        print(f"   worktree git-dir  : {git(wt, 'rev-parse', '--git-dir')}")
+        print(f"   worktree common   : {git(wt, 'rev-parse', '--git-common-dir')}")
+        dotgit = wt / ".git"
+        print(f"   wt/.git is a FILE : {dotgit.is_file()}")
+        if dotgit.is_file():
+            print(f"   wt/.git contents  : {dotgit.read_text(encoding='utf-8').strip()!r}")
+
+        # Resolve absolute gitdir/common-dir
+        gitdir = Path(git(wt, "rev-parse", "--absolute-git-dir"))
+        common = git(wt, "rev-parse", "--git-common-dir")
+        commonp = (gitdir / common) if not Path(common).is_absolute() else Path(common)
+        commonp = commonp.resolve()
+        print(f"\n2. WHERE TRUST-RELEVANT MACHINERY LIVES")
+        for name, path in [
+            ("HEAD (per-worktree)", gitdir / "HEAD"),
+            ("index (per-worktree)", gitdir / "index"),
+            ("logs/HEAD (per-wt)", gitdir / "logs" / "HEAD"),
+            ("config (COMMON)", commonp / "config"),
+            ("hooks/ (COMMON)", commonp / "hooks"),
+            ("refs/ (COMMON)", commonp / "refs"),
+            ("packed-refs (COMMON)", commonp / "packed-refs"),
+        ]:
+            inside = str(path.resolve()).lower().startswith(str(wt.resolve()).lower())
+            print(f"   {name:22s}: exists={path.exists()!s:5s} inside_worktree={inside}  {path}")
+
+        print("\n3. THE BYPASS: a capture INSIDE the worktree, hook installed in the")
+        print("   COMMON dir (the real hooks), which is OUTSIDE the watched tree.")
+        hook = commonp / "hooks" / "pre-commit"
+
+        def install_common_hook():
+            hook.write_text("#!/bin/sh\n", encoding="utf-8")  # placeholder; real write below
+        # The check runs with cwd=worktree; it targets the common hooks dir by
+        # resolving the common-dir itself, the way an adversary would.
+        check = CheckCommand("check", (
+            sys.executable, "-c",
+            "import subprocess, os, sys;"
+            "cd=subprocess.run(['git','rev-parse','--git-common-dir'],"
+            "capture_output=True,text=True).stdout.strip();"
+            "h=os.path.join(cd,'hooks','pre-commit');"
+            "open(h,'w',encoding='utf-8').write('evil');"
+            "print('installed', os.path.abspath(h))"))
+        cap = run_capture(wt, [check], base / "staging")
+        print(f"   covered files seen: {len(covered_paths(wt))}")
+        print(f"   check tail        : {cap.checks[0].tail if cap.checks else '(none)'}")
+        print(f"   boundary verdict  : {cap.boundary.verdict.value}")
+        print(f"   evidence_valid    : {cap.evidence_valid}")
+        print(f"   exit_code         : {cap.exit_code}")
+        print(f"   hook now exists   : {(commonp / 'hooks' / 'pre-commit').exists()}")
+        print("   -> if verdict is CLEAN/valid, a worktree capture is BYPASSABLE:")
+        print("      the machinery that runs on the next git op was tampered and")
+        print("      the capture did not see it.")
+
+        print("\n4. per-worktree .git redirect file written during the interval")
+        def rewrite_redirect():
+            (wt / ".git").write_text("gitdir: C:/evil\n", encoding="utf-8")
+        check2 = CheckCommand("check", (
+            sys.executable, "-c",
+            "open('.git','w',encoding='utf-8').write('gitdir: C:/evil')"))
+        cap2 = run_capture(wt, [check2], base / "staging2")
+        print(f"   verdict           : {cap2.boundary.verdict.value}  "
+              f"valid={cap2.evidence_valid}  exit={cap2.exit_code}")
+        print(f"   violations        : {list(cap2.boundary.violations)[:3]}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,54 @@
+MUTATION CHECK — F-34, third independent review
+========================================================================
+targeted suite: tests/test_no_invalid_done.py tests/test_verification.py tests/test_convergence.py tests/test_integration.py tests/test_pipeline.py
+
+BASELINE (repair in place): exit=0  203 passed, 39 subtests passed in 223.53s (0:03:43)
+
+M1: CompositeVerifier reads `passed` for truthiness again (`all(r.passed for r in results)`)
+  files:  src/gnosis/kernel/verification.py
+  result: exit=1  1 failed, 44 passed, 39 subtests passed in 16.80s
+  verdict: CAUGHT
+
+M2: an empty CompositeVerifier can be constructed again
+  files:  src/gnosis/kernel/verification.py
+  result: exit=1  1 failed, 52 passed, 39 subtests passed in 16.87s
+  verdict: CAUGHT
+
+M3: `all([]) is True` is restored end to end: the constructor accepts an empty collection AND `run` no longer guards it
+  files:  src/gnosis/kernel/verification.py
+  result: exit=1  1 failed, 52 passed, 39 subtests passed in 16.99s
+  verdict: CAUGHT
+
+M4: a malformed member is collapsed into an ordinary FAILED
+  files:  src/gnosis/kernel/verification.py
+  result: exit=1  1 failed, 44 passed, 39 subtests passed in 18.56s
+  verdict: CAUGHT
+
+M5: ConvergenceLoop reads `verification.passed` for truthiness again, and malformed evidence counts as collected
+  files:  src/gnosis/kernel/convergence.py
+  result: exit=1  1 failed, 68 passed, 39 subtests passed in 20.84s
+  verdict: CAUGHT
+
+M6: WorkIntegrator lands on `if not verification.passed`
+  files:  src/gnosis/kernel/integration.py
+  result: exit=1  1 failed, 147 passed, 39 subtests passed in 110.37s (0:01:50)
+  verdict: CAUGHT
+
+M7: the fixer prompt reads `not verification.passed` again, so invalid evidence is described as nothing at all
+  files:  src/gnosis/adapters/cli_review.py
+  result: exit=1  1 failed, 75 passed, 39 subtests passed in 21.55s
+  verdict: CAUGHT
+
+M8: GovernedPipeline derives COMPLETED from CONVERGED alone
+  files:  src/gnosis/director/pipeline.py
+  result: exit=1  1 failed, 195 passed, 39 subtests passed in 207.92s (0:03:27)
+  verdict: CAUGHT
+
+M9: the shared verdict itself reads truthiness (round-2 mutant, kept: it is the single point everything now derives from)
+  files:  src/gnosis/kernel/verification.py
+  result: exit=1  1 failed, 2 passed in 0.54s
+  verdict: CAUGHT
+
+RESTORED: exit=0  203 passed, 39 subtests passed in 232.30s (0:03:52)
+
+mutants: 9  survived/aborted: 0

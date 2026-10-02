@@ -1,0 +1,10 @@
+DDM1: APPLIED / CAUGHT  (use launch observation as both sides of the diff)
+DDM2: APPLIED / CAUGHT  (digests_match lies (mask a real digest mismatch))
+DDM3: APPLIED / CAUGHT  (write diagnostics inside an observed root)
+DDM4: APPLIED / CAUGHT  (report only the first changed component; hide the rest)
+DDM5: APPLIED / CAUGHT  (ignore SDDL / security-descriptor changes)
+DDM6: APPLIED / CAUGHT  (ignore content-manifest (tree) changes)
+DDM7: APPLIED / CAUGHT  (treat a diagnostics failure as permission to continue)
+DDM8: APPLIED / CAUGHT  (reobserve twice; diff the wrong (later) observation)
+
+8/8 applied identity-delta mutants CAUGHT

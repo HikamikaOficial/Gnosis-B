@@ -64,6 +64,7 @@ from .convergence import (
     ReviewVerdict,
     classify_findings,
 )
+from .execution_scope import ExecutionScope
 from .file_lock import FileLock, lock_path_for
 from .git_evidence import capture_git_evidence, tamper_fingerprint
 from .policy import (
@@ -74,6 +75,7 @@ from .policy import (
     parse_command,
     resolve_escalation,
 )
+from .subject import SubjectIdentity, observe_subject
 from .verification import (
     Evidence,
     VerificationVerdict,
@@ -166,6 +168,29 @@ class IntegrationResult:
         }
 
 
+@dataclass(frozen=True)
+class PreparedIntegration:
+    """Verified merge awaiting advancement; never itself an INTEGRATED verdict."""
+
+    task_id: str
+    branch: str
+    target_branch: str
+    task_sha: str
+    base_sha: str
+    merged_sha: str
+    checkpoint_ref: str
+    changed_paths: tuple[str, ...]
+    verification: Evidence
+    rereview: ReviewReport | None = None
+    rereview_gated: tuple[GatedFinding, ...] = ()
+
+    def completed(self) -> IntegrationResult:
+        return IntegrationResult(IntegrationOutcome.INTEGRATED, self.task_id, self.branch,
+            "integrated", self.base_sha, self.merged_sha, self.checkpoint_ref,
+            changed_paths=self.changed_paths, verification=self.verification,
+            rereview=self.rereview, rereview_gated=self.rereview_gated)
+
+
 def _git(cwd: Path, args: list[str], timeout_s: float = 120.0
          ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -201,6 +226,9 @@ class WorkIntegrator:
         policy_actor: str = "agent://unattributed",
         re_reviewer: Callable[[Path], ReviewReport] | None = None,
         convergence_policy: ConvergencePolicy | None = None,
+        scope: ExecutionScope | None = None,
+        on_prepared: Callable[[PreparedIntegration], None] | None = None,
+        staging_root: Path | None = None,
     ) -> None:
         self.source_repo = Path(source_repo)
         self.worktrees = worktrees
@@ -220,6 +248,9 @@ class WorkIntegrator:
         self.target_branch = target_branch or self._current_branch()
         self.integration_root = Path(
             integration_root or (self.source_repo.parent / ".gnosis-integration"))
+        # Keep the coordination lock protected even when candidate verification
+        # needs a Worker-readable/writable scratch worktree.
+        self.staging_root = Path(staging_root) if staging_root is not None else self.integration_root
         self.lock_timeout_s = lock_timeout_s
         # Integration is the most sensitive action in this system: it
         # moves the branch everyone else builds on. Rule 13 is
@@ -239,6 +270,12 @@ class WorkIntegrator:
         # convergence but not landing would be a contradiction an
         # operator could only discover by experiment.
         self.convergence_policy = convergence_policy or ConvergencePolicy(max_rounds=1)
+        self.scope = scope
+        self.on_prepared = on_prepared
+
+    def _guard(self) -> None:
+        if self.scope is not None:
+            self.scope.check()
 
     def _current_branch(self) -> str | None:
         proc = _git(self.source_repo, ["rev-parse", "--abbrev-ref", "HEAD"])
@@ -254,6 +291,7 @@ class WorkIntegrator:
                   waive_stale_review: bool = False,
                   re_reviewer: Callable[[Path], ReviewReport] | None = None,
                   ) -> IntegrationResult:
+        self._guard()
         branch = self.worktrees.planned_branch(task_id)
 
         if convergence is None or convergence.outcome is not ConvergenceOutcome.CONVERGED:
@@ -286,7 +324,15 @@ class WorkIntegrator:
         require_rereview = stale and not waive_stale_review
 
         with FileLock(lock_path_for(self._lock_path()), timeout_s=self.lock_timeout_s):
-            return self._integrate_locked(task_id, branch, require_rereview, reviewer)
+            self._guard()
+            # The target may have moved while this caller waited for the lock.
+            stale = self._review_is_stale(task_id)
+            if stale and not waive_stale_review and reviewer is None:
+                return IntegrationResult(IntegrationOutcome.REVIEW_STALE, task_id, branch,
+                                         "rereview_required_but_no_reviewer_configured")
+            require_rereview = stale and not waive_stale_review
+            reviewed_subject = convergence.rounds[-1].subject if convergence.rounds else None
+            return self._integrate_locked(task_id, branch, require_rereview, reviewer, reviewed_subject)
 
     def _review_is_stale(self, task_id: str) -> bool:
         """Did the target move after this task forked from it?
@@ -324,6 +370,7 @@ class WorkIntegrator:
     def _integrate_locked(self, task_id: str, branch: str,
                           require_rereview: bool = False,
                           reviewer: Callable[[Path], ReviewReport] | None = None,
+                          reviewed_subject: SubjectIdentity | None = None,
                           ) -> IntegrationResult:
         evidence = capture_git_evidence(self.source_repo)
         if not evidence.is_repo or evidence.head_sha is None:
@@ -368,7 +415,12 @@ class WorkIntegrator:
         # branch, through the hardened path that already refuses
         # mid-merge/mid-rebase states and off-branch HEADs (ADR-0007).
         try:
+            self._guard()
+            if reviewed_subject is not None and observe_subject(Path(handle.path)) != reviewed_subject:
+                raise WorktreeError("task changed after its byte-bound review")
             self.worktrees.autosave(handle, reason=f"integration:{task_id}")
+            if reviewed_subject is not None and observe_subject(Path(handle.path)) != reviewed_subject:
+                raise WorktreeError("autosave changed reviewed identity; commit before review is required")
         except WorktreeError as exc:
             return IntegrationResult(
                 IntegrationOutcome.INTEGRATION_ERROR, task_id, branch,
@@ -376,7 +428,11 @@ class WorkIntegrator:
                 base_sha=base_sha, detail={"error": str(exc)},
             )
 
-        changed = self._changed_paths(base_sha, branch)
+        task_sha = _git(self.source_repo, ["rev-parse", branch]).stdout.strip()
+        if reviewed_subject is not None and task_sha != reviewed_subject.head_sha:
+            return IntegrationResult(IntegrationOutcome.INTEGRATION_ERROR, task_id, branch,
+                                     "task_branch_moved_after_review", base_sha=base_sha)
+        changed = self._changed_paths(base_sha, task_sha)
 
         # The gate runs AFTER autosave, not before. Asking first meant the
         # snapshot described only what was already committed, while
@@ -404,11 +460,12 @@ class WorkIntegrator:
             )
 
         self._sweep_stale_staging()
-        staging = self.integration_root / f"merge-{task_id}-{uuid.uuid4().hex[:8]}"
+        self.staging_root.mkdir(parents=True, exist_ok=True)
+        staging = self.staging_root / f"merge-{task_id}-{uuid.uuid4().hex[:8]}"
         try:
             return self._merge_and_verify(
                 task_id, branch, base_sha, checkpoint_ref, changed, staging,
-                require_rereview, reviewer)
+                require_rereview, reviewer, task_sha)
         finally:
             self._discard(staging)
 
@@ -416,6 +473,7 @@ class WorkIntegrator:
         self, task_id: str, branch: str, base_sha: str, checkpoint_ref: str,
         changed: tuple[str, ...], staging: Path, require_rereview: bool = False,
         reviewer: Callable[[Path], ReviewReport] | None = None,
+        task_sha: str | None = None,
     ) -> IntegrationResult:
         add = _git(self.source_repo, ["worktree", "add", "--detach", str(staging), base_sha])
         if add.returncode != 0:
@@ -426,7 +484,9 @@ class WorkIntegrator:
                 detail={"stderr": add.stderr.strip()[:2000]},
             )
 
-        merge = _git(staging, ["merge", "--no-ff", "--no-edit", branch])
+        if task_sha is None:
+            task_sha = _git(self.source_repo, ["rev-parse", branch]).stdout.strip()
+        merge = _git(staging, ["merge", "--no-ff", "--no-edit", task_sha])
         if merge.returncode != 0:
             conflicts = tuple(
                 line.strip() for line in
@@ -532,22 +592,97 @@ class WorkIntegrator:
                 changed_paths=changed, verification=verification,
                 detail={"observed_head": still},
             )
-        advance = _git(self.source_repo, ["merge", "--ff-only", merged_sha])
+        assert self.target_branch is not None
+        prepared = PreparedIntegration(task_id, branch, self.target_branch, task_sha, base_sha,
+            merged_sha, checkpoint_ref, changed, verification, rereview, gated)
+        self._guard()
+        # Keep the verified commit reachable after staging cleanup/process death.
+        # The rollback checkpoint names the old base; this ref preserves the new
+        # commit whose verification is about to be durably recorded.
+        keep = _git(self.source_repo, ["update-ref",
+            f"refs/gnosis/prepared/{task_id}/{merged_sha}", merged_sha])
+        if keep.returncode != 0:
+            return IntegrationResult(IntegrationOutcome.INTEGRATION_ERROR, task_id, branch,
+                                     "prepared_commit_could_not_be_retained", base_sha=base_sha)
+        if self.on_prepared is not None:
+            self.on_prepared(prepared)
+        return self._advance_prepared(prepared, already_gated=True)
+
+    def resume_prepared(self, prepared: PreparedIntegration) -> IntegrationResult:
+        """Complete an already verified merge from a trusted durable receipt."""
+        self._guard()
+        with FileLock(lock_path_for(self._lock_path()), timeout_s=self.lock_timeout_s):
+            return self._advance_prepared(prepared)
+
+    def _advance_prepared(self, prepared: PreparedIntegration, *,
+                          already_gated: bool = False) -> IntegrationResult:
+        self._guard()
+        def refused(reason: str) -> IntegrationResult:
+            return IntegrationResult(IntegrationOutcome.INTEGRATION_ERROR,
+                prepared.task_id, prepared.branch, reason, base_sha=prepared.base_sha,
+                merged_sha=prepared.merged_sha, checkpoint_ref=prepared.checkpoint_ref,
+                changed_paths=prepared.changed_paths, verification=prepared.verification)
+
+        if (verification_verdict(prepared.verification) is not VerificationVerdict.PASSED
+                or prepared.branch != self.worktrees.planned_branch(prepared.task_id)
+                or prepared.target_branch != self.target_branch
+                or self._current_branch() != self.target_branch):
+            return refused("prepared_integration_identity_or_evidence_invalid")
+        if prepared.rereview is not None:
+            blocking, _ = classify_findings(prepared.rereview, self.convergence_policy, 0)
+            if prepared.rereview.verdict is not ReviewVerdict.PASS or blocking:
+                return refused("prepared_integration_review_invalid")
+        for sha in (prepared.task_sha, prepared.base_sha, prepared.merged_sha):
+            if len(sha) not in (40, 64) or any(c not in "0123456789abcdef" for c in sha):
+                return refused("prepared_integration_commit_invalid")
+        retained = _git(self.source_repo, ["rev-parse",
+            f"refs/gnosis/prepared/{prepared.task_id}/{prepared.merged_sha}"])
+        if retained.returncode != 0 or retained.stdout.strip() != prepared.merged_sha:
+            return refused("prepared_merge_retention_ref_changed")
+        if _git(self.source_repo, ["rev-parse", prepared.branch]).stdout.strip() != prepared.task_sha:
+            return refused("task_branch_moved_after_preparation")
+        for parent in (prepared.task_sha, prepared.base_sha):
+            if _git(self.source_repo, ["merge-base", "--is-ancestor", parent,
+                                      prepared.merged_sha]).returncode != 0:
+                return refused("prepared_merge_does_not_include_its_inputs")
+        # A crash after the advance needs no second merge or re-verification.
+        # The original verified commit must actually be in the target history.
+        if _git(self.source_repo, ["merge-base", "--is-ancestor", prepared.merged_sha,
+                                  "HEAD"]).returncode == 0:
+            self._guard()
+            return prepared.completed()
+        evidence = capture_git_evidence(self.source_repo)
+        if evidence.head_sha != prepared.base_sha or evidence.status_porcelain.strip():
+            return refused("integration_target_changed_after_preparation")
+        if not already_gated:
+            # A fresh merge was gated before preparing it. A recovered merge
+            # must ask again in the new controller/configuration context.
+            refusal = self._gate(prepared.task_id, prepared.branch, prepared.base_sha,
+                                 prepared.changed_paths)
+            if refusal is not None:
+                return refusal
+        self._guard()
+        advance: subprocess.CompletedProcess[str] | None = None
+
+        def commit() -> None:
+            nonlocal advance
+            advance = _git(self.source_repo, ["merge", "--ff-only", prepared.merged_sha])
+
+        if self.scope is not None:
+            self.scope.commit(commit)
+        else:
+            commit()
+        assert advance is not None
         if advance.returncode != 0:
             return IntegrationResult(
-                IntegrationOutcome.INTEGRATION_ERROR, task_id, branch,
-                reason="fast_forward_failed", base_sha=base_sha,
-                merged_sha=merged_sha, checkpoint_ref=checkpoint_ref,
-                changed_paths=changed, verification=verification,
+                IntegrationOutcome.INTEGRATION_ERROR, prepared.task_id, prepared.branch,
+                reason="fast_forward_failed", base_sha=prepared.base_sha,
+                merged_sha=prepared.merged_sha, checkpoint_ref=prepared.checkpoint_ref,
+                changed_paths=prepared.changed_paths, verification=prepared.verification,
                 detail={"stderr": advance.stderr.strip()[:2000]},
             )
-
-        return IntegrationResult(
-            IntegrationOutcome.INTEGRATED, task_id, branch,
-            reason="integrated", base_sha=base_sha, merged_sha=merged_sha,
-            checkpoint_ref=checkpoint_ref, changed_paths=changed,
-            verification=verification, rereview=rereview, rereview_gated=gated,
-        )
+        self._guard()
+        return prepared.completed()
 
     def _gate(self, task_id: str, branch: str, base_sha: str,
               changed_paths: tuple[str, ...]) -> IntegrationResult | None:
@@ -693,9 +828,9 @@ class WorkIntegrator:
         sweep: recovery is reconcile, and it runs under the integration
         lock so it cannot race a live one.
         """
-        if not self.integration_root.exists():
+        if not self.staging_root.exists():
             return
-        for candidate in self.integration_root.glob("merge-*"):
+        for candidate in self.staging_root.glob("merge-*"):
             if candidate.is_dir():
                 self._discard(candidate)
         _git(self.source_repo, ["worktree", "prune"])
@@ -712,7 +847,7 @@ class WorkIntegrator:
         """
         try:
             resolved = staging.resolve()
-            root = self.integration_root.resolve()
+            root = self.staging_root.resolve()
         except OSError:
             return
         if not staging.name.startswith("merge-") or root not in resolved.parents:

@@ -1,0 +1,89 @@
+F-17 STAGE 4 - NEGATIVE CONTROL
+==========================================================================
+A recovery that repairs everything is not a recovery. These controls show
+the durable protocol refuses, and that each refusal is the intended one.
+
+1. POSITIVE  a PUBLISHABLE run with matching trusted context
+   before mark_publishable           : AuthorityUnavailable   <- required AuthorityUnavailable   OK
+   after  mark_publishable           : ANCHORED               <- required ANCHORED   OK
+   retried after committing          : ALREADY_ANCHORED       <- required ALREADY_ANCHORED   OK
+   records in the ledger             : 1                      <- required 1   OK
+
+2. NEGATIVE  a record on disk is NOT a published record
+   ledger holds the record           : 1                      <- required 1   OK
+   watermark commits nothing         : True                   <- required True   OK
+   run state                         : PUBLISHABLE            <- required PUBLISHABLE   OK
+   classified as                     : 1 uncommitted tail record <- required 1 uncommitted tail record   OK
+
+3. NEGATIVE  state may never run ahead of the commit point
+   ANCHORED, commit rolled back      : PublicationCorrupt     <- required PublicationCorrupt   OK
+   no anchor was fabricated          : True                   <- required True   OK
+
+4. NEGATIVE  a damaged commit statement is never read as 'nothing committed'
+   empty file                        : PublicationCorrupt     <- required PublicationCorrupt   OK
+   truncated                         : PublicationCorrupt     <- required PublicationCorrupt   OK
+   not json                          : PublicationCorrupt     <- required PublicationCorrupt   OK
+   unknown schema                    : PublicationCorrupt     <- required PublicationCorrupt   OK
+   extra field                       : PublicationCorrupt     <- required PublicationCorrupt   OK
+
+5. NEGATIVE  a watermark for one record cannot validate another
+   same seq, other record            : PublicationCorrupt     <- required PublicationCorrupt   OK
+   the record it names               : 1                      <- required 1   OK
+
+6. NEGATIVE  committed history is never discarded, and tails are not guessed
+   committed records kept            : 2                      <- required 2   OK
+   committed prefix intact           : True                   <- required True   OK
+   two uncommitted records           : PublicationCorrupt     <- required PublicationCorrupt   OK
+   nothing was deleted               : 3                      <- required 3   OK
+
+7. NEGATIVE  bindings are not ignored merely because the record exists
+   D1 anchored, D2 reconciling       : ('run-1',)             <- required ('run-1',)   OK
+     and it was left alone           : ()                     <- required ()   OK
+   D1 committed, D2 completing it    : PublicationCorrupt     <- required PublicationCorrupt   OK
+     state left untouched            : PUBLISHABLE            <- required PUBLISHABLE   OK
+     its own deployment reconciles it: ('run-1',)             <- required ('run-1',)   OK
+   another epoch, same run_id        : AuthorityUnavailable   <- required AuthorityUnavailable   OK
+   another worker SID                : AuthorityUnavailable   <- required AuthorityUnavailable   OK
+   run_id rebound to another identity: PublicationCorrupt     <- required PublicationCorrupt   OK
+
+8. NEGATIVE  a ledger this protocol did not write is never adopted
+   records but no watermark          : LedgerNotUnderDurableProtocol <- required LedgerNotUnderDurableProtocol   OK
+   no watermark was invented         : False                  <- required False   OK
+
+9. CONTROL  the commit statement is not a constant function
+   digest differs per record         : True                   <- required True   OK
+   watermark advanced 0 -> 1         : 1                      <- required 1   OK
+
+10. THE F0-F9 CRASH MATRIX, from REAL process kills (os._exit, no cleanup,
+    no atexit, no buffer flush). PROCESS/SERVICE CRASH - NOT power loss.
+
+    point   ledger after crash   watermark   run state     retry -> outcome
+    --------------------------------------------------------------------
+    F0      empty                genesis     PUBLISHABLE   ANCHORED
+    F1      partial              genesis     PUBLISHABLE   ANCHORED
+    F2      empty                genesis     PUBLISHABLE   ANCHORED
+    F3      one record           genesis     PUBLISHABLE   ANCHORED
+    F4      one record           genesis     PUBLISHABLE   ANCHORED
+    F5      one record           genesis     PUBLISHABLE   ANCHORED
+    F6      one record           genesis     PUBLISHABLE   ANCHORED
+    F7      one record           committed   PUBLISHABLE   ALREADY_ANCHORED
+    F8      one record           committed   PUBLISHABLE   ALREADY_ANCHORED
+    F8@late one record           committed   ANCHORED      ALREADY_ANCHORED
+    F9      one record           committed   ANCHORED      ALREADY_ANCHORED
+
+    every point: exactly ONE record in the ledger afterwards, the chain
+    verifies, the watermark commits it, and the run ends ANCHORED against
+    exactly that record. NO point produced a FALSE ANCHORED.
+
+F-17 STAGE 4 - SECRET SCAN
+==========================================================================
+   files scanned : 8
+   findings      : 0   <- required 0
+
+   Note: the SIDs and digests in these files are SYNTHETIC fixture values
+   ('d'*64, S-1-5-21-<synthetic>). Stage 4 introduces no credential at all:
+   there is no DPAPI, no launch secret, no service account. The fault seam
+   is a module-private callable defaulting to None with no environment,
+   configuration or command-line path to it.
+
+ALL NEGATIVE CONTROLS PASSED.

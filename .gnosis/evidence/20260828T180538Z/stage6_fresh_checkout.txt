@@ -1,0 +1,20 @@
+FRESH CHECKOUT OF 27a3a3c
+======================================================================
+extracted files: 1064
+extracted to   : C:\Users\nicol\AppData\Local\Temp\gnosis-fresh-_3odby_j\tree
+
+PREFLIGHT — which tree does `import gnosis` actually resolve to?
+{"gnosis": "C:\\Users\\nicol\\AppData\\Local\\Temp\\gnosis-fresh-_3odby_j\\tree\\src\\gnosis\\__init__.py", "path0": ""}
+preflight OK: the extraction won the import
+
+RUNNING: tests/test_publisher_service.py tests/test_publisher_pipe.py tests/test_trusted_orchestration.py tests/test_trust_boundary.py tests/test_durable_publication.py tests/test_authority_boundary.py tests/test_deployment_identity.py tests/test_run_identity_authorization.py tests/test_worker_launcher.py
+----------------------------------------------------------------------
+........................................................................................ [ 24%]
+.................................................................................................................... [ 56%]
+........................................................................ [ 76%]
+........................................................................ [ 95%]
+..............s                                                          [100%]
+=========================== short test summary info ===========================
+SKIPPED [1] tests\test_worker_launcher.py:966: the refusal is the non-Windows path
+362 passed, 1 skipped, 84 subtests passed in 49.01s
+FRESH_EXIT=0

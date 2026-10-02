@@ -1,0 +1,6 @@
+Full suite: 1 failed, 1666 passed, 1 skipped, 285 subtests passed (638.93s), process exit 0.
+The single failure is the KNOWN pre-existing concurrency flake:
+  tests/test_work_queue.py::TestOwnershipIsTheClaimsPlane::test_concurrent_workers_never_run_a_brief_twice
+It is independent of the provision-only R2 changes and passes clean on isolated rerun:
+  $ pytest '<that node>' -q  ->  1 passed in 3.14s
+No R2 (provision/operator-stack/composed-deployment) test failed.

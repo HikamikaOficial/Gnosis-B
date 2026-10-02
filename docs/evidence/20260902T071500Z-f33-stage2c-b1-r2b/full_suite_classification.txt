@@ -1,0 +1,24 @@
+FULL SUITE (R2B) — HONEST CLASSIFICATION
+========================================
+Result line : 1 failed, 1778 passed, 1 skipped, 313 subtests passed in 749.50s
+Direct exit : PYTEST_EXIT_CODE=1  (RED — reported as red; not masked)
+
+Failing node:
+  tests/test_work_queue.py::TestOwnershipIsTheClaimsPlane::test_concurrent_workers_never_run_a_brief_twice
+
+Classification: HISTORICAL work_queue CONCURRENCY FLAKE (governed separately).
+Evidence it is a flake, not an R2B regression:
+  * Re-run in isolation 3/3 PASSED (1 passed x3).
+  * The test exercises concurrent-worker brief-ownership under parallel load; it
+    collects background-thread errors and asserts errors == []. It is timing
+    sensitive under full-suite CPU contention.
+  * R2B changed ONLY scripts/stage2cb.py, scripts/stage2cb_ops.py and tests/*
+    (access-diagnostic producer + classifier gate + tests). It touches NO
+    work_queue code path and NO src/gnosis code at all (src/gnosis diff = NONE).
+  * The prior R2A full suite recorded the same test family as a known flake.
+
+R2B-relevant suites are all GREEN:
+  * targeted (R2B+R2A+R1+driver+backend): 109 passed, exit 0
+  * publisher client/pipe/service: 56 passed, exit 0
+  * F-17 provisioner+layout: 27 passed, exit 0
+  * R2B: 11 passed; ADM 6/6 CAUGHT; DM(R2B) 6/6 CAUGHT

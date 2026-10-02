@@ -1,0 +1,37 @@
+﻿PRE-FLIGHT: HEAD=7653e36 users(Gnosis*)= toolroot=True
+user GnosisWorkerProbe SID=S-1-5-21-1160728320-3593568380-93362170-1011 admin=False
+launching worker toolchain probe...
+worker rc=0
+===== TOOLCHAIN RESULTS =====
+STARTED-TC user=desktop-vtqpqvl\gnosisworkerprobe
+== TOOLCHAIN ACL (worker: execute yes, write no) ==
+python_exe_write = WRITE-DENIED (UnauthorizedAccessException)
+claude_exe_write = WRITE-DENIED (UnauthorizedAccessException)
+codex_ps1_write = WRITE-DENIED (UnauthorizedAccessException)
+gnosis_mod_write = WRITE-DENIED (UnauthorizedAccessException)
+node_exe_write = WRITE-DENIED (UnauthorizedAccessException)
+== PYTHON (relocated, RX-only) ==
+python_version = exit= 44ms : Python 3.12.14
+python_script_stdlib = exit= 81ms : IMPORTS_OK 3.12.1
+python_import_gnosis = exit= 90ms : GNOSIS_IMPORT_OK 000000
+python_pytest_minimal = exit= 946ms : . [100%] 1 passed in 0.03s
+pycache_in_toolchain_after = True
+== NODE (shared Program Files) ==
+node_version = exit= 43ms : v24.19.0
+== GIT (shared) ==
+git_commit = PASS 07a0ead
+== CLAUDE (relocated; startup only, no login) ==
+claude_version = exit= 1134ms : 2.1.246 (Claude Code)
+== CODEX (relocated + shared node; startup only, no login) ==
+codex_version = exit= 682ms : codex-cli 0.148.0
+== IMPORT POISONING (worker plants a shadow module in its worktree CWD) ==
+python_import_with_worker_cwd = exit= 104ms : TRUSTED_IMPORT_STILL_CLEAN
+note: worker CWD/worktree is deliberately worker-writable (it runs untrusted code there); trust-plane import path is ToolRoot (RX-only, worker cannot write).
+== CREDENTIAL ISOLATION (operator profile; ACCESSIBLE/NOT) ==
+C:\Users\nicol\.claude = ABSENT-from-worker
+C:\Users\nicol\.codex = ABSENT-from-worker
+C:\Users\nicol\.ssh = ABSENT-from-worker
+== DONE-TC ==
+===== ROLLBACK =====
+user removed
+POST-FLIGHT: users= workerprofile=False probedir=False HEAD=7653e36

@@ -1,0 +1,94 @@
+F-17 TRUST PLANE — CLOSED-WORLD TCB CLOSURE (Stage-1 review hardening)
+==============================================================================
+
+1. CLOSED-WORLD ALLOWLIST (enforced by tests/test_trust_boundary.py)
+   DEFAULT = NOT ALLOWED for every internal gnosis.* module.
+   ALLOW  gnosis
+          reason: distribution root package; its __init__ holds no logic
+   ALLOW  gnosis.kernel
+          reason: empty package marker, traversed only to reach kernel.canonical
+   ALLOW  gnosis.kernel.canonical
+          reason: the ONE canonical-bytes hash primitive (ADR-0004). Re-implementing it inside the Trust Plane is the defect test_canonical_hash_is_not_duplicated forbids, so the dependency is the lesser evil and is deliberate.
+   ALLOW  gnosis.trust
+          reason: the Trust Plane package itself
+   ALLOW  gnosis.trust.anchor
+          reason: authoritative anchor slice (record, store, publication protocol)
+   ALLOW  gnosis.trust.launch
+          reason: authoritative launch/identity slice (MIC primitives, publisher gate)
+
+   DEFERRED (lazy, function-body) internal imports — TCB at call time:
+   DEFER  gnosis.kernel.evidence_capture
+          reason: verify_bundle, imported inside publish_anchor / verify_anchored_bundle to avoid an import cycle; overridable through the verify= injection seam
+
+   NOT allowlisted, deliberately: gnosis.kernel.authority (the compatibility
+   facade). The Trust Plane must never depend back on its own facade.
+
+2. MEASURED INTERNAL CLOSURE (clean subprocess, unmutated tree)
+   import gnosis.trust.anchor
+       gnosis
+       gnosis.kernel
+       gnosis.kernel.canonical
+       gnosis.trust
+       gnosis.trust.anchor
+       gnosis.trust.launch
+   import gnosis.trust.launch
+       gnosis
+       gnosis.trust
+       gnosis.trust.launch
+
+3. VIOLATION SET UNDER THE CLOSED-WORLD MODEL (must be empty)
+   gnosis.trust.anchor: NONE
+   gnosis.trust.launch: NONE
+
+4. WHAT THE OLD BLACKLIST WOULD HAVE ADMITTED
+   internal gnosis modules in src/: 62
+   qualified for the TCB (allowlist): 6
+   the blacklist would have SCREENED: 28
+   the blacklist would have ADMITTED SILENTLY: 28
+       gnosis.contracts
+       gnosis.kernel.atomic_io
+       gnosis.kernel.authority
+       gnosis.kernel.budget
+       gnosis.kernel.claims
+       gnosis.kernel.code_intelligence
+       gnosis.kernel.credentials
+       gnosis.kernel.failures
+       gnosis.kernel.file_lock
+       gnosis.kernel.git_evidence
+       gnosis.kernel.ids
+       gnosis.kernel.input_lock
+       gnosis.kernel.lease
+       gnosis.kernel.ledger
+       gnosis.kernel.memory
+       gnosis.kernel.memory_reference
+       gnosis.kernel.memory_router
+       gnosis.kernel.ordering
+       gnosis.kernel.redaction
+       gnosis.kernel.replay
+       gnosis.kernel.run_store
+       gnosis.kernel.state_machine
+       gnosis.kernel.verification
+       gnosis.kernel.write_observer
+       gnosis.transport
+       gnosis.transport.base
+       gnosis.transport.manual_transport
+       gnosis.transport.mcp_transport
+
+5. AM12 / AM13 — OLD MODEL vs NEW MODEL (isolated copy of src/; repo untouched)
+   AM12: gnosis/trust/anchor.py gains `import gnosis.kernel.input_lock`
+       old blacklist model : SURVIVED  []
+       new closed-world    : CAUGHT  ['gnosis.kernel.input_lock']
+   AM12': gnosis/trust/launch.py gains `import gnosis.kernel.credentials`
+       old blacklist model : SURVIVED  []
+       new closed-world    : CAUGHT  ['gnosis.kernel.credentials']
+
+   AM13 (lazy, function-body import) cannot appear in ANY load-time closure —
+   that is the point of the bypass. It is caught by the source-level scan
+   test_the_trust_plane_declares_every_internal_import_including_lazy_ones;
+   the old model had no equivalent and would have SURVIVED it entirely.
+
+NOTE ON THE OLD FILE, STATED HONESTLY: besides the blacklist, the old test
+also asserted an exact closure SET for trust.anchor, which would have failed
+on AM12-in-anchor. That assertion did NOT exist for trust.launch, which the
+blacklist alone guarded — so AM12' above (kernel.credentials into the Trust
+Plane through launch.py) went entirely undetected under the old model.

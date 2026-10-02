@@ -1,0 +1,20 @@
+F-17 STAGE 5 - FRESH-CHECKOUT VERIFICATION
+======================================================================
+Run against a CLEAN extraction of the committed tree, so nothing
+untracked or locally modified can be carrying the result.
+
+commit : 6494eb6a137c492d0aed7f63a6cecf85df7fca7a
+method : git archive HEAD | tar -x -C <clean dir>
+files  : 1025
+
+modules resolved from the fresh tree:
+  C:\Users\nicol\AppData\Local\Temp\claude\C--Users-nicol-Desktop-Claude-Code-Proyectos-GnosisAgentAi\0552c474-d289-45e3-94af-68d5ec1d0bdc\scratchpad\fresh5\src\gnosis\trust\launch_spec.py
+  C:\Users\nicol\AppData\Local\Temp\claude\C--Users-nicol-Desktop-Claude-Code-Proyectos-GnosisAgentAi\0552c474-d289-45e3-94af-68d5ec1d0bdc\scratchpad\fresh5\src\gnosis\trust\worker_launcher.py
+  C:\Users\nicol\AppData\Local\Temp\claude\C--Users-nicol-Desktop-Claude-Code-Proyectos-GnosisAgentAi\0552c474-d289-45e3-94af-68d5ec1d0bdc\scratchpad\fresh5\src\gnosis\trust\bootstrap.py
+
+........................................................s............... [ 40%]
+........................................................................ [ 80%]
+....................................         [100%]
+=========================== short test summary info ===========================
+SKIPPED [1] tests\test_worker_launcher.py:703: the refusal is the non-Windows path
+179 passed, 1 skipped, 28 subtests passed in 30.70s

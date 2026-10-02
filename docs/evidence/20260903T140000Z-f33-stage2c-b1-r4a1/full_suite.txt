@@ -1,0 +1,80 @@
+....................................................................................................................................... [  7%]
+........................................................................ [ 11%]
+........................................................................................................................................ [ 18%]
+............................................ [ 20%]
+........................................................................ [ 24%]
+.............................................................. [ 27%]
+................................................................ [ 31%]
+........................................................................ [ 35%]
+........................................................................ [ 39%]
+........................ [ 40%]
+................ [ 41%]
+........................................................................ [ 45%]
+......................................................................................................... [ 50%]
+........................................................................ [ 54%]
+........................................................................ [ 58%]
+........................................................................ [ 62%]
+.................................................................................. [ 66%]
+........................................................................ [ 70%]
+........................................................................ [ 74%]
+..................................................................... [ 78%]
+........................................................................ [ 82%]
+............................................................... [ 85%]
+.................................................................................................................. [ 91%]
+............F........................................................... [ 95%]
+...................................................s.................... [ 99%]
+............                                                             [100%]
+================================== FAILURES ===================================
+_ TestOwnershipIsTheClaimsPlane.test_concurrent_workers_never_run_a_brief_twice _
+
+self = <tests.test_work_queue.TestOwnershipIsTheClaimsPlane testMethod=test_concurrent_workers_never_run_a_brief_twice>
+
+    def test_concurrent_workers_never_run_a_brief_twice(self):
+        # Real threads, real files, one shared claims store. Two workers
+        # scanning the same directory WILL see the same brief; the CAS is
+        # what makes exactly one of them the owner.
+        for index in range(24):
+            self.queue.enqueue(_brief(f"BRIEF-{index:02d}"))
+    
+        executed: list[str] = []
+        by_worker: dict[str, int] = {}
+        guard = threading.Lock()
+        started = threading.Barrier(6)
+        errors: list[BaseException] = []
+    
+        def worker(name: str) -> None:
+            try:
+                started.wait(timeout=10)
+                for work in drain(self.queue, name):
+                    with guard:
+                        executed.append(work.brief_id)
+                        by_worker[name] = by_worker.get(name, 0) + 1
+                    # Hold the claim briefly so the race window is real.
+                    time.sleep(0.002)
+                    self.queue.complete(work, outcome="COMPLETED")
+            except BaseException as exc:  # noqa: BLE001 - reported, not swallowed
+                errors.append(exc)
+    
+        threads = [threading.Thread(target=worker, args=(f"worker-{i}",))
+                   for i in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=60)
+    
+>       self.assertEqual(errors, [])
+E       AssertionError: Lists differ: [PermissionError(13, 'Acceso denegado')] != []
+E       
+E       First list contains 1 additional elements.
+E       First extra element 0:
+E       PermissionError(13, 'Acceso denegado')
+E       
+E       - [PermissionError(13, 'Acceso denegado')]
+E       + []
+
+tests\test_work_queue.py:75: AssertionError
+=========================== short test summary info ===========================
+SKIPPED [1] tests\test_worker_launcher.py:966: the refusal is the non-Windows path
+FAILED tests/test_work_queue.py::TestOwnershipIsTheClaimsPlane::test_concurrent_workers_never_run_a_brief_twice
+1 failed, 1860 passed, 1 skipped, 310 subtests passed in 827.45s (0:13:47)
+PYTEST_EXIT_CODE=1

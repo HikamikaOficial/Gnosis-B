@@ -1,0 +1,10 @@
+E       - [PermissionError(13, 'Acceso denegado')]
+E       + []
+
+tests\test_work_queue.py:75: AssertionError
+=========================== short test summary info ===========================
+SKIPPED [1] tests\test_worker_launcher.py:966: the refusal is the non-Windows path
+FAILED tests/test_work_queue.py::TestOwnershipIsTheClaimsPlane::test_concurrent_workers_never_run_a_brief_twice
+1 failed, 1666 passed, 1 skipped, 285 subtests passed in 638.93s (0:10:38)
+
+[exited with code 0]

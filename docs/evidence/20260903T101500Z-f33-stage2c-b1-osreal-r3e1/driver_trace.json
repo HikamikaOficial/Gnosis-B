@@ -1,0 +1,160 @@
+{
+  "mode": "os-real",
+  "real_ops_constructed": true,
+  "gates": [
+    "HEAD checked",
+    "preflight PASS; real backend authorized"
+  ],
+  "orchestration": {
+    "stages": [
+      "base_provision",
+      "composed_deployment",
+      "trusted_record",
+      "acls",
+      "service_start",
+      "pipe_ready",
+      "route_selected",
+      "operator_launch",
+      "anchored_check"
+    ],
+    "success": false,
+    "operator_exit": 3,
+    "anchored": false,
+    "rollback_ok": true,
+    "launch_argv": [],
+    "error": "operator success requires COMPLETED and ANCHORED (exit=3, anchored=False)",
+    "pipe_readiness": null,
+    "service_postmortem": null,
+    "publisher_failure_class": null
+  },
+  "bindings": {
+    "expected_head": "5c3fcc4f5c8566bb78ef8b80d4a63c9295908422",
+    "runtime_src": "C:\\Users\\nicol\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none",
+    "reviewer_executable": "C:\\Users\\nicol\\.local\\bin\\claude.exe",
+    "worker_username": "GnosisWkrS2CB",
+    "service_name": "GnosisPubS2CBProbe",
+    "pipe_name": "\\\\.\\pipe\\gnosis-s2cb-probe",
+    "residue_record_path": "C:\\Users\\nicol\\AppData\\Local\\Temp\\gnosis-2cb-b1-run-b1-1\\GnosisStage2CBRecovery\\run-b1-1.residue.json",
+    "f17_observer": "gnosis.trust.deployment.observe_deployment",
+    "os_backend": "stage2cb_ops.WindowsRealOperations",
+    "live_ledger": "1 used / 4 remaining",
+    "operator_argv": [
+      "run",
+      "--config",
+      "C:\\Users\\nicol\\AppData\\Local\\Temp\\gnosis-2cb-b1-run-b1-1\\GnosisStage2CBRecovery\\inputs\\operator_config.json",
+      "--brief",
+      "C:\\Users\\nicol\\AppData\\Local\\Temp\\gnosis-2cb-b1-run-b1-1\\GnosisStage2CBRecovery\\inputs\\operator_brief.json"
+    ],
+    "driver_owned_resources": {
+      "scaffold_root": "C:\\Users\\nicol\\AppData\\Local\\Temp\\gnosis-2cb-b1-run-b1-1",
+      "operator_config": "C:\\Users\\nicol\\AppData\\Local\\Temp\\gnosis-2cb-b1-run-b1-1\\GnosisStage2CBRecovery\\inputs\\operator_config.json",
+      "operator_brief": "C:\\Users\\nicol\\AppData\\Local\\Temp\\gnosis-2cb-b1-run-b1-1\\GnosisStage2CBRecovery\\inputs\\operator_brief.json",
+      "residue_record": "C:\\Users\\nicol\\AppData\\Local\\Temp\\gnosis-2cb-b1-run-b1-1\\GnosisStage2CBRecovery\\run-b1-1.residue.json"
+    }
+  },
+  "identity_delta": {
+    "provision_digest": "28cd0249ee0107a21405f41ea575d281bc19c5be8a4bb2ccd93079a975c3b4ca",
+    "launch_digest": "d81d608bf73f260b5048a3b4c1d354a3ae53895450e1df923d805f95080c4ef7",
+    "digests_match": false,
+    "component_digests": {
+      "provision": {
+        "schema": "e2c004acaa3a12cf0194de53ed8c54a08c3eecd954c073a5ee48cac8c46a51d2",
+        "package": "93b165f8ba1e1fbf92ce80a9558736cfaf93fcd9f98a0f21649d63a9d6c4f3ad",
+        "runtime": "de55cf6be0a6112545968fcd23a123d28351457012375a2a718c8e7b2a33f94b",
+        "service": "bd3e2e634b66ca63f30285ddf320a829aba4fbe7d0d1266a8549e451a93c915b",
+        "trust_root": "e1ca3d58e0a98b7ebeabeb78a2782f0548b40b67bfdb872af63cb2a901467a32",
+        "runidentity_store": "2bd66899539a2691415440e9738c35924061d1de3d01e4e9204fcd3decbf6474",
+        "anchorstore": "1a4149c17d0abc6dc96501d3d99ba78c3c16bf1e54ef676cca400b0cc99cfe09",
+        "pipe_policy": "6f2257d085a6bb959324cebf9fe01446e105bb1556b34ebaeeb78f02aad5696b",
+        "runtime_tree": "9efaee0d6416ef6820829ded54f466a7946ef199f42f84fb158248056e50e0dd"
+      },
+      "launch": {
+        "schema": "e2c004acaa3a12cf0194de53ed8c54a08c3eecd954c073a5ee48cac8c46a51d2",
+        "package": "1cc21d6ae551bfb5299894353f258a2c53f6094eaac95ec20956614a0e03eaac",
+        "runtime": "de55cf6be0a6112545968fcd23a123d28351457012375a2a718c8e7b2a33f94b",
+        "service": "bd3e2e634b66ca63f30285ddf320a829aba4fbe7d0d1266a8549e451a93c915b",
+        "trust_root": "e1ca3d58e0a98b7ebeabeb78a2782f0548b40b67bfdb872af63cb2a901467a32",
+        "runidentity_store": "2bd66899539a2691415440e9738c35924061d1de3d01e4e9204fcd3decbf6474",
+        "anchorstore": "1a4149c17d0abc6dc96501d3d99ba78c3c16bf1e54ef676cca400b0cc99cfe09",
+        "pipe_policy": "6f2257d085a6bb959324cebf9fe01446e105bb1556b34ebaeeb78f02aad5696b",
+        "runtime_tree": "9efaee0d6416ef6820829ded54f466a7946ef199f42f84fb158248056e50e0dd"
+      }
+    },
+    "delta": {
+      "status": "OK",
+      "components": {
+        "anchorstore": "UNCHANGED",
+        "package": "CHANGED",
+        "pipe_policy": "UNCHANGED",
+        "runidentity_store": "UNCHANGED",
+        "runtime": "UNCHANGED",
+        "runtime_tree": "UNCHANGED",
+        "schema": "UNCHANGED",
+        "service": "UNCHANGED",
+        "trust_root": "UNCHANGED"
+      },
+      "manifest_delta": {
+        "package": {
+          "added": [
+            "APPLICATION.json",
+            "gnosis/adapters/__init__.py",
+            "gnosis/adapters/cli_review.py",
+            "gnosis/adapters/review_payload.py",
+            "gnosis/contracts/__init__.py",
+            "gnosis/contracts/director_brief.py",
+            "gnosis/contracts/engineer_report.py",
+            "gnosis/director/__init__.py",
+            "gnosis/director/brief_record.py",
+            "gnosis/director/cli.py",
+            "gnosis/director/composition.py",
+            "gnosis/director/deterministic_worker.py",
+            "gnosis/director/execution.py",
+            "gnosis/director/inbox.py",
+            "gnosis/director/pipeline.py",
+            "gnosis/director/publication.py",
+            "gnosis/director/publisher_client.py",
+            "gnosis/director/trusted_runner.py",
+            "gnosis/kernel/budget.py",
+            "gnosis/kernel/claims.py",
+            "gnosis/kernel/code_intelligence.py",
+            "gnosis/kernel/convergence.py",
+            "gnosis/kernel/credentials.py",
+            "gnosis/kernel/engine.py",
+            "gnosis/kernel/failures.py",
+            "gnosis/kernel/git_evidence.py",
+            "gnosis/kernel/ids.py",
+            "gnosis/kernel/integration.py",
+            "gnosis/kernel/lease.py",
+            "gnosis/kernel/ledger.py",
+            "gnosis/kernel/ordering.py",
+            "gnosis/kernel/policy.py",
+            "gnosis/kernel/redaction.py",
+            "gnosis/kernel/run_store.py",
+            "gnosis/kernel/scheduler.py",
+            "gnosis/kernel/state_machine.py",
+            "gnosis/kernel/verification.py",
+            "gnosis/kernel/worktree.py",
+            "gnosis/provision/__init__.py",
+            "gnosis/provision/layout.py",
+            "gnosis/runner/__init__.py",
+            "gnosis/runner/capture.py",
+            "gnosis/runner/claude_cli_runner.py",
+            "gnosis/runner/gated_runner.py",
+            "gnosis/runner/liveness.py",
+            "gnosis/runner/retry.py",
+            "operator_entry.py"
+          ],
+          "removed": [],
+          "changed": []
+        }
+      },
+      "sddl_delta": {},
+      "classifications": [
+        "PACKAGE_CONTENT_CHANGED"
+      ]
+    },
+    "notes": []
+  },
+  "result": "OS-REAL-RAN",
+  "scaffold_cleanup": "removed"
+}

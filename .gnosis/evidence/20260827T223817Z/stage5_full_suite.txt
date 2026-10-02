@@ -1,0 +1,59 @@
+F-17 STAGE 5 - FULL-SUITE REGRESSION
+======================================================================
+Stage 5 changes an EXECUTION BOUNDARY (the runner's launch path, the
+ExecutionResult shape and trust.launch), so the full suite was mandatory
+rather than optional.
+
+run   tree 6494eb6 (Stage-5 implementation HEAD)
+      1346 passed, 1 skipped, 98 subtests passed in 824.23s (0:13:44)   exit 0
+
+GREEN. Zero failures, zero errors.
+
+The one SKIP is deliberate and named: `TestOffWindowsThereIsNoFallback`
+asserts the launcher REFUSES on a non-Windows platform, so it can only run
+off Windows. It is skipped here rather than silently passing.
+
+Continuity with the earlier stages, for the record:
+  tree e648784 (Stage 2)   1167 passed,  73 subtests   exit 0
+  tree 27e181d (Stage 2)   1168 passed,  74 subtests   exit 0
+  tree a6dd6aa (Stage 3)   1218 passed,  72 subtests   exit 0
+  tree 8b58509 (Stage 4)   1290 passed, 101 subtests   exit 0
+  tree 6494eb6 (Stage 5)   1346 passed,  98 subtests   exit 0
+The test count rises with the new suite (+56 directed Stage-5 tests). The
+subtest count moves with which conditional subtests the machine offers;
+every one that ran, passed.
+
+TIMING NOTE, STATED PLAINLY: this run was started AFTER the last source
+edit, deliberately. An earlier run was killed at ~35% because a docstring
+had been changed while it was in flight, and a full-suite result that does
+not correspond to the committed tree is not evidence.
+
+STATIC CHECKS on the same tree
+  mypy --strict over src            Success: no issues found in 68 source files
+  ruff on every new / changed file  All checks passed
+    src/gnosis/trust/launch_spec.py         (new)
+    src/gnosis/trust/bootstrap.py           (new)
+    src/gnosis/trust/worker_launcher.py     (new)
+    src/gnosis/trust/launch.py
+    src/gnosis/runner/claude_cli_runner.py
+    src/gnosis/runner/capture.py
+    tests/test_worker_launcher.py           (new)
+    tests/test_trust_boundary.py
+    scripts/probe_stage5_worker_launcher.py (new)
+    scripts/mutation_check_worker_launcher.py (new)
+
+DIRECTED SUITE
+  tests/test_worker_launcher.py   56 passed, 1 skipped   exit 0
+
+FRESH CHECKOUT of 6494eb6 (git archive | tar -x into a clean directory)
+  5 trust/runner suites           179 passed, 1 skipped, 28 subtests   exit 0
+
+OS-REAL PROBE (scripts/probe_stage5_worker_launcher.py)
+  59 checks, ALL PASSED, rollback verified clean
+
+MUTATION
+  scripts/mutation_check_worker_launcher.py   25 mutants, 25 CAUGHT, 0 SURVIVED
+
+F-14 STATUS, STATED CORRECTLY: F-14 remains CLOSED. Nothing in Stage 5
+reopens it; this green run is additional positive evidence, not a new
+closure and not a reopening.

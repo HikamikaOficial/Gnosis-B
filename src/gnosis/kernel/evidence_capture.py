@@ -61,30 +61,89 @@ The last two fail closed on purpose. A probe that could not answer must
 never read as "nothing changed", or breaking the probe becomes the way to
 defeat the check.
 
-Known blind spot, stated rather than implied: ``content_fingerprint``
-does not enumerate git-ignored files (see its docstring). Build caches,
-``.venv`` and the ignored parts of ``.gnosis/`` are outside the
-identified tree. Closing that means walking the whole tree, which is a
-different decision than this one.
+**"Git ignores it" was being used as authority, and that was the
+seventh review's finding.** `content_fingerprint` does not enumerate
+git-ignored files, `covered_paths` did not add them, and the classifier
+forgave a change to any path `git check-ignore` accepted. Put together
+that read as *ignored ⇒ cannot affect the result*, which is false: a
+`.env`, a local config, a fixture, a database, a plugin, or the
+interpreter and tools in `.venv` are all ignored and all real inputs.
+Reproduced — a check read `MALICIOUS` from an ignored file and the bundle
+still said `CLEAN`, `evidence_valid: true`, `all_passed: true`.
+
+So every path in the working tree now belongs to exactly one declared
+class, and the default is the conservative one::
+
+    INPUT          covered, locked, IDENTIFIED BY FILE ID AND HASHED.
+                   Everything git reports — tracked, untracked AND
+                   ignored, with nested-clone directory entries expanded
+                   — that is not under a declared OUTPUT root. An
+                   undeclared path is an INPUT.
+    OUTPUT         a declared root the checks legitimately write: caches,
+                   runtime state, artifacts. Events there are allowed,
+                   and whatever already existed there when the capture
+                   began is hashed, so nothing planted under one can be
+                   read as an unnamed input.
+
+`git check-ignore` is no longer consulted anywhere. The classes are
+declared by the caller, recorded in the bundle, and a reviewer can
+challenge any single declaration.
+
+**And identity means bytes.** A file id says which object and a lock says
+it did not change; neither says what was in it. Every input is hashed
+through the handle that holds it, and the manifest is in the bundle, so
+the evidence can be re-derived by a third party from the files rather
+than believed.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import os
 import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
+# Deliberate re-export, not dead weight: these names have always been reachable
+# at `kernel.evidence_capture` and callers still find them here. The definitions
+# moved to the trust plane; the names did not.
+from gnosis.trust.bundle_verify import (  # noqa: F401
+    BUNDLE_MANIFEST,
+    BundleVerification,
+    verify_bundle,
+    write_bundle_manifest,
+)
+
 from .canonical import hash_canonical
-from .git_evidence import content_fingerprint
-from .input_lock import InputLock, LockOutcome, create_input_lock
+from .check_execution import CheckExecutor
+from .git_evidence import (
+    content_fingerprint,
+    git_backend_and_version_qualified,
+    git_resolution_faithful,
+    git_topology_eligible,
+)
+from .git_surface import (
+    GitSurfaceClass,
+    classify_git_surface,
+    in_git_domain,
+)
+from .input_lock import (
+    InputLock,
+    LockOutcome,
+    StreamInventory,
+    create_input_lock,
+    named_streams,
+    stream_drift,
+    stream_inventory,
+)
 from .write_observer import (
     BARRIER_DIR,
     Observation,
@@ -102,12 +161,87 @@ EXIT_INPUTS_MUTATED = 4
 EXIT_BOUNDARY_UNAVAILABLE = 5
 EXIT_INPUTS_UNPROTECTED = 6
 EXIT_PREPARATION_DRIFT = 7
+EXIT_STREAMS_MUTATED = 8
+EXIT_MACHINERY_MUTATED = 9
+EXIT_MACHINERY_UNOBSERVABLE = 10
+EXIT_MACHINERY_REDIRECTED = 11
+# F-17 Stage 7. A `.git` administrative surface was written that the closed-world
+# classifier does not qualify: we cannot say it is safe, so we do not. Distinct
+# from MUTATED (a KNOWN-dangerous surface) because the operator response differs
+# — a surface to be classified, not a tamper to be investigated.
+EXIT_MACHINERY_UNQUALIFIED = 12
 
 _UNREADABLE_PREFIX = "unreadable: "
 
 # Not a covered input and not the caller's choice: `content_fingerprint`
 # never hashes `.git`, and git writes there while reading the tree.
 _GIT_DIR = ".git/"
+# Inside `.git`, most writes are git's own bookkeeping during a read —
+# index, refs, logs, ORIG_HEAD, packed-refs, loose objects — and forgiving
+# them is what makes the mechanism usable (F-14's machinery count). But two
+# parts of `.git` can EXECUTE or REDIRECT: a hook is code that runs on the
+# next git operation, and `config` chooses what a filter runs and where a
+# push goes. F-17: a check that installs a hook or rewrites config during
+# the capture has tampered with the machinery that produced the evidence,
+# and that is judged, not counted. Narrowed to exactly the set
+# `_machinery_fingerprint` already treats as dangerous, and caught in the
+# interval by the observer, so a create+delete (ABA) is caught too — a
+# before/after fingerprint would be blind to it, measured.
+_GIT_HOOKS = ".git/hooks/"
+_GIT_CONFIG = ".git/config"
+_HOOK_SAMPLE = ".sample"
+
+
+def _is_git_machinery_tamper(path: str) -> bool:
+    """A `.git` write that can execute or redirect: a hook or config.
+
+    Stream paths (`owner:stream`) count too — a stream on config or a hook
+    is a write channel. Sample hooks git ships as inert examples do not.
+    """
+    owner = path.split(":", 1)[0]
+    if owner.startswith(_GIT_HOOKS) and not owner.endswith(_HOOK_SAMPLE):
+        return True
+    return owner == _GIT_CONFIG
+
+
+# F-17 third review, BLOCKER A. The parts of `.git` that redirect git's
+# object / ref / ancestry RESOLUTION, or carry per-worktree config. A write
+# to any of these during the capture tampers with how git resolves the very
+# objects the evidence names, exactly the way a hook or config write tampers
+# with what git executes — so it is judged, not counted. Demonstrated OS-real
+# (git 2.55): a `refs/replace/*` ref (loose, packed, or injected by a raw
+# `packed-refs` edit) makes `git diff HEAD` report against a substituted tree
+# with the original object bytes intact; `objects/info/alternates` redirects
+# object lookup to an external store; `config.worktree` (when
+# extensions.worktreeConfig is on) sets executable keys like core.fsmonitor.
+# A normal read-only capture writes none of them (verified: the product repo
+# has no packed-refs, no replace ref, no alternates), so judging them adds no
+# false positive. The start-of-capture presence of an ALREADY-ACTIVE
+# redirection is a separate gate, `git_resolution_faithful`
+# (MACHINERY_REDIRECTED); this catches an in-interval write, including an ABA
+# the endpoints are blind to.
+_GIT_REFS_REPLACE = ".git/refs/replace/"
+_GIT_REDIRECT_SURFACES = frozenset({
+    ".git/packed-refs",
+    ".git/objects/info/alternates",
+    ".git/objects/info/http-alternates",
+    ".git/info/grafts",
+    ".git/shallow",
+    ".git/config.worktree",
+    ".git/commondir",
+})
+
+
+def _is_git_resolution_redirect(path: str) -> bool:
+    """A `.git` write that redirects object / ref / ancestry resolution.
+
+    Judged like a hook or config. Stream paths (`owner:stream`) count too —
+    a stream on `packed-refs` is a write channel to the ref backend.
+    """
+    owner = path.split(":", 1)[0]
+    if owner.startswith(_GIT_REFS_REPLACE):
+        return True
+    return owner in _GIT_REDIRECT_SURFACES
 
 
 class BindingVerdict(Enum):
@@ -136,6 +270,37 @@ class ChecksVerdict(Enum):
     NOT_RUN = "NOT_RUN"
 
 
+class PathClass(Enum):
+    """Which side of the evidence boundary a path is on.
+
+    TWO classes, and the eighth review is why there is no third. There
+    used to be an OUT_OF_SCOPE class for roots too large to enumerate:
+    not locked, not identified, not hashed, and any event there a
+    violation. That last part made it honest about CHANGES and said
+    nothing at all about READS, so an unbound root was still a silent
+    input channel. A class whose contents cannot be stated is not a
+    class the evidence can carry, so it is gone.
+
+    Both remaining classes are byte-bound. They differ in what may
+    change: an INPUT may not, an OUTPUT may.
+    """
+
+    INPUT = "INPUT"
+    OUTPUT = "OUTPUT"
+
+
+def classify_path(path: str, outputs: Sequence[str]) -> PathClass:
+    """The declared class of one path. Undeclared means INPUT.
+
+    An entry with a slash is a prefix; one without is a directory name
+    matched against any component, so `__pycache__` covers every nesting
+    of it without naming each one.
+    """
+    if _is_allowed_path(path, outputs):
+        return PathClass.OUTPUT
+    return PathClass.INPUT
+
+
 class ObservationVerdict(Enum):
     """What the interval between the two fingerprints is known to be.
 
@@ -151,6 +316,13 @@ class ObservationVerdict(Enum):
     UNOBSERVED = "UNOBSERVED"
     UNPROTECTED = "UNPROTECTED"
     PREPARATION_DRIFT = "PREPARATION_DRIFT"
+    STREAMS_MUTATED = "STREAMS_MUTATED"
+    MACHINERY_MUTATED = "MACHINERY_MUTATED"
+    MACHINERY_UNOBSERVABLE = "MACHINERY_UNOBSERVABLE"
+    MACHINERY_REDIRECTED = "MACHINERY_REDIRECTED"
+    # F-17 Stage 7: a `.git` surface the closed-world classifier does not
+    # qualify was written during the interval. UNKNOWN -> fail closed.
+    MACHINERY_UNQUALIFIED = "MACHINERY_UNQUALIFIED"
 
 
 @dataclass(frozen=True)
@@ -279,8 +451,11 @@ class TreeBinding:
                 "not part of the identified tree"
             ),
             "blind_spot": (
-                "git-ignored files are not enumerated by content_fingerprint "
-                "(build caches, .venv, the ignored parts of .gnosis/)"
+                "content_fingerprint enumerates what git tracks, so git-ignored "
+                "files (build caches, .venv, the ignored parts of .gnosis/) are "
+                "not in THIS digest. They are not unbound: every one of them is "
+                "locked, hashed through the handle holding it, and listed in "
+                "input-manifest.json, whose aggregate is protection.content_digest"
             ),
             "pre": self.pre.to_dict(),
             "post": self.post.to_dict(),
@@ -311,36 +486,84 @@ def _git_lines(repo: Path, args: Sequence[str]) -> list[str]:
     return [line for line in proc.stdout.split("\0") if line]
 
 
-def covered_paths(repo: Path) -> frozenset[str]:
-    """Every file the identity is a statement about.
+def covered_paths(repo: Path, outputs: Sequence[str] = ()) -> frozenset[str]:
+    """Every file the boundary is a statement about.
 
-    Tracked files at their working-tree bytes, plus untracked files that
-    git would report — exactly the set `content_fingerprint` covers
-    through its patch and its per-path untracked digests. Ignored files
-    are outside it, here as there.
+    Tracked, untracked AND ignored — everything git can enumerate —
+    minus the paths the caller has declared as OUTPUT. Ignored files used
+    to be excluded here and in `content_fingerprint`, which is how a
+    git-ignored input could be swapped underneath a check without
+    anything noticing.
+
+    An ignored DIRECTORY that git reports as one entry — a nested clone it
+    will not descend into — is expanded here by walking it. Git declining
+    to look inside is not a reason for the evidence to decline too.
     """
     tracked = _git_lines(repo, ["ls-files", "-z"])
     status = _git_lines(repo, ["status", "--porcelain", "-z", "--untracked-files=all"])
     untracked = [entry[3:] for entry in status if entry.startswith("?? ")]
-    return frozenset(path.replace("\\", "/") for path in (*tracked, *untracked))
+    ignored: list[str] = []
+    for entry in _git_lines(
+            repo, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard"]):
+        candidate = entry.replace("\\", "/")
+        if not candidate.endswith("/"):
+            ignored.append(candidate)
+            continue
+        for found in (repo / candidate).rglob("*"):
+            if found.is_file():
+                ignored.append(found.relative_to(repo).as_posix())
+    return frozenset(
+        candidate for candidate in
+        (path.replace("\\", "/") for path in (*tracked, *untracked, *ignored))
+        if classify_path(candidate, outputs) is PathClass.INPUT)
 
 
-def _git_ignored(repo: Path, candidates: Sequence[str]) -> frozenset[str]:
-    """Which of these paths git ignores. Used to CLASSIFY, never to detect.
+def output_paths(repo: Path, outputs: Sequence[str] = ()) -> frozenset[str]:
+    """Files that already exist under a declared OUTPUT root.
 
-    The event stream is the authority on what changed; this only decides
-    whether a path that changed was ever part of the covered set. On any
-    error the answer is "none of them", which turns unknown paths into
-    violations rather than into silence.
+    They are not locked — an output is allowed to change — but they are
+    hashed, because a file planted under an output root before a capture
+    and then read by a check would otherwise be an unnamed input. The
+    eighth review asked for that specifically.
     """
-    if not candidates:
-        return frozenset()
-    proc = subprocess.run(
-        ["git", "check-ignore", "-z", "--stdin"], cwd=repo,
-        input="\0".join(candidates) + "\0", capture_output=True, text=True, check=False)
-    if proc.returncode not in (0, 1):
-        return frozenset()
-    return frozenset(path for path in proc.stdout.split("\0") if path)
+    found: list[str] = []
+    for root in outputs:
+        if "/" not in root:
+            continue
+        base = repo / root
+        if not base.is_dir():
+            continue
+        found.extend(item.relative_to(repo).as_posix()
+                     for item in base.rglob("*") if item.is_file())
+    return frozenset(found)
+
+
+def stream_directories(repo: Path, outputs: Sequence[str] = ()) -> tuple[str, ...]:
+    """Directories on disk whose named streams belong to the boundary.
+
+    Deriving directories from the covered files misses the ones holding
+    no file at all — 83 of them on this tree, mostly the empty corners of
+    nested clones — and an empty directory can still carry a stream a
+    check reads. So the disk is walked.
+
+    `.git/` is left out for the same reason its writes are counted and
+    not judged: it is not a covered input and tamper-evidence for the
+    machinery itself is F-17. Declared OUTPUT roots are left out because
+    an output is allowed to change, and a directory under one is not an
+    input whose streams must hold still.
+    """
+    found: list[str] = [""]
+    for base, names, _ in os.walk(repo):
+        relative = Path(base).relative_to(repo).as_posix()
+        relative = "" if relative == "." else relative
+        if relative and (relative == _GIT_DIR.rstrip("/")
+                         or relative.startswith(_GIT_DIR)
+                         or _is_allowed_path(relative, outputs)):
+            names[:] = []
+            continue
+        if relative:
+            found.append(relative)
+    return tuple(sorted(found))
 
 
 def _is_allowed_path(path: str, allowed: Sequence[str]) -> bool:
@@ -385,6 +608,14 @@ class Boundary:
             "violations": list(self.violations),
             "covered_files": self.covered_files,
             "allowed_writes": list(self.allowed_writes),
+            "input_policy": (
+                "every path git can enumerate — tracked, untracked AND ignored, "
+                "with directory entries for nested clones expanded — is an INPUT "
+                "unless it is under a declared OUTPUT root. INPUTs are locked and "
+                "hashed; an OUTPUT's pre-existing bytes are hashed too, so nothing "
+                "planted under one can be read as an unnamed input. There is no "
+                "unbound class, and git check-ignore is not consulted"
+            ),
             "reason": self.reason,
             "protection": dict(self.protection),
             "locked_identity": dict(self.locked_identity),
@@ -403,6 +634,20 @@ class Boundary:
                 "input. Tamper-evidence for the machinery itself is F-17 and is "
                 "not repaired here"
             ),
+            "complete_note": (
+                "a CLEAN verdict means the observation was COMPLETE and saw no "
+                "violation. COMPLETE means exactly: no event from the supported "
+                "observation mechanism (ReadDirectoryChangesW, recursive over the "
+                "tree plus a non-recursive watch on the parent for the root's own "
+                "streams) was lost -- no overflow, no undelivered tail, no watch "
+                "that failed to arm. It does NOT mean every possible filesystem "
+                "modification was observed. A memory-mapped write is not caught by "
+                "observation at all (measured: silent even on flush); it is caught "
+                "because a writable mapping needs write access, which the lock's "
+                "share mode refuses, so any live mapping makes the capture fail "
+                "closed before a check runs. Overflow, an unarmed or failed watch, "
+                "or an unwatchable parent yield UNOBSERVED, never CLEAN"
+            ),
         }
 
 
@@ -414,6 +659,10 @@ def classify_observation(
     lock: LockOutcome | None = None,
     drift: Sequence[str] = (),
     locked_identity: Mapping[str, Any] | None = None,
+    streams: Sequence[str] = (),
+    topology_reason: str | None = None,
+    resolution_reason: str | None = None,
+    backend_reason: str | None = None,
 ) -> Boundary:
     """Turn prevention plus a stream of writes into one verdict.
 
@@ -424,18 +673,102 @@ def classify_observation(
     the lock was taken, and the metadata changes that remain legal.
 
     A path is a violation when it is one of the covered files, or when it
-    is a path that is neither explicitly allowed nor ignored by git —
-    that second case is how a file created and deleted inside the run
-    gets caught, since it is in neither fingerprint.
+    is a path nobody declared — that second case is how a file created
+    and deleted inside the run gets caught, since it is in neither
+    fingerprint. Git's opinion about it is not part of the test.
+
+    Directories are judged the same way as anything else, with one
+    exception that is a fact about the filesystem rather than a
+    concession: a directory's own timestamp moves when its entries move,
+    so a `modified` event on a directory is allowed. Creating, removing
+    or renaming one is not.
+
+    `git check-ignore` is not consulted, and there is no unbound class
+    left for a path to fall into: every path is an INPUT whose bytes are
+    hashed or a declared OUTPUT whose pre-existing bytes are hashed.
+
+    A path is not one stream. `streams` carries the difference between
+    the named data streams present when the boundary went up and those
+    present when it came down, and any difference is its own verdict.
     """
     allowed = (BARRIER_DIR, *allowed_writes)
     protection: Mapping[str, Any] = lock.to_dict() if lock is not None else {}
     prepared: Mapping[str, Any] = locked_identity or {}
+    if backend_reason is not None:
+        # F-17 Stage 7: Git is outside the qualified version/ref-backend
+        # contract, so the semantics the topology gate, the resolution gate and
+        # the .git surface classifier all rely on are not established. Nothing
+        # ran; fail closed rather than reach conclusions with machinery we have
+        # not qualified. Same verdict as an in-interval unqualified surface,
+        # because the meaning is the same: unqualified machinery.
+        return Boundary(
+            ObservationVerdict.MACHINERY_UNQUALIFIED, observation.mechanism,
+            len(observation.events), 0, (backend_reason,), len(covered),
+            tuple(allowed),
+            "the git version or ref-storage backend is outside the qualified "
+            "contract, so the evidence machinery is not qualified here and "
+            "nothing ran",
+            protection=protection, locked_identity=prepared)
+    if topology_reason is not None:
+        # F-17 / BLOCKER 1: the git machinery (hooks, config, HEAD, index)
+        # lives outside the watched tree — a linked worktree, a submodule,
+        # or a separate git-dir. The observer cannot see a hook installed
+        # there, so a machinery tamper would go unjudged. Measured as a
+        # real bypass, so this fails closed rather than degrade to a
+        # protected-looking verdict. Never CLEAN for an ineligible topology.
+        return Boundary(
+            ObservationVerdict.MACHINERY_UNOBSERVABLE, observation.mechanism,
+            len(observation.events), 0, (topology_reason,), len(covered),
+            tuple(allowed),
+            "the git machinery is outside the watched tree, so a tamper of it "
+            "could not be observed; this topology is not eligible for the "
+            "evidence guarantee",
+            protection=protection, locked_identity=prepared)
+    if resolution_reason is not None:
+        # F-17 / BLOCKER A: git's object/ref/ancestry resolution is redirected
+        # at capture start — a replace ref, an alternates store, grafts, or a
+        # shallow boundary. The tree-identity binding reads `git diff HEAD` /
+        # `git status`, which honour the redirection, so it would certify a
+        # false identity with `identical: true` and nothing would catch it
+        # (the redirect surface is `.git`, counted-not-judged). Fails closed
+        # rather than degrade to a protected-looking verdict; nothing ran.
+        return Boundary(
+            ObservationVerdict.MACHINERY_REDIRECTED, observation.mechanism,
+            len(observation.events), 0, (resolution_reason,), len(covered),
+            tuple(allowed),
+            "git object/ref/ancestry resolution is redirected, so the "
+            "tree-identity binding cannot be trusted; this repository state is "
+            "not eligible for the evidence guarantee",
+            protection=protection, locked_identity=prepared)
     if lock is not None and not lock.enforced:
         return Boundary(
             ObservationVerdict.UNPROTECTED, observation.mechanism,
             len(observation.events), 0, tuple(lock.refused), len(covered),
             tuple(allowed), lock.reason or "the covered inputs were not made unwritable",
+            protection=protection, locked_identity=prepared)
+    if lock is not None and not lock.fully_bound:
+        # The eighth review's invariant at the consumer. A lock can be
+        # enforced and fully identified while the bytes behind it were
+        # never hashed, and that state is not evidence.
+        return Boundary(
+            ObservationVerdict.UNPROTECTED, observation.mechanism,
+            len(observation.events), 0,
+            (f"{lock.locked} handle(s) held, {len(lock.content_digests)} hashed",),
+            len(covered), tuple(allowed),
+            "an enforced lock held inputs whose bytes were never hashed",
+            protection=protection, locked_identity=prepared)
+    if lock is not None and not lock.fully_identified:
+        # The producer can no longer build this, and the consumer refuses
+        # it anyway. `locked_inputs` and `identified_objects` describe the
+        # same domain, so an outcome that says enforced while holding a
+        # handle it cannot name is not protection — the fifth review found
+        # exactly one such path.
+        return Boundary(
+            ObservationVerdict.UNPROTECTED, observation.mechanism,
+            len(observation.events), 0,
+            (f"{lock.locked} handle(s) held, {len(lock.identities)} identified",),
+            len(covered), tuple(allowed),
+            "an enforced lock held handles that were never identified",
             protection=protection, locked_identity=prepared)
     if drift:
         # The tree moved between the fingerprint and the moment the inputs
@@ -446,6 +779,21 @@ def classify_observation(
             len(observation.events), 0, tuple(drift), len(covered), tuple(allowed),
             "the tree changed while the boundary was being built",
             protection=protection, locked_identity=prepared)
+    if streams:
+        # The ninth review's second detector. No share mode on Windows
+        # stops a NEW named stream being created, on a file or on a
+        # directory — measured, including `FILE_SHARE_NONE` — so a stream
+        # that appeared, vanished or changed length inside the interval is
+        # caught by comparing the inventory rather than by preventing it.
+        # A DIFFERENT failure from INPUTS_MUTATED and it says so: that one
+        # is about the bytes of a path, this one about which streams a
+        # path has.
+        return Boundary(
+            ObservationVerdict.STREAMS_MUTATED, observation.mechanism,
+            len(observation.events), 0, tuple(streams), len(covered),
+            tuple(allowed),
+            "the named data streams of a covered path changed during the capture",
+            protection=protection, locked_identity=prepared)
     if not observation.available or not observation.complete:
         return Boundary(
             ObservationVerdict.UNOBSERVED, observation.mechanism,
@@ -454,34 +802,147 @@ def classify_observation(
             protection=protection, locked_identity=prepared)
 
     violations: list[str] = []
+    stream_violations: list[str] = []
+    machinery_violations: list[str] = []
+    unqualified_violations: list[str] = []
     allowed_count = 0
     machinery = 0
     unknown: dict[str, str] = {}
     for event in observation.events:
         path = event.path
-        if path in covered:
+        if in_git_domain(path):
+            # F-17 Stage 7: every `.git` surface is classified closed-world
+            # (kernel.git_surface). This one branch replaces the old two ad-hoc
+            # predicates AND the broad `.git/` forgive-by-default that followed
+            # them, so a `.git` write can no longer be benign merely by not
+            # matching a hand-written danger list.
+            #   KNOWN_TRUST_SENSITIVE  a hook, config, a resolution-redirect
+            #     surface, HEAD or a resolving ref namespace — a tamper of the
+            #     machinery that produced the evidence. Judged; observed, so an
+            #     in-interval create+delete (ABA) is caught, which a before/after
+            #     fingerprint is blind to.
+            #   KNOWN_CONTENT_OR_BOOKKEEPING  the index, a content-addressed
+            #     object, the reflog — cannot change the trusted identity, which
+            #     is bound at the endpoints. Counted, not judged.
+            #   UNKNOWN  no rule qualifies it, so it is not safe by default:
+            #     MACHINERY_UNQUALIFIED, fail closed. This is the Stage 7 crux.
+            owner = path.split(":", 1)[0]
+            if event.action == "modified" and (repo / owner).is_dir():
+                # A `.git` directory's own timestamp moves when its entries
+                # change (e.g. `.git/objects` when an object lands); the entries
+                # produce their own classified events, so the directory's
+                # timestamp is git bookkeeping, not a surface to classify. This
+                # is the same forgiveness the non-.git dir branch below applies,
+                # and it is `modified`-only: an added/removed/renamed `.git`
+                # directory is structural and still goes through the classifier.
+                machinery += 1
+            else:
+                surface = classify_git_surface(path)
+                if surface.surface_class is GitSurfaceClass.KNOWN_TRUST_SENSITIVE:
+                    machinery_violations.append(f"{event.action}: {path}")
+                elif (surface.surface_class
+                      is GitSurfaceClass.KNOWN_CONTENT_OR_BOOKKEEPING):
+                    machinery += 1
+                else:
+                    unqualified_violations.append(
+                        f"{event.action}: {path} [{surface.rule_id}]")
+        elif ":" in path:
+            # A named data stream, delivered by the observer's stream
+            # filters as `owner:name` (or `:name` on the root itself). A
+            # repository-relative path never otherwise contains a colon, so
+            # this is the stream, not a heuristic.
+            #
+            # Only CREATION and DELETION are violations. `modified_stream`
+            # is excluded on purpose and by measurement: reading a stream
+            # emits it, and the capture reads every locked stream to hash
+            # it, so treating it as a change would flag every capture that
+            # has any stream. A genuine WRITE to a stream present at lock
+            # time cannot happen anyway — the stream is held unwritable —
+            # so a `modified_stream` is always a read. The tenth review's
+            # ABA is a stream that APPEARS and disappears inside the
+            # interval, and `added_stream` fires on the create and never on
+            # a read. Streams under a declared OUTPUT root may churn.
+            owner = path.split(":", 1)[0]
+            if (event.action not in ("added_stream", "removed_stream")
+                    or (owner and _is_allowed_path(owner, allowed))):
+                # Benign: a read of a locked stream (modified_stream), or a
+                # stream under a declared OUTPUT root that may churn.
+                allowed_count += 1
+            else:
+                stream_violations.append(f"{event.action}: {path}")
+        elif path in covered:
             violations.append(f"{event.action}: {path}")
-        elif path == _GIT_DIR.rstrip("/") or path.startswith(_GIT_DIR):
-            # Git rewrites its index while merely reading the tree, so
-            # judging these would make the mechanism unusable. They are
-            # counted instead of forgiven silently.
-            machinery += 1
         elif _is_allowed_path(path, allowed):
             allowed_count += 1
-        elif (repo / path).is_dir():
-            # A directory's own timestamp moves when its entries move. The
-            # entries produce their own events; the container is not a
-            # covered input.
+        elif event.action == "modified" and (repo / path).is_dir():
+            # A directory's own timestamp moves when its entries move, and
+            # the entries produce their own events, so THAT is forgiven.
+            # Nothing else about a directory is: the sixth review pointed
+            # out that this branch used to swallow added/removed/renamed
+            # too, purely because the path happened to be a directory
+            # again by the time the classifier looked. A junction removed
+            # and recreated against another target is exactly that shape.
             allowed_count += 1
         else:
             unknown.setdefault(path, event.action)
 
-    ignored = _git_ignored(repo, sorted(unknown))
     for path, action in sorted(unknown.items()):
-        if path in ignored:
-            allowed_count += 1
-        else:
-            violations.append(f"{action}: {path}")
+        # No `git check-ignore` here, and that is the seventh review's
+        # repair. A path nobody declared is an unknown, and an unknown is
+        # a violation: being ignored by git was never evidence that a
+        # check cannot read it.
+        violations.append(f"{action}: {path}")
+
+    if stream_violations:
+        # The tenth review's ABA, caught by observation rather than by the
+        # endpoints: a named stream created and deleted inside the interval
+        # leaves the inventory unchanged, so this is the only detector that
+        # sees it. Same verdict as an inventory-drift stream change, because
+        # it is the same failure — which streams a covered path has moved.
+        return Boundary(
+            ObservationVerdict.STREAMS_MUTATED, observation.mechanism,
+            len(observation.events), allowed_count,
+            tuple(dict.fromkeys(stream_violations)), len(covered), tuple(allowed),
+            "a named data stream on a covered path changed during the capture, "
+            "observed in the interval and not merely at its endpoints",
+            machinery_events=machinery, protection=protection,
+            locked_identity=prepared)
+
+    if machinery_violations:
+        # F-17: the execute/redirect surface of `.git` changed inside the
+        # interval — a hook installed or config rewritten. Observed, so a
+        # create+delete (ABA) is caught, which a before/after machinery
+        # fingerprint is blind to (measured). Its own verdict, because the
+        # operator response differs: the tree the checks ran against was
+        # sound, but the machinery that ran them was tampered.
+        return Boundary(
+            ObservationVerdict.MACHINERY_MUTATED, observation.mechanism,
+            len(observation.events), allowed_count,
+            tuple(dict.fromkeys(machinery_violations)), len(covered), tuple(allowed),
+            "a hook, config, or a resolution-redirect surface (refs/replace, "
+            "alternates, grafts, shallow, packed-refs, config.worktree) under "
+            ".git was written during the capture, tampering with the machinery "
+            "that produced the evidence",
+            machinery_events=machinery, protection=protection,
+            locked_identity=prepared)
+
+    if unqualified_violations:
+        # F-17 Stage 7: a `.git` surface was written that the closed-world
+        # classifier does not qualify. We cannot say it is safe, so the capture
+        # fails closed rather than forgiving it by default. Its own verdict,
+        # distinct from MACHINERY_MUTATED, because the operator response is to
+        # CLASSIFY the surface (move it into a known class with a stated
+        # property, or confirm it is a genuine tamper), not to assume a tamper.
+        return Boundary(
+            ObservationVerdict.MACHINERY_UNQUALIFIED, observation.mechanism,
+            len(observation.events), allowed_count,
+            tuple(dict.fromkeys(unqualified_violations)), len(covered),
+            tuple(allowed),
+            "a .git administrative surface the closed-world classifier does not "
+            "qualify was written during the capture; it is not safe by default "
+            "and fails closed until it is classified (see boundary.violations)",
+            machinery_events=machinery, protection=protection,
+            locked_identity=prepared)
 
     verdict = (ObservationVerdict.INPUTS_MUTATED if violations
                else ObservationVerdict.CLEAN)
@@ -504,6 +965,13 @@ class CheckCommand:
     name: str
     argv: tuple[str, ...]
     lint_baseline: bool = False
+    timeout_s: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.timeout_s is not None and (
+                isinstance(self.timeout_s, bool) or not math.isfinite(self.timeout_s)
+                or self.timeout_s <= 0):
+            raise ValueError("check timeout must be positive and finite")
 
 
 @dataclass(frozen=True)
@@ -591,12 +1059,31 @@ def check_environment(scratch: Path) -> dict[str, str]:
 
 
 def _run_check(repo: Path, command: CheckCommand, staging: Path,
-               lint_baseline: int, env: Mapping[str, str] | None = None) -> CheckResult:
+               lint_baseline: int, env: Mapping[str, str] | None = None,
+               executor: CheckExecutor | None = None) -> CheckResult:
     started = time.monotonic()
-    proc = subprocess.run(
-        list(command.argv), cwd=repo, capture_output=True, text=True, check=False,
-        env=dict(env) if env is not None else None,
-    )
+    try:
+        if executor is None:
+            proc = subprocess.run(
+                list(command.argv), cwd=repo, capture_output=True, text=True, check=False,
+                env=dict(env) if env is not None else None, timeout=command.timeout_s,
+            )
+        else:
+            proc = executor.execute(command.argv, cwd=repo,
+                                    timeout_s=command.timeout_s, env=env)
+    except subprocess.TimeoutExpired as exc:
+        # Preserve a typed failing check; never turn timeout into an absent
+        # result which could accidentally qualify under an empty check set.
+        def partial_text(value: bytes | str | None) -> str:
+            return value.decode("utf-8", "replace") if isinstance(value, bytes) else value or ""
+
+        (staging / f"{command.name}.stdout.txt").write_text(
+            partial_text(exc.stdout), encoding="utf-8")
+        (staging / f"{command.name}.stderr.txt").write_text(
+            partial_text(exc.stderr) + "\nverification timed out", encoding="utf-8")
+        return CheckResult(command.name, tuple(command.argv), 124,
+                           round(time.monotonic() - started, 2), "verification timed out",
+                           CheckOutcome.FAILED, detail="timeout")
     duration = time.monotonic() - started
     (staging / f"{command.name}.stdout.txt").write_text(proc.stdout, encoding="utf-8")
     (staging / f"{command.name}.stderr.txt").write_text(proc.stderr, encoding="utf-8")
@@ -648,10 +1135,20 @@ def _exit_code(binding: TreeBinding, checks: ChecksVerdict, boundary: Boundary) 
         return EXIT_TREE_MUTATED
     if boundary.verdict is ObservationVerdict.UNOBSERVED:
         return EXIT_BOUNDARY_UNAVAILABLE
+    if boundary.verdict is ObservationVerdict.MACHINERY_UNOBSERVABLE:
+        return EXIT_MACHINERY_UNOBSERVABLE
+    if boundary.verdict is ObservationVerdict.MACHINERY_REDIRECTED:
+        return EXIT_MACHINERY_REDIRECTED
+    if boundary.verdict is ObservationVerdict.MACHINERY_UNQUALIFIED:
+        return EXIT_MACHINERY_UNQUALIFIED
     if boundary.verdict is ObservationVerdict.UNPROTECTED:
         return EXIT_INPUTS_UNPROTECTED
     if boundary.verdict is ObservationVerdict.PREPARATION_DRIFT:
         return EXIT_PREPARATION_DRIFT
+    if boundary.verdict is ObservationVerdict.STREAMS_MUTATED:
+        return EXIT_STREAMS_MUTATED
+    if boundary.verdict is ObservationVerdict.MACHINERY_MUTATED:
+        return EXIT_MACHINERY_MUTATED
     if boundary.verdict is ObservationVerdict.INPUTS_MUTATED:
         return EXIT_INPUTS_MUTATED
     if checks not in (ChecksVerdict.ALL_CLEAN, ChecksVerdict.WITHIN_BASELINE):
@@ -672,9 +1169,29 @@ def _verdict_line(binding: TreeBinding, checks: ChecksVerdict, boundary: Boundar
     if boundary.verdict is ObservationVerdict.UNPROTECTED:
         return ("INVALID EVIDENCE: the covered inputs were not made unwritable, so "
                 f"nothing ran - {boundary.reason}")
+    if boundary.verdict is ObservationVerdict.MACHINERY_UNOBSERVABLE:
+        return ("INVALID EVIDENCE: the git machinery is outside the watched tree "
+                "(worktree, submodule or separate git-dir), so a tamper of it "
+                f"could not be observed and nothing ran - {boundary.reason}")
+    if boundary.verdict is ObservationVerdict.MACHINERY_REDIRECTED:
+        return ("INVALID EVIDENCE: git object/ref/ancestry resolution is "
+                "redirected (a replace ref, alternates, grafts or a shallow "
+                "boundary), so the tree-identity binding cannot be trusted and "
+                f"nothing ran - {boundary.reason}")
     if boundary.verdict is ObservationVerdict.PREPARATION_DRIFT:
         return ("INVALID EVIDENCE: the tree changed while the boundary was being "
                 "built, so nothing ran; see boundary.violations")
+    if boundary.verdict is ObservationVerdict.STREAMS_MUTATED:
+        return ("INVALID EVIDENCE: a named data stream appeared, vanished or "
+                "changed length during the capture; see boundary.violations")
+    if boundary.verdict is ObservationVerdict.MACHINERY_MUTATED:
+        return ("INVALID EVIDENCE: a hook, config, or a resolution-redirect "
+                "surface under .git was written during the capture, tampering "
+                "with the machinery that produced it; see boundary.violations")
+    if boundary.verdict is ObservationVerdict.MACHINERY_UNQUALIFIED:
+        return ("INVALID EVIDENCE: a .git administrative surface that the "
+                "closed-world classifier does not qualify was written during the "
+                "capture, so it cannot be assumed safe; see boundary.violations")
     if boundary.verdict is ObservationVerdict.INPUTS_MUTATED:
         return ("INVALID EVIDENCE: a covered input was written during the capture "
                 "and the endpoints do not show it; see boundary.violations")
@@ -739,6 +1256,65 @@ def _preparation_drift(pre: TreeIdentity, prepared: TreeIdentity) -> tuple[str, 
     return describe_drift(pre.fingerprint, prepared.fingerprint) or ("digest",)
 
 
+def file_digests(repo: Path, paths: Iterable[str]) -> dict[str, str]:
+    """SHA-256 of files that are not locked, read by path.
+
+    Used for the pre-existing contents of OUTPUT roots. Weaker than the
+    INPUT manifest by construction — an output is allowed to change, so
+    this says what was there when the capture began, not what stayed —
+    and that is exactly its job: bytes planted under an output root
+    before a run are named rather than anonymous.
+    """
+    digests: dict[str, str] = {}
+    for relative in sorted(paths):
+        target = repo / relative
+        for name in (None, *_output_stream_names(target)):
+            key = relative if name is None else f"{relative}:{name}"
+            source = target if name is None else Path(f"{target}:{name}")
+            try:
+                digest = hashlib.sha256()
+                with source.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1 << 20), b""):
+                        digest.update(chunk)
+            except OSError as exc:
+                digests[key] = f"unreadable: {exc}"
+                continue
+            digests[key] = digest.hexdigest()
+    return digests
+
+
+def _output_stream_names(target: Path) -> tuple[str, ...]:
+    """Named streams of a pre-existing OUTPUT file.
+
+    The ninth review closed the same door on both sides. An OUTPUT is
+    allowed to change, but what is ALREADY there when the capture begins
+    must be named, and a named stream is bytes a check can read exactly
+    like the main one. An enumeration that fails is recorded as a
+    stream nobody can state rather than passed over.
+    """
+    found = named_streams(target)
+    if found is None:
+        return ("<streams could not be enumerated>",)
+    return tuple(name for name, _ in found)
+
+
+def write_manifest(staging: Path, inputs: Mapping[str, str],
+                   outputs: Mapping[str, str]) -> Path:
+    """The bytes this capture is about, as a file a third party can check."""
+    path = staging / "input-manifest.json"
+    path.write_text(json.dumps({
+        "note": (
+            "SHA-256 per path. `inputs` were read through the handles that held "
+            "them unwritable, so they are the bytes the checks read. "
+            "`outputs_at_start` is what already existed under a declared OUTPUT "
+            "root when the capture began; those may legitimately change."
+        ),
+        "inputs": dict(sorted(inputs.items())),
+        "outputs_at_start": dict(sorted(outputs.items())),
+    }, indent=2, sort_keys=False), encoding="utf-8")
+    return path
+
+
 def write_identities(staging: Path, identities: Mapping[str, str]) -> Path:
     """Which filesystem object each protected path actually was."""
     path = staging / "input-identities.json"
@@ -751,6 +1327,29 @@ def write_summary(staging: Path, summary: Mapping[str, Any]) -> Path:
     path = staging / "SUMMARY.json"
     path.write_text(json.dumps(dict(summary), indent=2, sort_keys=True), encoding="utf-8")
     return path
+
+
+# F-17: the evidence that sustains the project's claims was the least
+# protected part of it — a bundle with no hash chain and no signature, so a
+# file could be edited after capture and nothing would notice. This is the
+# ledger's protection (kernel.ledger) applied to the bundle: a SHA-256 of
+# every file plus one digest over them all, written last so it covers
+# SUMMARY.json too, and re-derivable so a third party checks the claim
+# rather than trusting it.
+# F-17: the evidence that sustains the project's claims was the least
+# protected part of it. The primitives that write and re-derive a bundle
+# manifest now live in `gnosis.trust.bundle_verify` and are imported from
+# there, NOT reimplemented here.
+#
+# The direction of that import is the security property. The publisher
+# service must verify bundles; if verification lived in this module, the
+# publisher's import closure would contain git evidence collection, the
+# input lock and the write observer - code that runs tools, takes locks and
+# watches the filesystem - to answer a question about hashes. So the small
+# thing is the dependency of the large thing, and never the reverse.
+#
+# Re-exported here because this module's own callers have always found them
+# at this name; there is still exactly one implementation.
 
 
 def _utc_now() -> str:
@@ -769,6 +1368,7 @@ def run_capture(
     allowed_writes: Sequence[str] = (),
     scratch: Path | None = None,
     now: Callable[[], str] = _utc_now,
+    executor: CheckExecutor | None = None,
 ) -> Capture:
     """Run the checks inside an observed interval, between two fingerprints.
 
@@ -804,13 +1404,36 @@ def run_capture(
     lock_outcome: LockOutcome | None = None
     prepared: TreeIdentity | None = None
     drift: tuple[str, ...] = ()
+    streams: tuple[str, ...] = ()
+    before_streams: StreamInventory = {}
+    # F-17 / BLOCKER 1: refuse a topology whose git machinery is outside the
+    # watched tree BEFORE running anything. A worktree/submodule/separate
+    # git-dir capture would otherwise run to a CLEAN verdict with its hooks
+    # and config unobserved. Determined once, treated as adversarial input
+    # (the .git redirect is resolved by git and checked to lie in-tree).
+    # F-17 Stage 7: the backend/version contract is the most fundamental gate —
+    # if Git is not the qualified version and ref backend, the semantics the
+    # topology gate, the resolution gate and the .git classifier rely on are not
+    # established, so the other probes are not even run against unqualified
+    # machinery.
+    backend_ok, backend_reason = git_backend_and_version_qualified(repo)
+    topology_ok, topology_reason = (True, None)
+    resolution_ok, resolution_reason = (True, None)
+    if backend_ok:
+        topology_ok, topology_reason = git_topology_eligible(repo)
+        # F-17 / BLOCKER A: only meaningful for an eligible (standard) topology —
+        # for an ineligible one the topology gate already refuses, and the
+        # resolution probe would run git against machinery outside the tree.
+        if topology_ok:
+            resolution_ok, resolution_reason = git_resolution_faithful(repo)
     try:
         pre = identity(repo)
-        if pre.available:
-            covered = covered_paths(repo)
+        if pre.available and backend_ok and topology_ok and resolution_ok:
+            covered = covered_paths(repo, allowed_writes)
             env = check_environment(scratch)
             lock = input_lock(repo)
-            lock_outcome = lock.acquire(sorted(covered))
+            directories = stream_directories(repo, allowed_writes)
+            lock_outcome = lock.acquire(sorted(covered), directories)
             try:
                 if lock_outcome.enforced:
                     # The identity that matters is taken HERE, once nothing
@@ -820,16 +1443,37 @@ def run_capture(
                     # still have moved inside it.
                     prepared = identity(repo)
                     drift = _preparation_drift(pre, prepared)
+                    # Taken here for the same reason as `prepared`: once
+                    # nothing can write the inputs any more, this is the
+                    # set of streams the checks will actually see.
+                    before_streams, _ = stream_inventory(
+                        repo, sorted(covered), directories)
                     write_identities(staging, lock_outcome.identities)
+                    write_manifest(staging, lock_outcome.content_digests,
+                                   file_digests(repo, output_paths(repo, allowed_writes)))
                     if not drift:
                         # Nothing runs against inputs that anything could
                         # still write. Discovering that after the suite is
                         # worse than discovering it before.
                         for command in commands:
                             results.append(
-                                _run_check(repo, command, staging, lint_baseline, env))
+                                _run_check(repo, command, staging, lint_baseline, env,
+                                           executor=executor))
+                        # Still inside the lock: a comparison taken after
+                        # the handles are gone would have a window in it.
+                        after_streams, failures = stream_inventory(
+                            repo, sorted(covered), directories)
+                        streams = stream_drift(before_streams, after_streams) + failures
             finally:
                 lock.release()
+            post = identity(repo)
+        elif pre.available:
+            # The tree can be bound, but either the topology is ineligible
+            # (its git machinery is outside the watched tree) or git's
+            # resolution is redirected (a replace ref, alternates, grafts,
+            # shallow), so nothing ran. Take the post fingerprint anyway — the
+            # binding is honest, and the boundary carries the
+            # MACHINERY_UNOBSERVABLE or MACHINERY_REDIRECTED refusal.
             post = identity(repo)
         else:
             post = TreeIdentity(
@@ -841,7 +1485,9 @@ def run_capture(
     binding = bind_tree(pre, post)
     boundary = classify_observation(repo, observation, covered, allowed_writes,
                                     lock_outcome, drift,
-                                    prepared.to_dict() if prepared is not None else None)
+                                    prepared.to_dict() if prepared is not None else None,
+                                    streams, topology_reason, resolution_reason,
+                                    backend_reason)
     checks_verdict = _checks_verdict(results)
     summary = build_summary(
         binding, results, checks_verdict, boundary,
@@ -849,6 +1495,9 @@ def run_capture(
         captured_at=now(),
     )
     write_summary(staging, summary)
+    # Last, so it covers SUMMARY.json and every other artifact: F-17's
+    # tamper-evidence over the bundle itself.
+    write_bundle_manifest(staging)
     exit_code = summary["exit_code"]
     return Capture(binding, tuple(results), checks_verdict, staging, summary,
                    int(exit_code), boundary)

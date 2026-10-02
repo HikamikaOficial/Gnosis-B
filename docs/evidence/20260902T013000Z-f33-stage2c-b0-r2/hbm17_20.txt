@@ -1,0 +1,6 @@
+HBM17: CAUGHT  (do not persist residue manifest before first acquisition)
+HBM18: CAUGHT  (resource acquired but persisted state never updated)
+HBM19: CAUGHT  (delete residue manifest before rollback fully succeeded)
+HBM20: CAUGHT  (recovery cleans a resource with ambiguous/unproven ownership)
+
+4/4 residue mutants CAUGHT

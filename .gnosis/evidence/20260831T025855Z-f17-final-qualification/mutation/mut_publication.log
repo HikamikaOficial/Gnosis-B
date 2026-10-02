@@ -1,0 +1,92 @@
+MUTATION CHECK — F-17 Stage 4 durable publication + crash recovery
+==========================================================================
+targeted suite: tests/test_durable_publication.py tests/test_authority_boundary.py tests/test_run_identity_authorization.py tests/test_trust_boundary.py tests/test_atomic_io.py
+
+BASELINE (repair in place): exit=0  171 passed, 28 subtests passed in 21.02s
+
+SM1: the protocol answers ANCHORED before the watermark is committed
+  result: exit=1  1 failed, 26 passed in 0.97s
+  verdict: CAUGHT
+
+SM2: RunIdentity is marked ANCHORED before the durable watermark commit
+  result: exit=1  1 failed, 25 passed in 0.84s
+  verdict: CAUGHT
+
+SM3: the ledger append is not flushed to the storage stack
+  result: exit=1  1 failed, 31 passed in 1.70s
+  verdict: CAUGHT
+
+SM4: the ledger is not re-verified from disk before the watermark advances
+  result: exit=1  1 failed, 26 passed in 0.97s
+  verdict: CAUGHT
+
+SM5: the watermark binds only the sequence, not the record it commits
+  result: exit=1  1 failed, 1 passed in 0.44s
+  verdict: CAUGHT
+
+SM6: recovery treats any tail beyond the watermark as committed history
+  result: exit=1  1 failed, 12 passed in 0.49s
+  verdict: CAUGHT
+
+SM7: recovery may cut the ledger inside the committed prefix
+  result: exit=1  1 failed, 46 passed in 3.78s
+  verdict: CAUGHT
+
+SM8: a malformed watermark is read as 'nothing is committed'
+  result: exit=1  1 failed, 10 passed in 0.48s
+  verdict: CAUGHT
+
+SM9: a retry appends a second anchor instead of answering ALREADY_ANCHORED
+  result: exit=1  1 failed, 28 passed in 1.31s
+  verdict: CAUGHT
+
+SM10: recovery ignores which deployment a committed anchor is bound to
+  result: exit=1  1 failed, 57 passed in 5.33s
+  verdict: CAUGHT
+
+SM11: recovery stops checking the record against the run identity
+  result: exit=1  1 failed, 44 passed in 3.58s
+  verdict: CAUGHT
+
+SM12: the trusted publication lock is dropped
+  result: exit=1  1 failed, 33 passed in 1.99s
+  verdict: CAUGHT
+
+SM13: an ANCHORED state is trusted without a confirming watermark
+  result: exit=1  1 failed, 49 passed in 4.17s
+  verdict: CAUGHT
+
+SM14: the watermark may jump instead of advancing by exactly one record
+  result: exit=1  1 failed in 0.46s
+  verdict: CAUGHT
+
+SM15: several uncommitted records are discarded on a guess
+  result: exit=1  1 failed, 56 passed in 5.25s
+  verdict: CAUGHT
+
+SM16: a ledger that already holds records is given a genesis watermark
+  result: exit=1  1 failed, 22 passed in 0.59s
+  verdict: CAUGHT
+
+SM17: recovery skips case C, so a committed run is published a second time
+  result: exit=1  1 failed, 47 passed in 4.01s
+  verdict: CAUGHT
+
+SM18: the watermark's temp file is not flushed to the storage stack
+  result: exit=1  1 failed, 31 passed in 1.77s
+  verdict: CAUGHT
+
+SM19: a watermark may commit nothing and name a record at the same time
+  result: exit=1  1 failed, 4 passed in 0.45s
+  verdict: CAUGHT
+
+SM20: ALREADY_ANCHORED is answered without resolving the committed record
+  result: exit=1  1 failed, 29 passed in 1.49s
+  verdict: CAUGHT
+
+SM21: an uncommitted tail is appended onto instead of failing closed
+  result: exit=1  1 failed, 30 passed in 1.67s
+  verdict: CAUGHT
+
+RESTORED: exit=0  171 passed, 28 subtests passed in 21.29s
+mutants: 21  survived/aborted: 0

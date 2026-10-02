@@ -40,6 +40,12 @@ Exit codes are distinct on purpose:
     4  a covered input was written during the run, endpoints notwithstanding
     5  the interval could not be observed — no mechanism, or an incomplete one
     6  the covered inputs could not be made unwritable, so nothing ran
+    7  the tree moved while the boundary was being built
+
+Every path git can enumerate — tracked, untracked AND ignored — is an
+INPUT unless this file declares it an OUTPUT, and every INPUT is locked
+AND hashed. Being git-ignored exempts nothing, and there is no class for
+bytes the evidence cannot state.
 
 A second review then broke the observation: a write made through a
 memory-mapped view need not generate any notification at all. So the
@@ -72,21 +78,49 @@ from gnosis.kernel.evidence_capture import (  # noqa: E402
 EVIDENCE_ROOT = REPO / ".gnosis" / "evidence"
 LINT_BASELINE = REPO / ".gnosis" / "state" / "lint_baseline.json"
 
-# Places inside the tree a check may legitimately write. Kept short on
-# purpose: everything a check writes that CAN be redirected is redirected
-# out of the tree entirely (see `check_environment`), so this list is
-# what is left rather than a convenience. `.git/` is here because git
-# updates its index while reading the tree, and `.git` is not a covered
-# input — content_fingerprint does not hash it. The cache directories are
-# belt and braces: they are redirected and git-ignored already, and
-# naming them keeps a reader from having to derive that.
+# THE DECLARED PATH POLICY. Every path git can enumerate is an INPUT —
+# covered, locked, identified — unless it appears below. Nothing is
+# exempt for being git-ignored: the seventh review showed a check reading
+# MALICIOUS out of an ignored file while the bundle said evidence_valid.
+#
+# Each entry is a claim a reviewer can challenge on its own. An entry
+# with a slash is a path prefix; one without is a directory name matched
+# against any component.
+
+# OUTPUT — the checks legitimately write here, so events are allowed.
+# Everything that CAN be redirected out of the tree already is (see
+# `check_environment`); this is what is left.
 ALLOWED_WRITES: tuple[str, ...] = (
-    ".git/",
+    ".git/",                # git rewrites its index while reading the tree
+    "__pycache__",          # bytecode, redirected but named for the reader
     ".pytest_cache/",
     ".mypy_cache/",
     ".ruff_cache/",
-    "__pycache__",
+    ".gnosis/runtime/",     # kernel runtime state
+    ".gnosis/logs/",
+    ".gnosis/traces/",
+    ".gnosis/artifacts/",
+    ".gnosis/tmp/",
+    ".gnosis/state/",       # lease/claim/lint-baseline stores
+    ".gnosis/workspaces/",  # governed execution worktrees
+    ".zerker/",             # ZMem's local store, held open by its server
+    ".m3/",                 # M3's local index
+    "memory/",              # local memory databases and indexes
+    # Measured, not assumed: the first capture run under this policy
+    # caught the code-intelligence suite writing a CodeGraph index into a
+    # dataset fixture. The index is an output of the checks; the fixture
+    # around it is not, so this names the generated part and leaves the
+    # fixture an INPUT like everything else.
+    ".codegraph",
 )
+
+# There is no third class. An eighth review pointed out that a root the
+# evidence cannot state is a silent input channel however loudly it is
+# declared, so OUT_OF_SCOPE is gone. The nested clones under
+# external/repositories/ and .gnosis/lab/**/{candidates,tools,datasets}
+# are INPUTs now like everything else: 88,424 files and 2.4 GB of them,
+# measured, and that cost is the price of the guarantee rather than a
+# reason to weaken it.
 
 COMMANDS: list[CheckCommand] = [
     CheckCommand("pytest", (sys.executable, "-m", "pytest", "tests/", "-q")),

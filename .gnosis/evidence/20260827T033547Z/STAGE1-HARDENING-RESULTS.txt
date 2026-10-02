@@ -1,0 +1,181 @@
+F-17 STAGE 1 — INDEPENDENT-REVIEW HARDENING (CLOSED-WORLD TCB BOUNDARY)
+Review verdict acted on: STAGE 1 APPROVE_WITH_ONE_FINDING
+Reviewed tree: HEAD 983edb5.  Stage 2 NOT started.
+
+SCOPE OF THIS CORRECTION
+  Exactly the one blocking finding (invert the TCB boundary model), the
+  future-module coverage, mutant AM12, and the honest TCB-size measurement.
+  No refactor of production source. No test migration. The F-14 fixture was
+  NOT touched.
+
+PRODUCTION SOURCE CHANGED:  NO.
+  git diff --stat vs 983edb5:
+    scripts/mutation_check_authority.py   (+AM12, +AM13)
+    tests/test_trust_boundary.py          (closed-world enforcement)
+  Nothing under src/ was modified. mypy over src/gnosis is therefore
+  unchanged by construction, and re-run to confirm.
+
+1. THE FINDING, MEASURED
+  The old test enforced a BLACKLIST of worker-plane name substrings
+  (engine/planner/scheduler/policy/runner/adapter/claude/codex/plugin/
+  director/evidence_capture/integration/convergence/worktree).
+  Of the 56 non-TCB internal gnosis.* modules that exist today, that
+  blacklist would have ADMITTED 28 IN SILENCE — including
+  kernel.credentials, kernel.ledger, kernel.memory_router,
+  kernel.write_observer and transport.mcp_transport.
+  Full list: stage1_hardening_tcb_closure.txt section 4.
+
+2. THE CLOSED-WORLD MODEL NOW ENFORCED
+  For internal gnosis.* modules: DEFAULT = NOT ALLOWED.
+  Enforced property:  loaded gnosis module NOT IN TRUST_ALLOWLIST -> TEST FAIL.
+
+  TRUST_ALLOWLIST (6 entries, each with a stated architectural reason):
+    gnosis                     distribution root package; __init__ holds no logic
+    gnosis.kernel              empty package marker, traversed to reach canonical
+    gnosis.kernel.canonical    the ONE canonical-bytes hash primitive (ADR-0004);
+                               re-implementing it in the Trust Plane is the defect
+                               test_canonical_hash_is_not_duplicated forbids
+    gnosis.trust               the Trust Plane package itself
+    gnosis.trust.anchor        authoritative anchor slice
+    gnosis.trust.launch        authoritative launch/identity slice
+
+  DELIBERATELY EXCLUDED: gnosis.kernel.authority. The Trust Plane must never
+  depend back on its own compatibility facade, and leaving it unqualified is
+  what enforces that.
+
+  DEFERRED_TCB_EXPANSION (lazy, function-body imports — TCB at call time):
+    gnosis.kernel.evidence_capture   verify_bundle, imported inside
+                                     publish_anchor / verify_anchored_bundle;
+                                     overridable through the verify= seam
+
+3. RUNTIME INTERNAL CLOSURE — MEASURED, UNMUTATED TREE (clean subprocess)
+    import gnosis.trust.anchor -> gnosis, gnosis.kernel, gnosis.kernel.canonical,
+                                  gnosis.trust, gnosis.trust.anchor,
+                                  gnosis.trust.launch
+    import gnosis.trust.launch -> gnosis, gnosis.trust, gnosis.trust.launch
+  Violation set under the closed-world model: NONE for both.
+  Third-party pulled in (delta vs interpreter start): NONE for both.
+
+4. FUTURE-MODULE REJECTION — THE MODEL DOES NOT NEED THE NAME IN ADVANCE
+  a) predicate level, name-agnostic
+     test_an_arbitrary_unknown_internal_module_is_a_boundary_violation
+     flags kernel.credentials / kernel.ledger / transport.mcp_transport
+     (all real, all missed by the blacklist), gnosis.some_future_module
+     (does not exist), and a uuid4-generated name nothing in this repo knows.
+  b) end to end, a REAL module
+     test_a_real_new_internal_module_in_the_closure_is_caught_end_to_end
+     writes a new gnosis.zz_future_dependency_<random>.py to disk, extends
+     gnosis.__path__ in a clean subprocess, IMPORTS IT FOR REAL alongside the
+     Trust Plane, and requires the measured closure to report it as the one
+     violation. No production source is mutated to do this.
+  c) staleness, the other direction
+     test_the_allowlist_grants_nothing_it_does_not_need fails if an allowlist
+     entry is not actually loaded — an over-broad allowlist is a standing
+     permission for a dependency nobody reviewed.
+
+5. A HOLE IN THE CLOSED-WORLD MODEL ITSELF, FOUND AND CLOSED
+  A load-time closure cannot see an import written INSIDE A FUNCTION BODY, so
+  the whole model could be bypassed by moving the dependency there. Added an
+  AST scan of src/gnosis/trust/** that resolves every internal import at any
+  nesting level and refuses anything neither allowlisted nor declared in
+  DEFERRED_TCB_EXPANSION. The scan is proven non-vacuous by
+  test_the_deferred_expansion_list_is_not_stale, which requires the declared
+  lazy dependency to actually be found in the source.
+
+6. MUTANTS (scripts/mutation_check_authority.py, full log stage1_hardening_mutation.txt)
+  baseline exit=0 (33 passed); 13 mutants; 0 survived; restored exit=0 (33 passed).
+  AM1..AM11  CAUGHT (unchanged)
+  AM12  trust-plane imports an internal gnosis module absent from the
+        qualified TCB allowlist                                    CAUGHT
+        (caught by the load-time closed-world test — 18 passed then fail)
+  AM13  the TCB grows through a LAZY (function-body) internal import,
+        invisible at load time                                     CAUGHT
+        (caught by the AST scan — 23 passed then fail; no load-time
+         closure could ever see it)
+
+  OLD MODEL vs NEW MODEL, measured on an ISOLATED COPY of src/ (repo untouched):
+    AM12  anchor.py gains `import gnosis.kernel.input_lock`
+          old blacklist : SURVIVED       new closed-world : CAUGHT
+    AM12' launch.py gains `import gnosis.kernel.credentials`
+          old blacklist : SURVIVED       new closed-world : CAUGHT
+  Stated honestly: the old file ALSO asserted an exact closure SET for
+  trust.anchor, which would have failed on AM12-in-anchor. That assertion did
+  NOT exist for trust.launch, guarded by the blacklist alone — so AM12'
+  (kernel.credentials into the Trust Plane through launch.py) went entirely
+  undetected under the old model. AM13 was undetectable under the old model
+  in either slice.
+
+7. TCB SIZE — CLAIM CORRECTED (full derivation in stage1_hardening_tcb_size.txt)
+  A  STATIC FUNCTIONAL SLICE .................  265 LOC
+       trust/anchor.py 212 + kernel/canonical.py 53.
+       This is the number previously reported as "the TCB".
+  B  RUNTIME TRUSTED CLOSURE, LOAD TIME ......  522 LOC  (511 without the
+       three package markers). Adds trust/launch.py 246: trust.anchor imports
+       assert_publisher_identity / label_high_no_write_up from it, so launch
+       is TRUSTED CODE, not "conceptually unused" code.
+  C  RUNTIME TRUSTED CLOSURE, PUBLISH TIME ... 3966 LOC
+       Adds evidence_capture 1487 + git_evidence 393 + input_lock 936 +
+       write_observer 628 = +3444, because publish_anchor and
+       verify_anchored_bundle default to verify=None and then lazily import
+       verify_bundle — which RECOMPUTES THE DIGEST THAT GETS ANCHORED.
+       Every module in (C) can, if compromised, determine what the publisher
+       publishes. (C) is the security-relevant metric.
+
+  NOT REDUCED HERE, deliberately. Reducing it needs the trust/bundle_verify.py
+  extraction AND actually passing verify= at the call sites — Stage-6 work
+  (docs/F17_P2_PUBLISHER_DESIGN.md section 8). Per the review: enforcement
+  correctness and honest measurement, not chasing a minimum LOC number.
+  docs/F17_PRODUCTION_WIRING_AND_CLOSURE.md section 4 now carries the same
+  three metrics so its "approximately 460 lines" is not read as present tense.
+
+8. DIRECTED TESTS
+  tests/test_authority_boundary.py + tests/test_trust_boundary.py = 33 passed
+  (was 26; trust boundary went 8 -> 15 tests). Run as a HIGH-integrity process,
+  so the OS-boundary tests executed rather than skipping.
+
+9. TYPES / LINT
+  mypy  src/gnosis: Success, no issues in 62 source files (unchanged; no src
+        file was modified).
+  mypy  tests/test_trust_boundary.py: 4 import-untyped errors — IDENTICAL in
+        count and rule to the committed version of the same file (the package
+        ships no py.typed marker; the project mypy target is src/). Pre-existing
+        baseline, not introduced here.
+  ruff  tests/test_trust_boundary.py: All checks passed.
+  ruff  scripts/mutation_check_authority.py: 6 ISC004 — EXACTLY the committed
+        baseline (verified by running ruff against `git show HEAD:` of the same
+        file). AM12 and AM13 added zero findings.
+
+10. DEPENDENCY CLOSURE CHECK
+  See section 3 and stage1_hardening_tcb_closure.txt. Internal closure is
+  within the closed-world allowlist; third-party delta is empty; the one
+  deferred internal dependency is declared and non-stale.
+
+11. REGRESSION STATUS — NOT GREEN-WASHED
+  The 229 passed / 1 failed run from Stage 1 is NOT recorded as GREEN. Its
+  classification as an environmental / pre-existing candidate stands
+  PROVISIONALLY (it failed inside `git add`, the module imports neither
+  authority nor trust, and it passes in isolation). Per the review the fixture
+  was NOT repaired in this correction. Final closure still requires a genuinely
+  green full run or a formal adjudication.
+
+12. DEBT REGISTERED (docs/NEXT_ACTIONS.md 0-XV)
+  a) the facade still re-exports the private helpers _bundle_head_sha /
+     _bundle_content_digest for compatibility. Accepted for now; a new test
+     PINS the private surface to exactly those two names so it cannot grow
+     quietly. Removal is a decision for final closure, not a mass test
+     migration now.
+  b) reduce the publish-time trusted closure (section 7C) at Stage 6.
+  c) the F-14 full-run adjudication (section 11).
+
+13. RESIDUAL RISKS
+  - The closed-world control covers internal gnosis.* modules and (as a delta)
+    third-party imports. stdlib is deliberately out of scope, per the review.
+  - The AST scan is a SOURCE-level control over src/gnosis/trust/**. A
+    dependency reached without an import statement (importlib.import_module
+    with a computed name, exec) would evade it; nothing in the Trust Plane does
+    that today, and the load-time closure test still covers the eager case.
+  - TRUST_ALLOWLIST and DEFERRED_TCB_EXPANSION live in the test file. Enlarging
+    the TCB is therefore a visible, reviewable diff — but it is still a diff a
+    reviewer must read; no mechanism outside review prevents someone adding an
+    entry along with the dependency.
+  - (C) 3966 LOC is the effective TCB until Stage 6. It is recorded, not fixed.

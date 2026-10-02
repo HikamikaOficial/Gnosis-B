@@ -1,0 +1,89 @@
+F-17 STAGE 5 - TRUST PLANE TCB CLOSURE
+==========================================================================
+
+TRUST_ALLOWLIST (14 entries):
+  gnosis
+  gnosis.kernel
+  gnosis.kernel.atomic_io
+  gnosis.kernel.canonical
+  gnosis.kernel.file_lock
+  gnosis.trust
+  gnosis.trust.anchor
+  gnosis.trust.bootstrap   <-- STAGE 5 ADDITION
+  gnosis.trust.deployment
+  gnosis.trust.launch
+  gnosis.trust.launch_spec   <-- STAGE 5 ADDITION
+  gnosis.trust.publication
+  gnosis.trust.run_identity
+  gnosis.trust.worker_launcher   <-- STAGE 5 ADDITION
+
+gnosis.trust.anchor
+  loaded internal (6): gnosis, gnosis.kernel, gnosis.kernel.canonical, gnosis.trust, gnosis.trust.anchor, gnosis.trust.launch
+  third-party : NONE
+  unqualified : NONE
+
+gnosis.trust.launch
+  loaded internal (3): gnosis, gnosis.trust, gnosis.trust.launch
+  third-party : NONE
+  unqualified : NONE
+
+gnosis.trust.deployment
+  loaded internal (6): gnosis, gnosis.kernel, gnosis.kernel.canonical, gnosis.trust, gnosis.trust.deployment, gnosis.trust.launch
+  third-party : NONE
+  unqualified : NONE
+
+gnosis.trust.run_identity
+  loaded internal (9): gnosis, gnosis.kernel, gnosis.kernel.atomic_io, gnosis.kernel.canonical, gnosis.kernel.file_lock, gnosis.trust, gnosis.trust.anchor, gnosis.trust.launch, gnosis.trust.run_identity
+  third-party : NONE
+  unqualified : NONE
+
+gnosis.trust.publication
+  loaded internal (10): gnosis, gnosis.kernel, gnosis.kernel.atomic_io, gnosis.kernel.canonical, gnosis.kernel.file_lock, gnosis.trust, gnosis.trust.anchor, gnosis.trust.launch, gnosis.trust.publication, gnosis.trust.run_identity
+  third-party : NONE
+  unqualified : NONE
+
+gnosis.trust.launch_spec
+  loaded internal (7): gnosis, gnosis.kernel, gnosis.kernel.atomic_io, gnosis.kernel.canonical, gnosis.trust, gnosis.trust.launch, gnosis.trust.launch_spec
+  third-party : NONE
+  unqualified : NONE
+
+gnosis.trust.worker_launcher
+  loaded internal (8): gnosis, gnosis.kernel, gnosis.kernel.atomic_io, gnosis.kernel.canonical, gnosis.trust, gnosis.trust.launch, gnosis.trust.launch_spec, gnosis.trust.worker_launcher
+  third-party : NONE
+  unqualified : NONE
+
+gnosis.trust.bootstrap
+  loaded internal (8): gnosis, gnosis.kernel, gnosis.kernel.atomic_io, gnosis.kernel.canonical, gnosis.trust, gnosis.trust.bootstrap, gnosis.trust.launch, gnosis.trust.launch_spec
+  third-party : NONE
+  unqualified : NONE
+
+union of load-time closures : 14
+stale allowlist entries     : NONE
+
+THE BOOTSTRAP'S OWN CLOSURE is the number that matters most, because that
+code runs UNDER THE WORKER SID. It is 8 modules and pulls in NEITHER the
+deployment slice, NOR the anchor/publication slices, NOR anything from the
+runner or engine.
+
+TRUST PLANE SOURCE SIZE (LOC):
+  __init__.py                  8
+  anchor.py                  471
+  bootstrap.py               121   <-- NEW
+  deployment.py             1052
+  launch.py                  263
+  launch_spec.py             293   <-- NEW
+  publication.py             834
+  run_identity.py            394
+  worker_launcher.py         859   <-- NEW
+  TOTAL                     4295
+
+STAGE 5 TCB DELTA
+  TRUST_ALLOWLIST     +3   launch_spec, bootstrap, worker_launcher
+  TRUST_ENTRY_POINTS  +3   each closure measured in a clean subprocess
+  third-party in TCB  NONE, unchanged
+  worker/engine deps  NONE. Dependency direction is runner -> trust only;
+                      no trust module imports the runner or the engine.
+  dynamic loading     NONE (importlib/exec/eval/compile still refused)
+  runtime in the TCB  the Python interpreter the bootstrap runs on, which
+                      must be Worker-RX and Worker-WRITE-DENIED. Measured
+                      in the probe: 62 MB / 3434 files. Reported, not hidden.

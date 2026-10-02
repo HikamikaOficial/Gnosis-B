@@ -1,0 +1,11 @@
+{
+  "bundle_digest": "355cf78785311545cefb8d5f7603a5b6fa54f300a8b305a779d3a4a5080087b7",
+  "files": {
+    "STAGE5-GATE-RESULTS.txt": "3a59eb2dc704a6d862f1ab3c66928fa6f75d4c450722c44bfd79a5e3f99202b6",
+    "stage5_caller_context.txt": "7272503f8418b89a05118b917b401db6a700c31b6c92f51f5676254c082aa0cc",
+    "stage5_cmdline_gate.txt": "94c2fa5eaf9e2980ff0692b4e42b963ad77b85237b8ded62630ec5ee76c1f3b5",
+    "stage5_launch_contract.txt": "c998e5c8c0b2691795539a1da7e8f9c18c29a289a3f5c840de408fd1cddc4a73"
+  },
+  "note": "SHA-256 of every file in this bundle. bundle_digest is one hash over the whole map. Re-derive it with verify_bundle(): any file added, removed or changed after capture is detected. The manifest cannot hash itself, so it is the one file not listed; a cryptographic signature over bundle_digest \u2014 which would also stop an editor from recomputing this manifest \u2014 needs key management that is out of scope and is a declared limitation, not a claim.",
+  "unlisted": "MANIFEST.sha256.json"
+}

@@ -1,0 +1,55 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.14, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi\.venv\Scripts\python.exe
+rootdir: C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi
+configfile: pyproject.toml
+plugins: asyncio-1.4.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 45 items
+
+tests/test_operator_stack.py::TestClosureSplit::test_application_owns_no_trust PASSED [  2%]
+tests/test_operator_stack.py::TestClosureSplit::test_assert_inside_rejects_escape PASSED [  4%]
+tests/test_operator_stack.py::TestClosureSplit::test_canonical_root_is_publisher PASSED [  6%]
+tests/test_operator_stack.py::TestClosureSplit::test_entry_is_self_verifying_and_delegates PASSED [  8%]
+tests/test_operator_stack.py::TestClosureSplit::test_f17_provided_includes_all_director_trust PASSED [ 11%]
+tests/test_operator_stack.py::TestClosureSplit::test_manifest_deterministic PASSED [ 13%]
+tests/test_operator_stack.py::TestClosureSplit::test_manifest_has_no_trust_path_and_measures_entry PASSED [ 15%]
+tests/test_operator_stack.py::TestClosureSplit::test_production_closure_complete PASSED [ 17%]
+tests/test_operator_stack.py::TestClosureSplit::test_relpath_canonical_rejects_traversal_and_absolute PASSED [ 20%]
+tests/test_operator_stack.py::TestDeployIntoCanonicalRoot::test_application_json_has_schema PASSED [ 22%]
+tests/test_operator_stack.py::TestDeployIntoCanonicalRoot::test_deploys_app_modules_and_entry PASSED [ 24%]
+tests/test_operator_stack.py::TestDeployIntoCanonicalRoot::test_entry_tamper_detected PASSED [ 26%]
+tests/test_operator_stack.py::TestDeployIntoCanonicalRoot::test_never_deploys_trust PASSED [ 28%]
+tests/test_operator_stack.py::TestDeployIntoCanonicalRoot::test_refuses_to_overwrite_existing_f17_file PASSED [ 31%]
+tests/test_operator_stack.py::TestManifestLoaderFailClosed::test_duplicate_keys_rejected PASSED [ 33%]
+tests/test_operator_stack.py::TestManifestLoaderFailClosed::test_traversal_relpath_rejected PASSED [ 35%]
+tests/test_operator_stack.py::TestManifestLoaderFailClosed::test_tree_digest_inconsistent_rejected PASSED [ 37%]
+tests/test_operator_stack.py::TestManifestLoaderFailClosed::test_valid_manifest_loads PASSED [ 40%]
+tests/test_operator_stack.py::TestManifestLoaderFailClosed::test_wrong_schema_rejected PASSED [ 42%]
+tests/test_gnosis_deployment.py::TestProvisionGate::test_e1_application_failure_rolls_back_base PASSED [ 44%]
+tests/test_gnosis_deployment.py::TestProvisionGate::test_e3_record_write_failure_rolls_back_base PASSED [ 46%]
+tests/test_gnosis_deployment.py::TestProvisionGate::test_e3b_rollback_failure_reports_unknown_state PASSED [ 48%]
+tests/test_gnosis_deployment.py::TestProvisionGate::test_e4_provision_returns_verified_and_writes_trusted_record PASSED [ 51%]
+tests/test_gnosis_deployment.py::TestProvisionGate::test_only_one_trust_copy PASSED [ 53%]
+tests/test_gnosis_deployment.py::TestComposedIdentity::test_changes_if_application_changes PASSED [ 55%]
+tests/test_gnosis_deployment.py::TestComposedIdentity::test_changes_if_f17_digest_changes PASSED [ 57%]
+tests/test_gnosis_deployment.py::TestComposedIdentity::test_definition_deterministic_and_reverifies PASSED [ 60%]
+tests/test_gnosis_deployment.py::TestComposedIdentity::test_record_reader_rejects_malformed PASSED [ 62%]
+tests/test_gnosis_deployment.py::TestPreLaunchGate::test_e10_trusted_record_mismatch_refused PASSED [ 64%]
+tests/test_gnosis_deployment.py::TestPreLaunchGate::test_e5_valid_launch_returns_isolated_argv PASSED [ 66%]
+tests/test_gnosis_deployment.py::TestPreLaunchGate::test_e6_application_tamper_refused PASSED [ 68%]
+tests/test_gnosis_deployment.py::TestPreLaunchGate::test_e7_entry_tamper_refused PASSED [ 71%]
+tests/test_gnosis_deployment.py::TestPreLaunchGate::test_e8_f17_digest_change_refused PASSED [ 73%]
+tests/test_gnosis_deployment.py::TestPreLaunchGate::test_e9_application_digest_change_refused PASSED [ 75%]
+tests/test_gnosis_deployment.py::TestPreLaunchGate::test_launch_cannot_override_entry_or_disable_verification PASSED [ 77%]
+tests/test_gnosis_deployment.py::TestCoherentTamper::test_e11_app_plus_manifest_coherent_tamper_refused PASSED [ 80%]
+tests/test_gnosis_deployment.py::TestCoherentTamper::test_e12_entry_plus_manifest_coherent_tamper_refused PASSED [ 82%]
+tests/test_gnosis_deployment.py::TestCoherentTamper::test_e13_internally_consistent_release_swap_refused PASSED [ 84%]
+tests/test_gnosis_deployment.py::TestStartupSelfVerify::test_e14_valid_startup_reaches_cli_main PASSED [ 86%]
+tests/test_gnosis_deployment.py::TestStartupSelfVerify::test_e15_local_manifest_ok_but_record_mismatch_aborts PASSED [ 88%]
+tests/test_gnosis_deployment.py::TestStartupSelfVerify::test_e16_malformed_manifest_aborts PASSED [ 91%]
+tests/test_gnosis_deployment.py::TestStartupSelfVerify::test_e17_malformed_trusted_record_aborts PASSED [ 93%]
+tests/test_gnosis_deployment.py::TestStartupSelfVerify::test_e18_cwd_shadow_does_not_win_after_self_check PASSED [ 95%]
+tests/test_gnosis_deployment.py::TestStartupSelfVerify::test_startup_byte_tamper_without_manifest_regen_aborts PASSED [ 97%]
+tests/test_gnosis_deployment.py::TestProvenanceOneTree::test_one_tree_no_checkout PASSED [100%]
+
+============================= 45 passed in 41.77s =============================

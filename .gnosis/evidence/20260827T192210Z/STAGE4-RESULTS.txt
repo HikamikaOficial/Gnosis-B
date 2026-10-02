@@ -1,0 +1,710 @@
+F-17 IMPLEMENTATION — STAGE 4
+DURABLE PUBLICATION + CRASH RECOVERY
+======================================================================================
+Stage 3 CLOSED at b3c0feb.  Stage-4 implementation tree at HEAD 8b58509.
+F-14 remains CLOSED.  F-17 remains OPEN.  Stage 5 NOT started.
+
+
+1. DURABLE PUBLICATION PROTOCOL
+--------------------------------------------------------------------------------------
+`gnosis.trust.publication.durable_publish(store, run_store, request, bundle_dir)`.
+Everything below happens under ONE held trusted publication lock.
+
+   0  initialise the store (genesis watermark) if, and ONLY if, its ledger is empty
+   1  reconcile durable state FIRST (see §7), repairing a provably uncommitted tail
+   2  refuse if an uncommitted tail remains and repair was not authorized
+   3  authorize_publication against the TRUSTED store (Stage 3): identity first,
+      then lifecycle — owner SID, deployment, epoch, repository, head, tree, state
+   4  ALREADY_ANCHORED -> resolve the committed record the RUN names and return it
+   5  build the AnchorRecord V2 from the DIRECTOR's identity and the bundle bytes
+      (build_anchor_record: bundle self-consistency, head cross-check, tree
+       cross-check, chained seq/prev)                                       [F0]
+   6  append EXACTLY ONE record, binary mode, flush + os.fsync            [F1,F2,F3]
+   7  re-open and re-read the ledger FROM DISK and verify it against the watermark
+      about to be committed: every record re-parsed, every chain link re-checked,
+      the record at that sequence confirmed to digest to exactly what was written;
+      and nothing else may have arrived beside it                             [F4]
+   8  build the new watermark; it must advance by exactly one
+   9  write it durably and atomically: temp -> write -> flush -> fsync ->
+      single os.replace (the REUSED kernel.atomic_io primitive)           [F5,F6]
+  10  re-read the watermark; it must be exactly what was written
+  11  re-verify the ledger under the value that is NOW authoritative
+      ================ COMMITTED. THE ANCHOR IS PUBLISHED. ================
+  12  transition the trusted RunIdentity PUBLISHABLE -> ANCHORED, atomically   [F7,F8]
+  13  re-read and re-verify that transition                                     [F9]
+  14  return ANCHORED
+
+Step order differs from the review's numbered sketch in exactly one place, and
+deliberately: reconciliation runs BEFORE authorization. A crash may have committed
+this very run's anchor while leaving its state PUBLISHABLE, and authorizing first
+would read that state at face value and write a SECOND anchor. Every invariant the
+sketch names is preserved; "verify_chain" and "the exact expected record is
+present" are one call to `split_ledger`, which does both from disk, and it was
+moved BEFORE the commit rather than after it — after the commit it could only
+report a problem it had already caused.
+
+
+2. THE AUTHORITATIVE COMMIT POINT
+--------------------------------------------------------------------------------------
+   THE DURABLE, RE-READ, LEDGER-VERIFIED COMMITTED WATERMARK.
+
+There is one, and everything else is derived from it:
+
+   ledger        holds CANDIDATES. A record's presence proves nothing.
+   watermark     says which record is COMMITTED. This is the commit.
+   RunIdentity   PublicationState.ANCHORED is the CONSEQUENCE of the commit,
+                 never a second authority.
+
+Crash BEFORE the watermark commit -> the record is NOT committed; the run stays
+PUBLISHABLE and a provably uncommitted tail may be discarded.
+Crash AFTER the watermark commit -> the record IS committed; even with the state
+still PUBLISHABLE, recovery reconciles it to ANCHORED WITHOUT a second anchor.
+
+NEVER ANCHORED FIRST. Marking ANCHORED before the durable commit is forbidden. An
+ANCHORED state with no commit behind it is corruption: it FAILS CLOSED and is
+never repaired by fabricating the anchor that would make it true.
+
+
+3. WATERMARK SCHEMA
+--------------------------------------------------------------------------------------
+   gnosis.trust.watermark.v1   ->  anchors.watermark.json, beside the ledger
+
+   { "schema": "gnosis.trust.watermark.v1",
+     "committed_seq": <int, -1 = genesis>,
+     "committed_record_digest": <64 hex> }
+
+Canonical JSON bytes (ADR-0004), written byte-exact.
+
+Refused: unknown schema, unknown field, missing field, non-int / bool / negative
+sequence below -1, a digest that is not 64 lowercase hex, and any watermark whose
+two fields disagree — genesis naming a record, or a record sequence naming GENESIS.
+
+WHY GENESIS EXISTS. A crash during the FIRST publication leaves a record, or half
+of one, in a ledger with no watermark; so does a pre-Stage-4 ledger whose records
+may be perfectly committed history. Reading "no file" as "nothing is committed"
+would repair the first and silently DEMOTE the second. Writing committed_seq=-1 /
+GENESIS_HASH before anything can be appended removes the ambiguity at its source:
+from then on the absence of a watermark means exactly one thing, and it is refused.
+Initialising is permitted in exactly one situation where it can commit nothing —
+an empty ledger.
+
+
+4. WATERMARK BINDING  (and what was deliberately NOT put in it)
+--------------------------------------------------------------------------------------
+Required property: a watermark for record A can never validate record B, even at
+the same sequence.  `committed_record_digest` gives exactly that: the digest
+covers the WHOLE AnchorRecord, so it already binds — with no way for the two to
+drift apart —
+
+   prev_record_digest      the chain position / chain hash
+   deployment_digest       WHICH trust plane
+   run_identity_digest     WHICH exact authorized run (owner SID, epoch, head,
+                           tree, bundle path, repository, task, all inside it)
+   run_id, bundle_digest, task_id, repository_id, head_sha, tree_identity, seq
+
+Each of chain hash, run_identity_digest, deployment_digest and run_id was
+EVALUATED for inclusion and DELIBERATELY NOT COPIED. A copy could not detect
+anything the digest does not already detect, and a field that cannot disagree is
+not a check — it is a second place for the truth to live. This is Stage 3's RM13
+lesson applied before the fact rather than after it.
+
+`committed_seq` is NOT a copy: it is the INDEX. It names the ledger line to look
+at and the digest then says whether that line is the right one, so editing the
+sequence alone is caught. Proven by
+`test_a_watermark_for_one_record_cannot_validate_another_at_the_same_seq` and
+negative control §5; mutant SM5 dies.
+
+
+5. LEDGER SEMANTICS
+--------------------------------------------------------------------------------------
+Append-only, hash-chained, one JSON record per line, written in BINARY mode (a
+hash-chained log is a byte sequence, not text the platform may re-punctuate) and
+flushed to the storage stack before the handle closes.
+
+`record_line` / `parse_record_line` are now the SINGLE definition of what a ledger
+line is; the store writer and the Stage-4 byte-level reader both go through them.
+
+Recovery reads the ledger at the BYTE level, because `AnchorStore.records()` fails
+closed on any unreadable line — right for the chain, useless after a crash, where
+a half-written tail would make perfectly intact committed history unreadable. The
+byte reader cuts at the committed record's line boundary and treats what follows
+as opaque bytes it has not earned the right to interpret. Both LF and CRLF are
+accepted, because ledgers written before Stage 4 went through Python text mode on
+Windows (`test_crlf_line_endings_are_read_correctly`).
+
+
+6. RUNIDENTITY-STATE SEMANTICS
+--------------------------------------------------------------------------------------
+PublicationState (Stage 3) is unchanged and still monotonic. What Stage 4 adds is
+its RELATION to the commit:
+
+   ANCHORED is reached ONLY after the durable watermark commit.
+   ANCHORED is reachable BY RECOVERY from a committed watermark alone.
+   ANCHORED without a confirming watermark is CORRUPTION -> FAIL CLOSED.
+
+The transition is persisted with the same atomic primitive as before
+(atomic_write_text under the record's own FileLock) and is re-read and re-verified
+before the protocol returns. It is a CONSEQUENCE, never a commit authority:
+mutants SM2 (mark first) and SM13 (trust the state without a watermark) both die.
+`TrustedRunIdentityStore.run_ids()` was added so recovery can ask the question in
+the other direction — "does ANY run claim ANCHORED against something uncommitted?"
+
+
+7. RECOVERY MATRIX  (reconcile_publication_state)
+--------------------------------------------------------------------------------------
+  E  a run says ANCHORED, the watermark does not confirm it         FAIL CLOSED
+  F  the watermark names a record the ledger does not hold          FAIL CLOSED
+  G  the watermark's digest is not the record at that sequence      FAIL CLOSED
+  H  the chain breaks inside the committed prefix                   FAIL CLOSED
+  J  the watermark is malformed                                     FAIL CLOSED
+  D  committed, and the run already says ANCHORED                   healthy
+  C  committed, and the run still says PUBLISHABLE                  RECONCILE -> ANCHORED
+  A  nothing committed for the run                                  normal retry
+  B  a complete uncommitted record past the watermark               tail (see §8)
+  I  a partial line past the watermark                              tail (see §8)
+
+E is checked FIRST and over the WHOLE trusted store, because it is the direction
+that catches a state which has run ahead of the commit — and because passing it is
+what later makes discarding a tail safe (no ANCHORED run can then name a record
+outside the committed prefix, so that is not re-asserted as a check that cannot
+fail). Every committed V2 record is cross-checked against its trusted identity
+field by field (§16). A committed V1 record is COUNTED and left exactly as it is:
+it carries no binding, so it can neither prove nor produce a modern ANCHORED
+state, and no default is invented to make it look bound.
+
+One directed test per case, named for it, in tests/test_durable_publication.py.
+
+
+8. TAIL TRUNCATION RULES
+--------------------------------------------------------------------------------------
+"Anything after the watermark may be truncated" is the DANGEROUS version of this
+primitive and is not what is implemented.
+
+Discarding bytes is allowed only when they can be SHOWN to belong to a single
+interrupted attempt. The protocol bounds that tightly: a publication appends
+EXACTLY ONE record and truncates any leftover tail BEFORE appending, so at any
+instant the ledger can hold at most one uncommitted record, OR one partial line,
+and NEVER both. Therefore:
+
+   tail = 1 complete record, no partial     -> provably uncommitted, may be cut
+   tail = 0 complete records, a partial     -> provably uncommitted, may be cut
+   tail = more than one complete record     -> FAIL CLOSED (corruption)
+   tail = a complete record AND a partial   -> FAIL CLOSED (corruption)
+
+The cut is at the committed record's line-boundary BYTE OFFSET and is written with
+the atomic byte-exact primitive; the result is re-split and re-verified, and it
+must be exactly the committed history. A tail is DETECTED and validated whether or
+not repair was authorized — the flag only decides whether it is discarded — and
+`durable_publish` FAILS CLOSED rather than appending after bytes nobody committed
+(mutants SM6, SM7, SM15, SM21).
+
+
+9. CORRUPTION BEHAVIOUR
+--------------------------------------------------------------------------------------
+Two new types, because the operator responses differ and collapsing them is the
+defect RM13 taught:
+
+  PublicationCorrupt(AuthorityUnavailable)
+      the trust plane's own record of what is published does not add up. Retrying
+      is meaningless and repairing it automatically would mean guessing which of
+      two contradictory statements is true. Fail closed; a human is required.
+
+  LedgerNotUnderDurableProtocol(AuthorityUnavailable)
+      NOT corruption — what a pre-Stage-4 ledger looks like. Still refused,
+      because the only way to proceed would be to infer a watermark from the
+      ledger's last record. Adopting an existing ledger is a deliberate operator
+      act that names the committed record; this module may not do it on anyone's
+      behalf. (Listed in §30 as a decision for Stage 6.)
+
+A malformed watermark is NEVER read as "nothing is committed" — empty file,
+whitespace, truncated, non-JSON, non-object, invalid UTF-8, unknown schema, extra
+field, bad digest all raise (negative control §4; mutant SM8). A watermark is
+never rebuilt from the ledger's last record.
+
+
+10. FAULT-INJECTION SEAM
+--------------------------------------------------------------------------------------
+`publication._FAULT_HOOK`, a module-private global DEFAULTING TO None, dispatched
+through `_fault(point, **context)`. `AnchorStore.append` takes its hook as a
+keyword-only parameter that also defaults to None, so the Stage-3 path cannot fire
+one however the module global is set.
+
+There is NO environment variable, configuration file, command-line flag, IPC
+message or worker-supplied value anywhere that can install a hook. The only way is
+for in-process code that already imports the Trust Plane to assign the private
+name — and such code is inside the TCB by definition, so the seam grants it
+nothing it did not already have. Enforced, not asserted: an AST test
+(`test_no_environment_or_argument_can_switch_a_fault_on`) scans both modules for
+any reference to environ / getenv / argv / stdin / input / argparse, and a
+clean-interpreter subprocess confirms the hook is None on import.
+
+  F0  before the append                     F5  watermark temp write
+  F1  the ledger write itself               F6  temp flushed, before the replace
+  F2  written, before the flush             F7  committed, before the state
+  F3  after the ledger flush                F8  during the state transition
+  F4  after the ledger re-verify            F9  state durable, before the reply
+
+F5/F6 SHARE A LOCUS, stated plainly rather than dressed up: the temp write, its
+flush and the atomic replace all happen inside the REUSED kernel primitive, and
+Stage 4 deliberately does not add a test seam to a kernel module the worker plane
+also uses. Each point is instead modelled by the FILESYSTEM STATE a crash there
+leaves — F5 a partial temp file, F6 a complete one — beside an untouched
+authoritative watermark. That is the state recovery must survive, and the property
+proven is the one that matters:
+`test_a_crash_during_the_watermark_write_leaves_the_temp_unadopted`.
+F8 is likewise offered in two variants, F8 (the atomic state write never happened)
+and F8@late (it landed and the process died before reading it back), because
+"atomic: old or new" is exactly the pair that must both converge.
+
+
+11. F0–F9 RESULTS  (REAL process kills — os._exit: no cleanup, no atexit, no
+--------------------------------------------------------------------------------------
+    buffer flush.  PROCESS / SERVICE CRASH.  NOT power loss.)
+
+    point   ledger after crash   watermark   run state     retry -> outcome
+    --------------------------------------------------------------------
+    F0      empty                genesis     PUBLISHABLE   ANCHORED
+    F1      partial              genesis     PUBLISHABLE   ANCHORED
+    F2      empty                genesis     PUBLISHABLE   ANCHORED
+    F3      one record           genesis     PUBLISHABLE   ANCHORED
+    F4      one record           genesis     PUBLISHABLE   ANCHORED
+    F5      one record           genesis     PUBLISHABLE   ANCHORED
+    F6      one record           genesis     PUBLISHABLE   ANCHORED
+    F7      one record           committed   PUBLISHABLE   ALREADY_ANCHORED
+    F8      one record           committed   PUBLISHABLE   ALREADY_ANCHORED
+    F8@late one record           committed   ANCHORED      ALREADY_ANCHORED
+    F9      one record           committed   ANCHORED      ALREADY_ANCHORED
+
+Every point, after recovery: EXACTLY ONE record in the ledger, the chain verifies,
+the watermark commits it, and the run ends ANCHORED against exactly that record.
+NO POINT PRODUCED A FALSE ANCHORED — asserted at every point before recovery runs.
+
+Against the required results: F0 no new record and PUBLISHABLE — yes. F1/F2 no
+committed anchor, recovery safe — yes. F3/F4 the record may exist durably but
+without a watermark it is not committed — yes, and F3 is asserted specifically
+(`test_a_crash_after_the_ledger_flush_leaves_the_record_durable`) because
+"durable" and "committed" being different properties is the whole point.
+F5/F6 the old watermark stays valid — yes. F7 recovery marks ANCHORED — yes.
+F8 old-or-new, converging — yes, both variants. F9 retry -> ALREADY_ANCHORED — yes.
+
+The LEDGER SHAPE column is asserted, not assumed: F2 dies with the record in a
+Python buffer that os._exit never flushes, so those bytes never reach the
+filesystem, while F3 dies after the fsync, so they do.
+
+
+12. PROCESS-CRASH TESTS
+--------------------------------------------------------------------------------------
+`TestProcessCrashAtEveryFaultPoint` spawns a real child interpreter per point,
+which opens the SAME stores from disk, installs the hook and calls
+`durable_publish`; the hook produces the required filesystem state and then
+`os._exit(77)`. The parent asserts the child died at the point (return code 77 and
+no result file), re-opens the stores from scratch and checks the matrix above.
+Additionally proven directly:
+  - the partial line really reaches the filesystem, really makes the ledger
+    unreadable to the record parser, and is STILL recovered from;
+  - a leftover watermark temp file exists after F5/F6 and is never adopted;
+  - a crash on the SECOND publication leaves the FIRST committed and intact.
+The in-process fault tests cover the same points more cheaply by stopping the
+protocol dead instead of killing the interpreter; both are reported for what
+they are and neither is described as a power-loss test.
+
+
+13. CONCURRENT-PUBLISH RESULTS
+--------------------------------------------------------------------------------------
+Two REAL child processes, launched together, no fault hook.
+
+  same run    -> outcomes {ANCHORED, ALREADY_ANCHORED}, EXACTLY ONE record in the
+                 ledger, chain verifies.
+  two runs    -> both ANCHORED, seq [0, 1], record[1].prev == record[0].digest(),
+                 both run_ids present, chain verifies, watermark at seq 1.
+
+The lock is also asserted directly rather than inferred: a probe at the deepest
+point of the protocol (F4) tries to take the publication lock and must time out
+(`test_the_publication_lock_is_held_for_the_whole_protocol`). Mutant SM12 (drop
+the lock) dies on it.
+
+STATED HONESTLY: `FileLock` is TRUSTED-WRITER COORDINATION. It is NOT a security
+boundary against a worker and is not claimed to be one; the ACL/SID boundary is
+Stage 6/8. No multi-writer worker support was implemented.
+
+
+14. IDEMPOTENT RETRY
+--------------------------------------------------------------------------------------
+A retry after the commit point — including the case where the reply was lost —
+returns ALREADY_ANCHORED with the committed record, and NEVER a second append.
+
+It is not answered from a textual run_id. The verdict comes from the trusted store
+after the FULL Stage-3 identity comparison (owner SID, deployment, epoch,
+repository, head, tree), and the record returned is the one the RUN is anchored
+against, resolved by digest out of the committed prefix — where reconciliation has
+already validated it field-by-field against that identity. Answering with the
+ledger head instead is mutant SM20, killed by
+`test_a_retry_returns_this_runs_record_not_the_ledger_head`. Mutant SM9 (retry
+appends a second anchor) dies too.
+
+
+15. V2 BEHAVIOUR / V1
+--------------------------------------------------------------------------------------
+The durable path writes V2 ONLY (`build_anchor_record` -> CURRENT_ANCHOR_SCHEMA).
+V1 is never used for a new crash-safe publication.
+
+Historical V1 remains readable and verifiable under its historical contract, with
+a byte-identical digest. In recovery a committed V1 record is counted and left
+alone; it can never be reconciled into a modern ANCHORED state because it carries
+no run-identity binding at all (`AnchorNotDeploymentBound` remains the type that
+says so). NO watermark default was added for V1 that would simulate a modern
+binding — `test_a_v1_ledger_is_not_given_a_modern_binding_by_recovery`.
+
+
+16. DEPLOYMENT / EPOCH BINDING DURING RECOVERY
+--------------------------------------------------------------------------------------
+`_assert_record_matches_identity` compares EVERY field a committed record carries
+against the trusted identity it claims: run_id, task_id, repository_id, head_sha,
+tree_identity, bundle_path, deployment_digest and run_identity_digest (which
+itself binds owner SID and epoch). Each comparison can genuinely fail and each
+failure means something different to whoever reads the message. Mutant SM11 dies.
+
+  D1 committed, D2 ASKING TO COMPLETE IT      -> REFUSED. Recovery does not get to
+      ignore the binding just because the record is already on disk.
+  D1 committed AND already ANCHORED, D2 sweeping -> reported in
+      `foreign_deployment_run_ids` and LEFT ALONE. That run was committed and
+      reconciled by its own deployment; refusing here would make every ledger
+      unusable the moment the trust plane is redeployed. Two different situations,
+      two different answers — negative control §7 shows both.
+  E1 committed, caller presents E2            -> REFUSED (epoch mismatch, Stage 3
+      gate, exercised through the durable path).
+  E1 reconciling against its OWN E1 identity  -> permitted.
+  same run_id, DIFFERENT immutable identity   -> FAIL CLOSED, no cross recovery
+      and no cross ALREADY_ANCHORED.
+Mutant SM10 (ignore the deployment binding in recovery) dies.
+
+
+17. ATOMIC / FLUSH PRIMITIVES
+--------------------------------------------------------------------------------------
+REUSED, not re-implemented: `kernel.atomic_io` (temp -> write -> flush -> fsync ->
+single os.replace, with the existing bounded WinError-32 retry) and
+`kernel.file_lock`. `hash_canonical` remains the only hashing implementation.
+
+ONE minimal extension, with its reason: `atomic_write_bytes`, the byte-exact
+sibling of `atomic_write_text`. The watermark and the ledger's committed prefix
+are EXACT BYTE SEQUENCES that a text-mode writer would rewrite (newline
+translation). `atomic_write_text` was NOT folded into it: its callers
+(meta.json, heartbeat.json, result.json) have written platform-native line endings
+since M1, and re-encoding them would silently change bytes their readers already
+have. Both now share one `_replace_with_retry` helper, so there is still exactly
+one atomic-replace implementation. `atomic_write_text`'s on-disk bytes are
+unchanged.
+
+The flush is ASSERTED, not assumed:
+`test_both_the_ledger_and_the_watermark_are_flushed_to_the_storage_stack` observes
+os.fsync at the ledger call site (by caller) and brackets the watermark write (by
+call window, because atomic_io also writes the trusted run state in the same
+publication and a bare "atomic_io fsynced at some point" would be satisfied by
+that alone). Mutants SM3 and SM18 both die. WHAT IT PROVES: the flush is
+REQUESTED. WHAT IT DOES NOT PROVE: that the storage hardware honoured it — that
+would be a power-loss test, which is out of scope.
+
+
+18. WINDOWS OS-REAL TESTS
+--------------------------------------------------------------------------------------
+Everything runs on the real NTFS volume with a real elevated (HIGH-integrity)
+publisher, which is what makes the following real rather than simulated:
+  - os.fsync -> FlushFileBuffers on a real handle;
+  - temp + os.replace atomic replacement on the real filesystem, including the
+    leftover-temp states a crash leaves;
+  - msvcrt cross-process file locking between real processes;
+  - real process death by os._exit and a real restart reading the stores back.
+
+What was NOT done, and is NOT claimed: no service was installed, no worker account
+created, no production ACL applied, no DPAPI used, no provisioning run, nothing
+persistent left behind. Every store is a temporary directory. The machine was NOT
+powered off or reset, and nothing here is presented as an equivalent of that.
+
+  GUARANTEE SCOPE:  process crash   GUARANTEED
+                    service crash   GUARANTEED
+                    power loss / storage failure   BEST EFFORT, EXPLICITLY BOUNDED
+
+Why the physical guarantee is not on offer: the data is fsynced, but the rename's
+own metadata is not (Windows exposes no directory fsync); NTFS journals it, and a
+journalled rename is not a proof. Written into the module docstring and into
+`kernel/atomic_io.py` so the limit travels with the code.
+
+
+19. TCB CLOSURE DELTA          (full measurement: stage4_tcb_closure.txt)
+--------------------------------------------------------------------------------------
+  trust/publication.py        834 LOC   NEW trusted module
+  trust/anchor.py             405 -> 471 LOC (record_line, parse_record_line,
+                              build_anchor_record split out, durable append)
+  trust/run_identity.py       380 -> 394 LOC (run_ids listing for recovery)
+  kernel/atomic_io.py          37 ->  82 LOC (atomic_write_bytes + shared helper)
+  Trust Plane total          2295 -> 3005 LOC
+
+  third-party code in the TCB     NONE (unchanged)
+  worker / engine / planner       NONE entered (unchanged)
+  DEFERRED_TCB_EXPANSION          unchanged (evidence_capture, still lazy, still
+                                  behind the verify= injection seam)
+
+KEY RESULT: `gnosis.trust.deployment` (1052 LOC) is STILL NOT in the durable
+publisher's closure. `trust.publication`'s measured load-time closure is 10
+internal modules and does not reach it. Closed-world tests green for every entry
+point; no stale allowlist entry.
+
+
+20. TRUST_ALLOWLIST DELTA
+--------------------------------------------------------------------------------------
+  +1  "gnosis.trust.publication": authoritative durable-publication slice (F-17
+      Stage 4) — the committed watermark, the single commit point, and crash
+      recovery. Trusted because a compromise of it would let an uncommitted
+      anchor be declared committed, or committed history be discarded as a
+      crashed attempt.
+  +1  TRUST_ENTRY_POINTS gains the same module, so its own dependency graph is
+      measured in a clean subprocess like every other entry point.
+  kernel.atomic_io was ALREADY allowlisted; it grew inside its existing grant and
+  the growth is reported here rather than passing unremarked.
+No other entry added, none removed.
+
+
+21. DYNAMIC-LOADING RESULT
+--------------------------------------------------------------------------------------
+The frozen rule holds. `test_the_trust_plane_loads_no_code_dynamically` scans
+every Trust Plane source for exec / eval / compile / __import__ / importlib /
+loader attributes and passes over the new module. Stage 4 introduces NO dynamic
+import, no plugin discovery and no computed module name. The fault seam is a plain
+callable passed or assigned in-process — not a loaded module.
+
+
+22. DIRECTED TESTS
+--------------------------------------------------------------------------------------
+  tests/test_durable_publication.py     72 passed, 28 subtests   exit 0   (1146 lines)
+
+    TestTheCommittedWatermarkContract .......... schema, fields, genesis
+                                                 consistency, binding, advance
+    TestReadingTheWatermarkFailsClosed ......... 9 damaged forms, leftover temps
+    TestSplittingTheLedgerAtTheCommitPoint ..... prefix, CRLF, F, G, H, B, I
+    TestInitialisingADurableStore .............. genesis, idempotence, refusal of
+                                                 a ledger this protocol did not
+                                                 write, V1 left alone
+    TestDurablePublication ..................... commit, retry, two runs, advance,
+                                                 durability, the held lock, a
+                                                 ledger that changes pre-commit,
+                                                 this-run's-record, unrepaired tail
+    TestWhatTheDurablePathRefuses .............. not publishable, unknown run,
+                                                 deployment, epoch, SID, bundle head
+    TestTheRecoveryMatrix ...................... A C D E F G H I J + multi-record
+                                                 tail, complete+partial, committed
+                                                 history kept, cross-deployment,
+                                                 rebound run_id, lost identity
+    TestInProcessFaultInjection ................ no false ANCHORED at any point,
+                                                 pre/post-commit behaviour, second
+                                                 publication
+    TestProcessCrashAtEveryFaultPoint .......... the F0-F9 matrix, real kills
+    TestConcurrentTrustedPublishers ............ one run, two runs
+    TestTheFaultSeamIsNotReachableFromAnyInput . AST scan, clean-interpreter probe,
+                                                 inert-by-default, parameter seam
+
+
+23. MUTATION RESULTS
+--------------------------------------------------------------------------------------
+  scripts/mutation_check_publication.py   21 mutants   21 CAUGHT   0 SURVIVED
+
+  SM1  ANCHORED answered before the commit          SM12 the publication lock dropped
+  SM2  state marked ANCHORED before the commit      SM13 ANCHORED trusted w/o a watermark
+  SM3  ledger append not flushed                    SM14 the watermark may jump
+  SM4  ledger not re-verified before the commit     SM15 many tail records discarded
+  SM5  watermark binds only the sequence            SM16 a non-empty ledger given genesis
+  SM6  any tail treated as committed history        SM17 case C skipped -> double anchor
+  SM7  the committed prefix may be cut              SM18 watermark temp not flushed
+  SM8  malformed watermark read as empty            SM19 genesis mixed with a record
+  SM9  a retry appends a second anchor              SM20 ALREADY_ANCHORED from the head
+  SM10 recovery ignores the deployment binding      SM21 an uncommitted tail appended onto
+  SM11 recovery ignores the identity binding
+
+  FOUR MUTANTS SURVIVED THE FIRST RUN. Recorded in full, because the finding is
+  the interesting part and three of them were REAL COVERAGE GAPS, not noise:
+
+    SM20  ALREADY_ANCHORED answered from the ledger head SURVIVED, because every
+          retry test happened to retry the MOST RECENT run — where the head IS
+          the right record. The answer was right by coincidence and would have
+          been wrong for every earlier run in a shared ledger. Repaired by
+          publishing two runs and retrying the FIRST.
+    SM21  Appending onto an unrepaired tail SURVIVED, because `durable_publish`
+          defaults to repairing, so the fail-closed branch was never entered.
+          The default hid a guard that nothing had ever exercised. Repaired by a
+          test that publishes with repair_uncommitted_tail=False.
+    SM18  Removing the watermark's flush SURVIVED, because `os` is ONE module
+          object and `atomic_io` also writes the trusted RUN STATE in the same
+          publication — so "atomic_io fsynced at some point" was satisfied by the
+          state file alone. A check that passes for the wrong reason. Repaired by
+          bracketing the watermark write specifically and requiring a flush
+          inside that window.
+    SM14  The watermark-advance guard SURVIVED because it is UNREACHABLE through
+          the protocol: the append refuses a record that does not extend the
+          chain and the tail is discarded before the append, so the sequence can
+          only ever be the next one. This is Stage 3's RM13 shape — a check that
+          cannot fail. Rather than delete a defence-in-depth guard or invent a
+          scenario nobody can build, its contract is pinned by a DIRECT test that
+          says, in the test itself, that it is unreachable and why. Listed as
+          decision D11 for review.
+
+  After repair, 21/21 CAUGHT with 0 survivors. Three tests exist that would not
+  have existed if the mutants had all died on the first run.
+
+  Earlier stages re-run against the refactored source:
+  scripts/mutation_check_run_identity.py  17 mutants  17 CAUGHT  0 SURVIVED
+      (RM17's anchor text was updated: Stage 4 moved the single parse into
+       `parse_record_line`, so the mutant now anchors on the loop that calls it.
+       The mutation is unchanged in intent — an unreadable line is skipped
+       instead of failing closed — and it still dies.)
+  scripts/mutation_check_authority.py     13 mutants  13 CAUGHT  0 SURVIVED
+
+
+24. FULL SUITE / REGRESSION            (detail: stage4_full_suite.txt)
+--------------------------------------------------------------------------------------
+  FULL SUITE on 8b58509      1290 passed, 101 subtests in 861.53s   exit 0   GREEN
+  Stage 4 directed             72 passed,  28 subtests              exit 0
+  Stage 3 run-identity / authority / trust-boundary / atomic_io     all green
+  Stage 2 deployment identity, Stage 1 trust boundary               all green
+  evidence binding, canonical, authority boundary                   all green
+  fresh checkout of 8b58509   161 passed,  28 subtests              exit 0
+
+
+25. MYPY
+--------------------------------------------------------------------------------------
+  mypy --strict over src   ->  Success: no issues found in 65 source files
+
+
+26. RUFF
+--------------------------------------------------------------------------------------
+  Every new and changed file  ->  All checks passed.
+  Whole repository            ->  77 findings, ALL pre-existing and ALL in files
+  Stage 4 did not touch (scripts/*, .claude/hooks, frozen evidence snapshots, src
+  files outside the Trust Plane). Not one is in a file this stage added or
+  changed. Reported rather than hidden behind a directed-only lint run.
+
+
+27. COMMITS
+--------------------------------------------------------------------------------------
+  8b58509  F-17 Stage 4: durable publication + crash recovery (one commit point)
+           src/gnosis/trust/publication.py            (new, 834)
+           src/gnosis/trust/anchor.py                 (durable append, seam, split)
+           src/gnosis/trust/run_identity.py           (run_ids)
+           src/gnosis/kernel/atomic_io.py             (atomic_write_bytes)
+           tests/test_durable_publication.py          (new, 1146)
+           tests/test_trust_boundary.py               (allowlist + entry point)
+           scripts/mutation_check_publication.py      (new, 21 mutants)
+           scripts/mutation_check_run_identity.py     (RM17 re-anchored)
+  (+ this evidence and state commit)
+
+
+28. HEAD
+--------------------------------------------------------------------------------------
+  8b58509ec3313d17db4d28b55f21c1d6739c87ef   (implementation)
+
+
+29. EVIDENCE
+--------------------------------------------------------------------------------------
+  .gnosis/evidence/20260827T192210Z/
+      CAPTURE-NOTE.md                     what this stage is, in prose
+      STAGE4-RESULTS.txt                  this file
+      stage4_full_suite.txt               regression + static checks
+      stage4_mutation.txt                 21/21 CAUGHT
+      stage4_mutation_stage3_rerun.txt    Stage 3, 17/17 against the new source
+      stage4_mutation_authority.txt       authority, 13/13
+      stage4_tcb_closure.txt              measured closures, allowlist, LOC delta
+      stage4_negative_control.txt         controls + the F0-F9 matrix + secret scan
+      stage4_fresh_checkout.txt           clean extraction of 8b58509
+      MANIFEST.sha256.json                SHA-256 of every file above
+
+
+30. RESIDUAL RISKS
+--------------------------------------------------------------------------------------
+R1  POWER LOSS IS NOT COVERED. Declared, bounded, and written into the code. The
+    rename's metadata durability is NTFS's journal, not a barrier this code owns.
+
+R2  AN EXISTING LEDGER CANNOT ENTER THE DURABLE PROTOCOL. Records with no
+    watermark are refused, deliberately. Adopting one needs an operator act that
+    NAMES the committed record. Stage 4 did not build that tool — building it
+    without a review decision would be the exact fail-open this stage exists to
+    prevent. See §31.
+
+R3  ONE RUN STORE PER LEDGER IS ASSUMED. The case-E sweep reads the whole trusted
+    run store and requires every ANCHORED run to name a record in THIS ledger. A
+    deployment pairing one run store with two anchor stores would fail closed.
+    That pairing is not created anywhere today; it becomes a real constraint when
+    Stage 6 wires the publisher, and is recorded so it is chosen rather than
+    discovered.
+
+R4  RECONCILIATION IS O(committed records + runs) ON EVERY PUBLISH. Correct and
+    cheap at present scale; it is a linear scan that will need bounding long
+    before the ledger is large. Not optimised here — an index would be a second
+    thing that can disagree with the ledger, and Stage 4 is the wrong stage to
+    add one.
+
+R5  FileLock IS NOT A SECURITY BOUNDARY. Trusted-writer coordination only. A
+    worker that could write the trusted root would defeat it — which is exactly
+    what Stage 6/8's ACLs must prevent, and why nothing here claims otherwise.
+
+R6  THE FAULT SEAM IS IN PRODUCTION CODE. Inert by default and unreachable from
+    any input, with an AST test enforcing that. It remains a line of code that
+    exists for tests, and it is listed rather than pretended away.
+
+R7  F5/F6 ARE MODELLED BY POST-CRASH STATE, not by interrupting the reused
+    primitive. Stated at the point of use and in §10.
+
+R8  A COMMITTED V1 RECORD IN A DURABLE LEDGER IS LEFT ALONE. It cannot be
+    reconciled and it cannot be re-published by this path. Whether historical V1
+    evidence should be re-anchored under the current trust plane is a Stage-6
+    question, not one Stage 4 answered.
+
+
+31. DECISIONS REQUIRING INDEPENDENT REVIEW
+--------------------------------------------------------------------------------------
+D1  THE COMMIT POINT IS THE DURABLE, RE-READ, LEDGER-VERIFIED WATERMARK, and
+    PublicationState.ANCHORED is its consequence, reconcilable by recovery.
+
+D2  A GENESIS WATERMARK (committed_seq = -1, GENESIS_HASH) is written before
+    anything can be appended, so that the ABSENCE of a watermark has exactly one
+    meaning. Without it, a crash during the FIRST publication and a legacy ledger
+    are indistinguishable, and the first is unrecoverable while the second is
+    silently demotable. This is the single largest design change made relative to
+    the review's sketch and it deserves the closest look.
+
+D3  A LEDGER WITH RECORDS AND NO WATERMARK IS REFUSED, with its own type. No
+    adoption tool was built. Stage 6 needs one, and it must name the committed
+    record explicitly.
+
+D4  RECONCILIATION RUNS BEFORE AUTHORIZATION inside the protocol, because
+    authorizing on a state the commit has outrun produces a second anchor.
+
+D5  THE WATERMARK CARRIES ONLY schema / committed_seq / committed_record_digest.
+    chain hash, run_identity_digest, deployment_digest and run_id were each
+    evaluated and rejected as duplicates the record digest already binds.
+
+D6  TAIL TRUNCATION IS BOUNDED TO ONE RECORD OR ONE PARTIAL LINE, never both,
+    derived from the protocol's own guarantee that it truncates before it
+    appends. Anything richer is corruption.
+
+D7  A FOREIGN-DEPLOYMENT RUN THAT IS ALREADY ANCHORED IS LEFT ALONE, while one
+    still PUBLISHABLE is REFUSED. Two different situations, two answers; the
+    alternative (refusing both) makes a ledger unusable after any redeploy.
+
+D8  `verify_chain` AND "the exact record is present" WERE MERGED into one
+    pre-commit `split_ledger` call, and MOVED BEFORE the commit. Keeping a
+    second post-commit chain check would have been a check that cannot fail —
+    and after the commit it could only report a problem it had already caused.
+
+D9  `atomic_io` GREW BY A BYTE-EXACT SIBLING rather than being changed or
+    duplicated. `atomic_write_text`'s on-disk bytes are deliberately untouched.
+
+D10 THE FAULT SEAM IS A MODULE-PRIVATE GLOBAL PLUS A KEYWORD PARAMETER, with no
+    activation path from any input, enforced by an AST test.
+
+D11 `_assert_watermark_advances` IS UNREACHABLE THROUGH THE PROTOCOL and is
+    pinned by a DIRECT contract test, with that fact written into the test. It is
+    defence in depth and is labelled as such rather than presented as a live gate.
+
+
+======================================================================================
+STAGE 4 RESULT: PASS
+RECOMMENDATION: DO NOT CLOSE F-17
+======================================================================================

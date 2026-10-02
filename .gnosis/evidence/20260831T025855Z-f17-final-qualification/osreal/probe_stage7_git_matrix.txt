@@ -1,0 +1,47 @@
+==============================================================================
+F-17 STAGE 7 — OS-REAL GIT MATRIX
+==============================================================================
+disposable root: C:\Users\nicol\AppData\Local\Temp\gnosis-s7-2ulsni0_
+
+GATE MATRIX — the three start gates against real repositories
+------------------------------------------------------------------------------
+   ordinary files repo: backend/version qualified      : True                     <- required True   OK
+   ordinary files repo: topology eligible              : True                     <- required True   OK
+   ordinary files repo: resolution faithful            : True                     <- required True   OK
+   packed-refs repo: still resolution-faithful         : True                     <- required True   OK
+     .git/packed-refs now exists                       : True                     <- required True   OK
+   replace-ref repo: resolution refused                : False                    <- required False   OK
+   shallow repo: resolution refused                    : False                    <- required False   OK
+   linked worktree: topology ineligible                : False                    <- required False   OK
+   separate git-dir: topology ineligible               : False                    <- required False   OK
+   superproject with a submodule dir: still eligible files backend: True                     <- required True   OK
+   split-index repo: a sharedindex file was created    : True                     <- required True   OK
+   split-index repo: still resolution-faithful         : True                     <- required True   OK
+   reftable backend: rejected                          : False                    <- required False   OK
+     reason names reftable                             : True                     <- required True   OK
+
+CAPTURE MATRIX — real captures classify real .git writes
+------------------------------------------------------------------------------
+   benign check: verdict CLEAN                         : ObservationVerdict.CLEAN <- required ObservationVerdict.CLEAN   OK
+   benign check: exit OK                               : 0                        <- required 0   OK
+   benign check: evidence valid                        : True                     <- required True   OK
+   unknown surface (ORIG_HEAD): MACHINERY_UNQUALIFIED  : ObservationVerdict.MACHINERY_UNQUALIFIED <- required ObservationVerdict.MACHINERY_UNQUALIFIED   OK
+   unknown surface: exit unqualified                   : 12                       <- required 12   OK
+   unknown surface: not publishable                    : False                    <- required False   OK
+   unknown .git subtree: MACHINERY_UNQUALIFIED         : ObservationVerdict.MACHINERY_UNQUALIFIED <- required ObservationVerdict.MACHINERY_UNQUALIFIED   OK
+   trust-sensitive HEAD ABA: MACHINERY_MUTATED         : ObservationVerdict.MACHINERY_MUTATED <- required ObservationVerdict.MACHINERY_MUTATED   OK
+   trust-sensitive HEAD ABA: exit mutated              : 9                        <- required 9   OK
+
+ENFORCEMENT ATTACK — an UNKNOWN observation cannot reach Anchor V2
+------------------------------------------------------------------------------
+   clean bundle: anchors                               : s7-attack                <- required s7-attack   OK
+   unqualified bundle: refused by build_anchor_record  : True                     <- required True   OK
+
+ROLLBACK
+------------------------------------------------------------------------------
+   disposable root removed                             : False                    <- required False   OK
+   no network, no production repo touched, no provider call
+
+==============================================================================
+PROBE RESULT: ALL 26 CHECKS PASSED
+==============================================================================

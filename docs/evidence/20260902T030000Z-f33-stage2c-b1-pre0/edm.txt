@@ -1,0 +1,14 @@
+EDM1: APPLIED / CAUGHT  (allow os-real without explicit authorization)
+EDM3: APPLIED / CAUGHT  (reobserve returns cached digest (no fresh observation))
+EDM6: APPLIED / CAUGHT  (runtime preflight omitted)
+EDM7: APPLIED / CAUGHT  (operator argv reverts to parser-invalid form)
+EDM9: APPLIED / CAUGHT  (live-call ledger reset to zero)
+EDM10: APPLIED / CAUGHT  (active residue record ignored)
+EDM12: APPLIED / CAUGHT  (reviewer executable becomes PATH-controlled)
+EDM2: STRUCTURAL — construct real ops before gates — construction is inside _construct_real_ops_after_gates, AFTER residue+runtime checks; gate-fail tests (D4/D8/D9) show no construction on failure
+EDM4: STRUCTURAL — observe_fn bypasses real — the os-real branch literally sets observe_fn=None; None==real observe_deployment proven by test_observe_fn_none_means_real
+EDM5: STRUCTURAL — runtime_src invalid — a config condition, exercised by D8 (FOLDED)
+EDM8: STRUCTURAL — driver calls cli.main directly — the driver calls Stage2CBOrchestrator; D10 proves the orchestrator is used
+EDM11: STRUCTURAL — driver duplicates orchestration — D10 proves the qualified Stage2CBOrchestrator is invoked, not a duplicate
+
+7/7 applied EDM mutants CAUGHT; 5 structural/folded

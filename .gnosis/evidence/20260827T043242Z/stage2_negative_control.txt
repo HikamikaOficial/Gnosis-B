@@ -1,0 +1,35 @@
+F-17 STAGE 2 — NEGATIVE CONTROL
+======================================================================
+A measurement that cannot distinguish two different deployments is not a
+measurement. These are the controls that show the identity MOVES.
+
+1. POSITIVE  same bytes observed twice
+   digest #1 : 3cefcbc13079f7c39ed8f92b5b7ca17e5bfbba66f22a933ee746997e5211d640
+   digest #2 : 3cefcbc13079f7c39ed8f92b5b7ca17e5bfbba66f22a933ee746997e5211d640
+   equal     : True   <- required True
+
+2. NEGATIVE  one byte of one trusted artifact changed
+   digest    : bfac066a50e54233660cf28d0a121c5a6b20d9305eef77e24cbc3fa0bdcfee7e
+   changed   : True   <- required True
+
+3. NEGATIVE  the expected manifest no longer matches the bytes
+   verdict   : REFUSED (DeploymentIdentityUnavailable)   <- required
+   reason    : the deployed trust package does not match the expected manifest (missing=[], unexpected=[], changed=['publisher.py']); fail closed
+
+4. NEGATIVE  an artifact nobody approved appears under the trust root
+   changed   : True   <- required True
+   verdict   : REFUSED   <- required
+
+5. CONTROL  security-descriptor canonicalization is not a constant function
+   reformatted identical  : True   <- required True
+   everyone granted full  : True   <- required True
+
+F-17 STAGE 2 — SECRET SCAN
+======================================================================
+   files scanned : 4
+   findings      : 0   <- required 0
+
+   Note: the SDDL strings in these files are ACCESS-CONTROL POLICY, not
+   credentials; the SIDs are well-known Windows SIDs (BA/SY/WD/AU) and
+   synthetic test values. No password, key, token or account secret is
+   present, and Stage 2 introduces no DPAPI secret (that is Stage 5).

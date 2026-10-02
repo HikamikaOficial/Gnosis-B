@@ -1,0 +1,123 @@
+{
+  "starting_head": "08543cbae14356e246bd0020b98879e1b42cac73",
+  "probe_script": "C:\\Users\\nicol\\Desktop\\Claude Code Proyectos\\GnosisAgentAi\\scripts\\probe_f33_stage2a_worker_boundary.py",
+  "probe_script_sha256": "7a11ef6a3334c879ca840c69de69ca1eb4006ab00f2e29e230367dced6a293ca",
+  "elevated": true,
+  "dw_source_sha256": "3272fad07b8cca92978b526ac06fc1d357f58168af82baa829593a475c8a40a3",
+  "dw_relocated_sha256": "3272fad07b8cca92978b526ac06fc1d357f58168af82baa829593a475c8a40a3",
+  "dw_digest_match": true,
+  "execution_module_file": "C:\\ProgramData\\Gnosis\\F33Probe\\tools\\src\\gnosis\\director\\execution.py",
+  "worker_launcher_module_file": "C:\\ProgramData\\Gnosis\\F33Probe\\tools\\src\\gnosis\\trust\\worker_launcher.py",
+  "deterministic_worker_module_file": "C:\\ProgramData\\Gnosis\\F33Probe\\tools\\src\\gnosis\\director\\deterministic_worker.py",
+  "worker_account": "GnosisWkrF33",
+  "worker_sid": "S-1-5-21-1160728320-3593568380-93362170-1036",
+  "director_sid": "S-1-5-21-1160728320-3593568380-93362170-1000",
+  "runtime_path": "C:\\ProgramData\\Gnosis\\F33Probe\\tools\\runtime\\python.exe",
+  "relocated_gnosis_root": "C:\\ProgramData\\Gnosis\\F33Probe\\tools\\src",
+  "launch_root": "C:\\ProgramData\\Gnosis\\F33Probe\\launch",
+  "acl_tools": [
+    "C:\\ProgramData\\Gnosis\\F33Probe\\tools DESKTOP-VTQPQVL\\GnosisWkrF33:(OI)(CI)(RX)",
+    "                                     NT AUTHORITY\\SYSTEM:(OI)(CI)(F)",
+    "                                     BUILTIN\\Administradores:(OI)(CI)(F)",
+    "",
+    "Se procesaron correctamente 1 archivos; error al procesar 0 archivos"
+  ],
+  "acl_secrets": [
+    "C:\\ProgramData\\Gnosis\\F33Probe\\secrets NT AUTHORITY\\SYSTEM:(OI)(CI)(F)",
+    "                                       BUILTIN\\Administradores:(OI)(CI)(F)",
+    "",
+    "Se procesaron correctamente 1 archivos; error al procesar 0 archivos"
+  ],
+  "cassette_path": "C:\\ProgramData\\Gnosis\\F33Probe\\work\\cassette.json",
+  "cassette_schema": "gnosis.director.deterministic_cassette.v1",
+  "cassette_size_bytes": 131,
+  "cassette_sha256": "437333051c0a0b26fe9c314e68eee683001ac5dc91dcdea6e988ec869aa69a91",
+  "port_invocation": "TrustedExecutionPort(launcher=TrustedWindowsWorkerLauncher, python_executable=C:\\ProgramData\\Gnosis\\F33Probe\\tools\\runtime\\python.exe).execute(ExecutionMode.DETERMINISTIC, DeterministicIntent(cassette,cwd,stdout,stderr), timeout_s=180)",
+  "execute_seconds": 1.7,
+  "exit_code": 0,
+  "observed_sid": "S-1-5-21-1160728320-3593568380-93362170-1036",
+  "is_administrator": false,
+  "contained_in_job": true,
+  "integrity": "Medium",
+  "launch_spec_digest": "a30031ecdae9e659cd2218ba3914f611b4c8efca0fe63c06b555cc314de98d7c",
+  "result_schema": "gnosis.director.deterministic_result.v1",
+  "result_ok": true,
+  "result_cassette_sha256": "437333051c0a0b26fe9c314e68eee683001ac5dc91dcdea6e988ec869aa69a91",
+  "result_final_message": "f33-osreal-done",
+  "result_provider_calls": 0,
+  "worker_stdout_bytes": 217,
+  "negative_invalid_cassette_failed_closed": true,
+  "negative_invalid_cassette_detail": "WorkerExecutionFailed: deterministic Worker exited 13 (fail closed)",
+  "checks": [
+    {
+      "name": "identity: observed SID == disposable worker SID",
+      "pass": true,
+      "detail": "S-1-5-21-1160728320-3593568380-93362170-1036"
+    },
+    {
+      "name": "separation: worker SID != director SID",
+      "pass": true,
+      "detail": "dir=S-1-5-21-1160728320-3593568380-93362170-1000"
+    },
+    {
+      "name": "privilege: worker is non-admin",
+      "pass": true,
+      "detail": "is_admin=False"
+    },
+    {
+      "name": "containment: worker contained in job object",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "image: port named the RELOCATED deterministic_worker",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "image: trusted relocated runtime used",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "result: port validated deterministic result (schema+ok)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "result: worker digested the exact sealed cassette",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "result: final message echoes the cassette",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "provider calls == 0",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "exit code == 0",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "negative: invalid cassette -> port fails closed",
+      "pass": true,
+      "detail": "WorkerExecutionFailed: deterministic Worker exited 13 (fail closed)"
+    }
+  ],
+  "real_worker_boundary": "PASS",
+  "f17_impl_diff": "NONE",
+  "rollback": {
+    "netuserdel_status": 0,
+    "profile_removed": true,
+    "probe_root_removed": true,
+    "account_absent": true,
+    "dpapi_blob_absent": true,
+    "rollback": "PASS"
+  }
+}

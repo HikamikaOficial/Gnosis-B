@@ -44,6 +44,19 @@ class TestWorktreeManager(unittest.TestCase):
         # The source repo's own working tree must be untouched.
         self.assertTrue((self.repo / "README.md").exists())
 
+    def test_separate_provenance_survives_restart_and_ignores_worker_marker(self):
+        work = self.root / "worker-area"
+        records = self.root / "protected-records"
+        manager = WorktreeManager(self.repo, work, provenance_root=records)
+        handle = manager.create(task_id="TASK-separated")
+        marker = records / ".TASK-separated.worktree.json"
+        original = marker.read_bytes()
+        (work / marker.name).write_text("forged worker record", encoding="utf-8")
+        restarted = WorktreeManager(self.repo, work, provenance_root=records)
+        self.assertEqual(restarted.load_handle("TASK-separated"), handle)
+        self.assertEqual(restarted.create(task_id="TASK-separated"), handle)
+        self.assertEqual(marker.read_bytes(), original)
+
     def test_create_rejects_non_repo_source(self):
         not_a_repo = self.root / "plain_dir"
         not_a_repo.mkdir()
@@ -57,6 +70,69 @@ class TestWorktreeManager(unittest.TestCase):
         first = self.manager.create(task_id="TASK-1")
         second = self.manager.create(task_id="TASK-1")
         self.assertEqual(first, second)
+
+    def test_directory_preparation_runs_before_checkout_and_not_on_resume(self):
+        prepared = []
+        def prepare(path):
+            self.assertFalse(path.exists())
+            path.mkdir()
+            prepared.append(path)
+        manager = WorktreeManager(self.repo, self.root / "prepared", prepare_directory=prepare)
+        first = manager.create("TASK-prepared")
+        self.assertEqual(prepared, [Path(first.path)])
+        self.assertTrue((Path(first.path) / "README.md").is_file())
+        self.assertEqual(manager.create("TASK-prepared"), first)
+        self.assertEqual(len(prepared), 1)
+
+    def test_failed_preparation_does_not_register_branch_or_provenance(self):
+        def prepare(path):
+            raise WorktreeError("Worker unavailable")
+        manager = WorktreeManager(self.repo, self.root / "failed", prepare_directory=prepare)
+        with self.assertRaisesRegex(WorktreeError, "Worker unavailable"):
+            manager.create("TASK-failed")
+        self.assertFalse(manager.exists("TASK-failed"))
+        result = subprocess.run(["git", "branch", "--list", "gnosis/TASK-failed"],
+                                cwd=self.repo, capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout.strip(), "")
+
+    def test_separate_checkout_materializes_existing_files_only_once(self):
+        populated = []
+        def populate(path):
+            self.assertFalse((path / "README.md").exists())
+            tracked = subprocess.check_output(["git", "ls-files"], cwd=path, text=True)
+            self.assertIn("README.md", tracked)
+            subprocess.run(["git", "checkout-index", "--all"], cwd=path, check=True,
+                           capture_output=True)
+            populated.append(path)
+        manager = WorktreeManager(self.repo, self.root / "worker-checkout",
+                                  populate_worktree=populate)
+        handle = manager.create("TASK-owned-files")
+        path = Path(handle.path)
+        self.assertEqual((path / "README.md").read_bytes(), (self.repo / "README.md").read_bytes())
+        (path / "README.md").write_text("unfinished worker change\n")
+        self.assertEqual(manager.create("TASK-owned-files"), handle)
+        self.assertEqual((path / "README.md").read_text(), "unfinished worker change\n")
+        self.assertEqual(populated, [path])
+
+    def test_incomplete_separate_checkout_preserves_files_without_admitting_handle(self):
+        def incomplete(path):
+            (path / "partial.txt").write_text("preserve me")
+        manager = WorktreeManager(self.repo, self.root / "partial-checkout",
+                                  populate_worktree=incomplete)
+        with self.assertRaisesRegex(WorktreeError, "does not match"):
+            manager.create("TASK-partial")
+        self.assertFalse(manager.exists("TASK-partial"))
+        self.assertEqual((manager.planned_path("TASK-partial") / "partial.txt").read_text(),
+                         "preserve me")
+        with self.assertRaises(WorktreeCorruptStateError):
+            manager.create("TASK-partial")
+
+    def test_preparation_must_create_a_directory(self):
+        manager = WorktreeManager(self.repo, self.root / "invalid",
+                                  prepare_directory=lambda path: path.write_text("not a directory"))
+        with self.assertRaisesRegex(WorktreeError, "ordinary directory"):
+            manager.create("TASK-invalid")
+        self.assertFalse(manager.exists("TASK-invalid"))
 
     def test_evidence_reflects_isolated_changes(self):
         handle = self.manager.create(task_id="TASK-1")

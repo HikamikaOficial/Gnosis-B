@@ -1,0 +1,15 @@
+{
+  "bundle_digest": "ca04c7f838d92147f9b6fee6680e7a3dea550490361ac17fdcc74120c7f3dce5",
+  "files": {
+    "STAGE5-ENV-RESULTS.txt": "0d9d1c25ae13a2407f1a2b760e1dc4e63f3307fe4d3b54c56ebe88bfe20c3dd5",
+    "stage5_env_flake_attribution.txt": "38046cecc81f9d32f723796ab184f2eebaa44ff960103c3e3c7a38800fa11970",
+    "stage5_env_fresh_checkout.txt": "59da5a83c2a73b8c9246c907915fa43785c8c24961ff7e6f1b804cb3d10546c7",
+    "stage5_env_full_suite.txt": "2c970070f3101615c8d94336043619f8d444cc461523b4d48f049f0d2880f9b6",
+    "stage5_env_mutation.txt": "e223e74500f850a2826ec15f64c00df000937582538d1ec00334fccbc9ccbb3e",
+    "stage5_env_osreal_probe.txt": "16b977a0d87adfb8b7e240434bfe27e427410701a87aedf6f78f4e775dd890fa",
+    "stage5_env_static_checks.txt": "c02501d8f1bca5b819e4a3e8bdf0e89ea6d29351e99df262e04ce6dac00cde34",
+    "stage5_env_tcb_closure.txt": "27d85592dbd4c1a898a9974b660d1e5e00a2eb521654ff3c0b12538346cdb780"
+  },
+  "note": "SHA-256 of every file in this bundle. bundle_digest is one hash over the whole map. Re-derive it with verify_bundle(): any file added, removed or changed after capture is detected. The manifest cannot hash itself, so it is the one file not listed; a cryptographic signature over bundle_digest \u2014 which would also stop an editor from recomputing this manifest \u2014 needs key management that is out of scope and is a declared limitation, not a claim.",
+  "unlisted": "MANIFEST.sha256.json"
+}

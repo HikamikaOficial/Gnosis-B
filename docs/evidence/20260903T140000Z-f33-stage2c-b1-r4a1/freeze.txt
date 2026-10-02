@@ -1,0 +1,19 @@
+F-33 Stage 2C-B1-R4A.1 freeze (diff lines vs HEAD 866cae1)
+
+0  src/gnosis/trust/worker_launcher.py
+0  src/gnosis/director/pipeline.py
+0  src/gnosis/trust/deployment.py
+0  src/gnosis/provision/layout.py
+0  src/gnosis/provision/winapi.py
+0  src/gnosis/trust/gnosis_deployment.py
+0  src/gnosis/director/operator_stack.py
+
+changed files:
+ src/gnosis/director/cli.py         |  8 ++---
+ src/gnosis/director/composition.py | 63 +++++++++++++++++++++++++++++++++-----
+ tests/test_stage2cb_b1_r4a.py      | 58 ++++++++++++++++++++---------------
+ 3 files changed, 92 insertions(+), 37 deletions(-)
+
+R3E.1 writer/reader untouched:
+  none
+  none

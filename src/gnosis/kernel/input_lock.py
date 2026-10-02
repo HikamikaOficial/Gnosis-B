@@ -48,6 +48,62 @@ real, and the answers are measured rather than argued:
   `FILE_ID_INFO`, does not demonstrably provide them, so the boundary
   refuses to claim it does.
 
+An eighth review named what all of this still was not. A file id says
+WHICH object; a lock says the object did not change while the checks
+ran. Neither says WHAT the bytes were, and evidence that cannot be
+re-derived from its own record is not durable. So every input is now
+hashed — SHA-256, read through the very handle that holds it unwritable,
+so the bytes hashed are provably the bytes the checks read — and the
+manifest goes into the bundle. Path, size, timestamps, file id, git
+status and the lock itself are all recorded, and none of them is the
+identity.
+
+A fifth review found the one path that escaped all of that. A covered
+entry that is a DIRECTORY — a submodule gitlink is the realistic case —
+made `CreateFileW` fail with `ERROR_ACCESS_DENIED`, and the code reopened
+it with `FILE_FLAG_BACKUP_SEMANTICS`, appended the handle and skipped
+identification entirely. That handle counted towards `locked_inputs`,
+never appeared in `identities`, and the outcome could still say
+`enforced: true` — contradicting this module's own published guarantee
+that every protected handle is recorded by `FILE_ID_INFO`. A directory
+handle also proves nothing about the bytes inside a submodule's working
+tree, which is what a check would actually read.
+
+Directory-like covered inputs are now refused before any open is
+attempted, and the invariant is checked rather than assumed: an outcome
+cannot be `enforced` unless every handle it holds is an object it can
+name. Submodule support is not attempted; it is declined.
+
+Every identified object is also required to live on the volume that was
+probed, compared by the `VolumeSerialNumber` that comes back inside
+`FILE_ID_INFO`. That is what keeps a reparse point in an ANCESTOR
+directory — a junction or a mount point above the covered path, which the
+per-path reparse check cannot see — from placing an input on a volume
+whose semantics were never demonstrated.
+
+A sixth review found that the per-path reparse check was looking at the
+wrong thing. It asked whether the TARGET was a reparse point; it never
+asked whether the PATH USED TO REACH IT could be redirected. Measured on
+this machine, with the previous code:
+
+    repo\\linked -> dirA          lock: enforced=True over dirA\\a.py
+    rmdir linked; mklink /J linked dirB   -> succeeded WHILE the handle
+                                             on dirA\\a.py was held
+    read repo\\linked\\a.py       -> SWAPPED-B
+    rmdir linked; mklink /J linked dirA   -> the tree looks untouched
+
+The lock held the right object and the check read a different one,
+because a junction is a directory entry and holding a handle on a file
+underneath it protects the file, not the name. The volume serial does not
+help: dirA and dirB are on the same NTFS volume and their objects carry
+the same serial.
+
+So the whole resolution chain has to be plain. Every directory component
+between the repository root and a covered input is checked, the root's
+own chain up to the drive is checked once, and a single reparse point
+anywhere in either refuses the capture before a check runs. Junction
+support is not attempted; it is declined, exactly as submodules are.
+
 What this does NOT cover, stated rather than implied:
 
 - **Paths that do not exist yet.** A file created during the run cannot
@@ -59,6 +115,15 @@ What this does NOT cover, stated rather than implied:
 - **File attributes.** `chmod` still succeeds. It cannot grant write
   access while the share mode stands, and it is reported by the observer.
 - **`.git` and ignored files**, which are not covered inputs.
+- **Any path reached through a junction, mount point or symlink.**
+  Refused, not supported. Protecting one means protecting the resolution
+  chain as well as the object, and that is a different architecture.
+- **Submodules and any other directory-like covered entry.** Refused, not
+  supported. Supporting one means locking and identifying the objects
+  inside its working tree, and that has not been demonstrated.
+- **A tracked path deleted from the working tree.** There is nothing to
+  open and nothing to mutate; if it reappears during the run the write
+  observer reports it, because the path is in the covered set.
 
 If any covered file cannot be locked — because another process already
 holds it open for writing — the boundary does not exist and the capture
@@ -68,6 +133,7 @@ finding out before it.
 """
 from __future__ import annotations
 
+import hashlib
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -118,11 +184,58 @@ class LockOutcome:
     reason: str | None = None
     identities: Mapping[str, str] = field(default_factory=dict)
     volume: VolumeCapabilities | None = None
+    content_digests: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def identity_digest(self) -> str:
         """One hash over every protected object, by path and by file id."""
         return hash_canonical(sorted(self.identities.items()))
+
+    @property
+    def content_digest(self) -> str:
+        """One hash over the BYTES of every protected input.
+
+        Distinct from `identity_digest` on purpose. That one answers
+        "which objects"; this one answers "which bytes", and only the
+        second can be re-derived by a third party from the files.
+        """
+        return hash_canonical(sorted(self.content_digests.items()))
+
+    @property
+    def fully_bound(self) -> bool:
+        """Every handle held has a content digest, not just a file id.
+
+        The eighth review's invariant. `fully_identified` can be true
+        while this is false, which is exactly the state it was in:
+        covered, locked, identified by object, and byte-unknown.
+
+        Scope, stated because the tenth review asked for it precisely: this
+        is a property of the SNAPSHOT the lock took when the boundary went
+        up — every object, and every named stream, PRESENT at that instant.
+        It does not, and with these primitives cannot, assert that every
+        object which existed at any moment during the interval was hashed.
+        A thing that appeared and vanished inside the interval was never in
+        this snapshot; catching it is the boundary verdict's job, not this
+        boolean's, and only a CLEAN verdict over a COMPLETE observation
+        licenses "nothing transient escaped".
+        """
+        return self.locked == len(self.content_digests)
+
+    @property
+    def fully_identified(self) -> bool:
+        """Every handle held is an object this outcome can name.
+
+        `locked_inputs` and `identified_objects` describe the same domain,
+        so they have to agree. They did not once: a directory handle was
+        counted as locked and never identified, and the outcome still said
+        enforced. Consumers check this as well as the producer, because
+        the two-readers lesson of ADR-0025 applies to a lock as much as to
+        a verdict.
+
+        Scope: the same snapshot as `fully_bound`. "Every object the lock
+        held is named", never "every object that ever existed was named".
+        """
+        return self.locked == len(self.identities)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -132,18 +245,41 @@ class LockOutcome:
             "mechanism": self.mechanism,
             "reason": self.reason,
             "identified_objects": len(self.identities),
+            "fully_identified": self.fully_identified,
             "identity_digest": self.identity_digest,
+            "byte_bound_inputs": len(self.content_digests),
+            "fully_bound": self.fully_bound,
+            "content_digest": self.content_digest,
             "volume": self.volume.to_dict() if self.volume is not None else None,
+            "content_note": (
+                "content_digest is SHA-256 over the bytes of every protected "
+                "input, each read through the handle that holds it unwritable, so "
+                "the bytes hashed are the bytes the checks read; the full map is "
+                "input-manifest.json in this bundle. A file id is not a content "
+                "identity and neither is a lock"
+            ),
             "identity_note": (
                 "every protected handle is recorded by FILE_ID_INFO (volume serial "
                 "plus 128-bit file id) and verified to still resolve to the path it "
                 "was opened by; the full map is input-identities.json in this bundle"
             ),
+            "scope_note": (
+                "fully_identified and fully_bound are properties of the SNAPSHOT "
+                "taken when the boundary went up: every object and named stream "
+                "PRESENT at that instant is named and hashed. They do not assert "
+                "that everything which existed at any moment during the interval "
+                "was — a thing that appeared and vanished was never in the "
+                "snapshot. That transient class is the boundary verdict's charge: "
+                "only CLEAN over a COMPLETE observation says nothing transient "
+                "escaped, and the write observer, not this lock, is what watches "
+                "the interval"
+            ),
         }
 
 
 class InputLock(Protocol):
-    def acquire(self, paths: Sequence[str]) -> LockOutcome: ...
+    def acquire(self, paths: Sequence[str],
+                directories: Sequence[str] = ()) -> LockOutcome: ...
 
     def release(self) -> None: ...
 
@@ -155,10 +291,14 @@ class UnavailableLock:
     reason: str
     mechanism: str = "none"
 
-    def acquire(self, paths: Sequence[str]) -> LockOutcome:
+    def acquire(self, paths: Sequence[str],
+                directories: Sequence[str] = ()) -> LockOutcome:
         return LockOutcome(False, 0, tuple(paths), self.mechanism, self.reason,
                            volume=VolumeCapabilities(False, "unknown", "unknown",
                                                      self.reason))
+
+    def content_digests(self) -> dict[str, str]:
+        return {}
 
     def release(self) -> None:
         return None
@@ -176,10 +316,19 @@ if _IS_WINDOWS:
     _FILE_ATTRIBUTE_NORMAL = 0x00000080
     _FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
     _FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
+    _FILE_ATTRIBUTE_DIRECTORY = 0x00000010
     _INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
     _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
     _FILE_ID_INFO_CLASS = 18
     _VOLUME_NAME_DOS = 0
+    # FindFirstStreamW's info level, and the two "nothing more" answers.
+    # ERROR_HANDLE_EOF from the FIRST call is how a directory with no
+    # named streams replies, so it is an empty answer and not a failure.
+    _FIND_STREAM_INFO_STANDARD = 0
+    _ERROR_HANDLE_EOF = 38
+    _ERROR_FILE_NOT_FOUND = 2
+    _ERROR_PATH_NOT_FOUND = 3
+    _MAX_PATH = 260
 
     _DRIVE_TYPES = {0: "unknown", 1: "no-root-dir", 2: "removable", 3: "fixed",
                     4: "remote", 5: "cdrom", 6: "ramdisk"}
@@ -205,12 +354,24 @@ if _IS_WINDOWS:
         _fields_ = (("VolumeSerialNumber", ctypes.c_ulonglong),
                     ("FileId", ctypes.c_ubyte * 16))
 
+    class _FindStreamData(ctypes.Structure):
+        """WIN32_FIND_STREAM_DATA. Names arrive as `:name:$DATA`."""
+
+        _fields_ = (("StreamSize", ctypes.c_longlong),
+                    ("cStreamName", wintypes.WCHAR * (_MAX_PATH + 36)))
+
     _kernel32.CreateFileW.argtypes = (
         wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
         wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
     _kernel32.CreateFileW.restype = wintypes.HANDLE
     _kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
     _kernel32.CloseHandle.restype = wintypes.BOOL
+    _kernel32.ReadFile.argtypes = (wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+                                   wintypes.LPVOID, wintypes.LPVOID)
+    _kernel32.ReadFile.restype = wintypes.BOOL
+    _kernel32.SetFilePointerEx.argtypes = (wintypes.HANDLE, ctypes.c_longlong,
+                                           wintypes.LPVOID, wintypes.DWORD)
+    _kernel32.SetFilePointerEx.restype = wintypes.BOOL
     _kernel32.GetFileAttributesW.argtypes = (wintypes.LPCWSTR,)
     _kernel32.GetFileAttributesW.restype = wintypes.DWORD
     _kernel32.GetFileInformationByHandleEx.argtypes = (
@@ -225,15 +386,85 @@ if _IS_WINDOWS:
         wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD, wintypes.LPVOID,
         wintypes.LPVOID, wintypes.LPVOID, wintypes.LPWSTR, wintypes.DWORD)
     _kernel32.GetVolumeInformationW.restype = wintypes.BOOL
+    _kernel32.FindFirstStreamW.argtypes = (
+        wintypes.LPCWSTR, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD)
+    _kernel32.FindFirstStreamW.restype = wintypes.HANDLE
+    _kernel32.FindNextStreamW.argtypes = (wintypes.HANDLE, wintypes.LPVOID)
+    _kernel32.FindNextStreamW.restype = wintypes.BOOL
+    _kernel32.FindClose.argtypes = (wintypes.HANDLE,)
+    _kernel32.FindClose.restype = wintypes.BOOL
 
-    def _file_identity(handle: int) -> str | None:
-        """VolumeSerialNumber + 128-bit FileId, as the reviewer asked for."""
+    def named_streams(target: Path) -> tuple[tuple[str, int], ...] | None:
+        """The NTFS named data streams of a file or a directory.
+
+        The ninth review's finding. A file is not one blob of bytes: it is
+        `::$DATA` plus any number of named streams, each openable as
+        `path:name`, each readable by a check, and none of them visible to
+        `git`, to `Path.read_bytes`, or to a handle on the main stream.
+
+        Returns the named streams only — `::$DATA` is the main stream and
+        is bound by the path itself. ``None`` means the enumeration FAILED
+        and the caller must fail closed; an empty tuple means it succeeded
+        and there are none. A path that has gone away answers empty,
+        matching how `acquire` already treats a deleted tracked file.
+        """
+        data = _FindStreamData()
+        handle = _kernel32.FindFirstStreamW(
+            str(target), _FIND_STREAM_INFO_STANDARD, ctypes.byref(data), 0)
+        if not handle or handle == _INVALID_HANDLE_VALUE:
+            error = ctypes.get_last_error()
+            if error in (_ERROR_HANDLE_EOF, _ERROR_FILE_NOT_FOUND,
+                         _ERROR_PATH_NOT_FOUND):
+                return ()
+            return None
+        found: list[tuple[str, int]] = []
+        try:
+            while True:
+                name = data.cStreamName
+                if name != "::$DATA":
+                    # `:name:$DATA` -> `name`. The suffix is the stream
+                    # TYPE and every data stream carries the same one.
+                    found.append((name.strip(":").removesuffix(":$DATA"),
+                                  int(data.StreamSize)))
+                if not _kernel32.FindNextStreamW(handle, ctypes.byref(data)):
+                    if ctypes.get_last_error() != _ERROR_HANDLE_EOF:
+                        return None
+                    return tuple(found)
+        finally:
+            _kernel32.FindClose(handle)
+
+    def _file_identity(handle: int) -> tuple[int, str] | None:
+        """VolumeSerialNumber + 128-bit FileId, as the reviewer asked for.
+
+        Returned split rather than formatted: the serial is compared
+        against the probed volume, and a caller that only wants a label
+        can join the two itself.
+        """
         info = _FileIdInfo()
         ok = _kernel32.GetFileInformationByHandleEx(
             handle, _FILE_ID_INFO_CLASS, ctypes.byref(info), ctypes.sizeof(info))
         if not ok:
             return None
-        return f"{info.VolumeSerialNumber:016x}:{bytes(info.FileId).hex()}"
+        return info.VolumeSerialNumber, bytes(info.FileId).hex()
+
+    def volume_serial_of(path: Path) -> int | None:
+        """The serial of the volume a directory actually lives on.
+
+        Read from a handle rather than from the drive letter, so that a
+        junction or mount point above a covered path cannot quietly move
+        the input to another volume: every protected object must come back
+        with this same number.
+        """
+        handle = _kernel32.CreateFileW(
+            str(path), _GENERIC_READ, _FILE_SHARE_READ | 0x00000002 | 0x00000004,
+            None, _OPEN_EXISTING, _FILE_FLAG_BACKUP_SEMANTICS, None)
+        if not handle or handle == _INVALID_HANDLE_VALUE:
+            return None
+        try:
+            identity = _file_identity(handle)
+        finally:
+            _kernel32.CloseHandle(handle)
+        return None if identity is None else identity[0]
 
     def _final_path(handle: int) -> str | None:
         needed = _kernel32.GetFinalPathNameByHandleW(handle, None, 0, _VOLUME_NAME_DOS)
@@ -274,6 +505,48 @@ if _IS_WINDOWS:
                 "FILE_ID_INFO with local share-mode semantics")
         return VolumeCapabilities(True, drive_type, filesystem)
 
+    def reparse_in_chain(path: Path) -> str | None:
+        """The first component of `path` that can redirect resolution.
+
+        Walks from the drive down to `path` itself. An unreadable
+        component counts as a redirection: a link that cannot be examined
+        is not a link that can be trusted.
+        """
+        chain: list[Path] = []
+        current = path
+        while True:
+            chain.append(current)
+            if current.parent == current:
+                break
+            current = current.parent
+        for component in reversed(chain):
+            attributes = _kernel32.GetFileAttributesW(str(component))
+            if attributes == _INVALID_FILE_ATTRIBUTES:
+                return f"{component} (attributes unreadable)"
+            if attributes & _FILE_ATTRIBUTE_REPARSE_POINT:
+                return f"{component} (reparse point)"
+        return None
+
+    def handle_digest(handle: int) -> str | None:
+        """SHA-256 of a file, read through the handle that locks it.
+
+        Reading by path would be a second open and a second object; this
+        cannot be pointed anywhere else, because the handle IS the thing
+        keeping the file unwritable.
+        """
+        if not _kernel32.SetFilePointerEx(handle, 0, None, 0):  # FILE_BEGIN
+            return None
+        digest = hashlib.sha256()
+        buffer = ctypes.create_string_buffer(1 << 20)
+        read = wintypes.DWORD()
+        while True:
+            if not _kernel32.ReadFile(handle, buffer, len(buffer),
+                                      ctypes.byref(read), None):
+                return None
+            if read.value == 0:
+                return digest.hexdigest()
+            digest.update(buffer.raw[:read.value])
+
     def probe_volume(path: Path) -> VolumeCapabilities:
         """Ask the volume whether it provides what the boundary relies on."""
         resolved = str(path.resolve())
@@ -304,19 +577,58 @@ if _IS_WINDOWS:
         # have. The refusal has to be testable somewhere other than on a
         # network share nobody in CI can mount.
         volume_probe: Callable[[Path], VolumeCapabilities] | None = None
+        # Same reason: this machine has one volume, so the cross-volume
+        # refusal is only testable if the expected serial can be supplied.
+        expected_serial: int | None = None
         _handles: list[int] = field(default_factory=list)
+        _digests: dict[str, str] = field(default_factory=dict)
 
-        def acquire(self, paths: Sequence[str]) -> LockOutcome:
+        def acquire(self, paths: Sequence[str],
+                    directories: Sequence[str] = ()) -> LockOutcome:
             probe = self.volume_probe or probe_volume
             volume = probe(self.root)
             if not volume.supported:
                 return LockOutcome(False, 0, tuple(sorted(paths)), MECHANISM,
                                    volume.reason, volume=volume)
 
+            serial = (self.expected_serial if self.expected_serial is not None
+                      else volume_serial_of(self.root))
+            if serial is None:
+                return LockOutcome(
+                    False, 0, tuple(sorted(paths)), MECHANISM,
+                    "the volume serial of the repository root could not be read, so "
+                    "no input can be shown to live on the volume that was probed",
+                    volume=volume)
+            # Cached for the loop: re-probing the root once per covered
+            # input turned a 0.5s acquisition into a 7s one.
+            self.expected_serial = serial
+
+            root_redirect = reparse_in_chain(self.root)
+            if root_redirect is not None:
+                # If the root is reached through a redirection, every
+                # covered path inherits it and nothing below can be
+                # trusted to resolve to the object that was locked.
+                return LockOutcome(
+                    False, 0, tuple(sorted(paths)), MECHANISM,
+                    f"the repository root is reached through a redirection: "
+                    f"{root_redirect}; the boundary does not protect a resolution "
+                    "chain it does not own",
+                    volume=volume)
+            ancestors: dict[str, str | None] = {}
+
             refused: list[str] = []
             identities: dict[str, str] = {}
+            # Counted from here, not from zero: a caller may acquire in
+            # more than one call on the same lock, and the invariant is
+            # about the handles THIS call opened against the objects THIS
+            # call named.
+            held_before = len(self._handles)
             for relative in sorted(paths):
                 target = self.root / relative
+                redirect = self._redirectable_ancestor(relative, ancestors)
+                if redirect is not None:
+                    refused.append(redirect)
+                    continue
                 attributes = _kernel32.GetFileAttributesW(str(target))
                 if (attributes != _INVALID_FILE_ATTRIBUTES
                         and attributes & _FILE_ATTRIBUTE_REPARSE_POINT):
@@ -324,6 +636,20 @@ if _IS_WINDOWS:
                     # and what a check opens need not be the same object,
                     # and this tree has never had one to reason about.
                     refused.append(f"{relative} (reparse point)")
+                    continue
+                if (attributes != _INVALID_FILE_ATTRIBUTES
+                        and attributes & _FILE_ATTRIBUTE_DIRECTORY):
+                    # The fifth review's finding. This used to fall through
+                    # to CreateFileW, fail with ERROR_ACCESS_DENIED, be
+                    # reopened with FILE_FLAG_BACKUP_SEMANTICS, and be
+                    # appended to the handle list WITHOUT being identified
+                    # — a handle that counted as locked and could never be
+                    # named. A submodule gitlink is the realistic case, and
+                    # a handle on its directory says nothing about the
+                    # bytes inside it that a check would read.
+                    refused.append(
+                        f"{relative} (directory-like covered input; submodule and "
+                        "gitlink semantics are not demonstrated by this boundary)")
                     continue
                 handle = _kernel32.CreateFileW(
                     str(target), _GENERIC_READ, _FILE_SHARE_READ, None,
@@ -335,23 +661,56 @@ if _IS_WINDOWS:
                         # tracked file that is deleted in the working tree
                         # has nothing to protect and nothing to mutate.
                         continue
-                    if error == 5:
-                        # ERROR_ACCESS_DENIED on a directory-like entry
-                        # (a submodule gitlink); retry with the flag that
-                        # makes a directory openable, and record a refusal
-                        # if even that fails.
-                        handle = _kernel32.CreateFileW(
-                            str(target), _GENERIC_READ, _FILE_SHARE_READ, None,
-                            _OPEN_EXISTING, _FILE_FLAG_BACKUP_SEMANTICS, None)
-                        if handle and handle != _INVALID_HANDLE_VALUE:
-                            self._handles.append(handle)
-                            continue
                     refused.append(f"{relative} (error {error})")
                     continue
                 self._handles.append(handle)
                 problem = self._identify(relative, target, handle, identities)
                 if problem is not None:
                     refused.append(problem)
+
+            # The ninth review's finding. A handle on `probe.txt` denies
+            # writes to `probe.txt::$DATA` and to nothing else: measured,
+            # `probe.txt:name` stayed writable, stayed deletable, and its
+            # bytes reached a check while both digests above were
+            # unchanged. Every named stream therefore gets its own handle,
+            # its own identity and its own digest, on files and on
+            # directories alike.
+            inventory, stream_failures = stream_inventory(
+                self.root, sorted(paths), directories)
+            refused.extend(stream_failures)
+            for owner in sorted(inventory):
+                target = self.root / owner if owner else self.root
+                for name, size in inventory[owner]:
+                    relative = f"{owner or '.'}:{name}"
+                    handle = _kernel32.CreateFileW(
+                        f"{target}:{name}", _GENERIC_READ, _FILE_SHARE_READ, None,
+                        _OPEN_EXISTING, _FILE_ATTRIBUTE_NORMAL, None)
+                    if not handle or handle == _INVALID_HANDLE_VALUE:
+                        error = ctypes.get_last_error()
+                        if error in (_ERROR_FILE_NOT_FOUND, _ERROR_PATH_NOT_FOUND):
+                            continue
+                        refused.append(f"{relative} (error {error})")
+                        continue
+                    self._handles.append(handle)
+                    problem = self._identify_stream(
+                        relative, target, name, size, handle, identities)
+                    if problem is not None:
+                        refused.append(problem)
+
+            unbound = (len(self._handles) - held_before) - len(self._digests)
+            if unbound > 0:
+                # The eighth review's invariant, at the producer: a
+                # handle without a content digest is a locked object
+                # whose bytes the evidence cannot state.
+                refused.append(f"{unbound} protected handle(s) were never hashed")
+            unidentified = (len(self._handles) - held_before) - len(identities)
+            if unidentified > 0:
+                # Unreachable through the branches above, and checked
+                # anyway: this is the invariant the fifth review found
+                # broken, so it is asserted where it can be seen rather
+                # than argued for in a comment.
+                refused.append(
+                    f"{unidentified} protected handle(s) were never identified")
 
             if refused:
                 # Fail closed, and say how many were fine: a reader needs
@@ -360,12 +719,44 @@ if _IS_WINDOWS:
                     False, len(self._handles), tuple(refused), MECHANISM,
                     f"{len(refused)} covered input(s) could not be protected as "
                     "the objects the capture identified",
-                    identities=identities, volume=volume)
+                    identities=identities, volume=volume,
+                    content_digests=dict(self._digests))
             return LockOutcome(True, len(self._handles), (), MECHANISM,
-                               identities=identities, volume=volume)
+                               identities=identities, volume=volume,
+                               content_digests=dict(self._digests))
 
-        @staticmethod
-        def _identify(relative: str, target: Path, handle: int,
+        def _redirectable_ancestor(self, relative: str,
+                                   cache: dict[str, str | None]) -> str | None:
+            """Refuse an input whose PATH can be pointed somewhere else.
+
+            The sixth review's finding. Holding a handle on the object
+            protects the object; it does not stop the junction above it
+            from being removed and recreated against a different
+            directory while a check reads the lexical path. Cached per
+            directory: hundreds of covered inputs share a handful of
+            ancestors.
+            """
+            current = self.root
+            for part in relative.replace("\\", "/").split("/")[:-1]:
+                current = current / part
+                key = str(current).lower()
+                if key not in cache:
+                    attributes = _kernel32.GetFileAttributesW(str(current))
+                    if attributes == _INVALID_FILE_ATTRIBUTES:
+                        cache[key] = "attributes unreadable"
+                    elif attributes & _FILE_ATTRIBUTE_REPARSE_POINT:
+                        cache[key] = "reparse point"
+                    else:
+                        cache[key] = None
+                problem = cache[key]
+                if problem is not None:
+                    return (f"{relative} (ancestor "
+                            f"{current.relative_to(self.root).as_posix()} is a "
+                            f"{problem}; the path used to reach this input can be "
+                            "redirected while the object stays locked)")
+            return None
+
+        def _identify(self, relative: str, target: Path, handle: int,
                       identities: dict[str, str]) -> str | None:
             """Record WHICH object was locked, and check it is still that path.
 
@@ -378,6 +769,17 @@ if _IS_WINDOWS:
             identity = _file_identity(handle)
             if identity is None:
                 return f"{relative} (no FILE_ID_INFO)"
+            serial, file_id = identity
+            expected_serial = self.expected_serial
+            if expected_serial is None or serial != expected_serial:
+                # A junction or mount point ABOVE this path can put it on
+                # another volume, which the per-path reparse check cannot
+                # see. The serial comes back inside FILE_ID_INFO, so the
+                # object says which volume it is on and this compares it.
+                return (f"{relative} (object is on volume {serial:016x}, not the "
+                        f"probed volume {expected_serial:016x})"
+                        if expected_serial is not None else
+                        f"{relative} (the probed volume serial is unavailable)")
             final = _final_path(handle)
             if final is None:
                 return f"{relative} (no final path)"
@@ -385,13 +787,144 @@ if _IS_WINDOWS:
             final = final.removeprefix("\\\\?\\")
             if final.lower() != expected.lower():
                 return f"{relative} (path resolves to {final})"
-            identities[relative] = identity
+            digest = handle_digest(handle)
+            if digest is None:
+                return f"{relative} (bytes could not be read for hashing)"
+            identities[relative] = f"{serial:016x}:{file_id}"
+            self._digests[relative] = digest
             return None
+
+        def _identify_stream(self, relative: str, owner: Path, name: str, size: int,
+                             handle: int,
+                             identities: dict[str, str]) -> str | None:
+            """Record WHICH stream was locked: owner, name, length, bytes.
+
+            `FILE_ID_INFO` answers for the OWNER — every stream of a file
+            carries the same file id, measured — so an object identity on
+            its own cannot tell two streams of one file apart. The
+            identity recorded here is therefore the owner's id, the stream
+            NAME and its LENGTH together, which is the minimum the ninth
+            review asked for, and the bytes go in the content digest
+            beside it.
+            """
+            identity = _file_identity(handle)
+            if identity is None:
+                return f"{relative} (no FILE_ID_INFO)"
+            serial, file_id = identity
+            expected_serial = self.expected_serial
+            if expected_serial is None or serial != expected_serial:
+                return (f"{relative} (stream is on volume {serial:016x}, not the "
+                        f"probed volume {expected_serial:016x})"
+                        if expected_serial is not None else
+                        f"{relative} (the probed volume serial is unavailable)")
+            final = _final_path(handle)
+            if final is None:
+                return f"{relative} (no final path)"
+            final = final.removeprefix("\\\\?\\")
+            expected = f"{owner.resolve()}:{name}"
+            if final.lower() != expected.lower():
+                return f"{relative} (stream resolves to {final})"
+            digest = handle_digest(handle)
+            if digest is None:
+                return f"{relative} (bytes could not be read for hashing)"
+            identities[relative] = f"{serial:016x}:{file_id}:{name}:{size}"
+            self._digests[relative] = digest
+            return None
+
+        def content_digests(self) -> dict[str, str]:
+            """Path to SHA-256 for everything this lock is holding."""
+            return dict(self._digests)
 
         def release(self) -> None:
             for handle in self._handles:
                 _kernel32.CloseHandle(handle)
             self._handles.clear()
+
+
+StreamInventory = dict[str, tuple[tuple[str, int], ...]]
+
+
+def stream_domain(paths: Sequence[str],
+                  directories: Sequence[str] = ()) -> tuple[str, ...]:
+    """Every path whose named streams could reach a check.
+
+    The covered files, every directory that holds one, the repository
+    root — which is the empty string here — and whatever extra
+    directories the caller found on disk.
+
+    Directories are in the domain because a directory carries named
+    streams too — measured, not assumed — and `git` never enumerates a
+    directory at all, so the covered set on its own would leave every
+    directory stream in the tree unbound and unwatched.
+
+    ``directories`` exists because deriving them from the covered paths
+    alone misses the ones that hold no input: measured on this tree, 83
+    of them, mostly the empty corners of nested clones. A directory with
+    no files in it can still carry a stream, so the caller walks the disk
+    and passes what it found.
+    """
+    domain: set[str] = {""}
+    for relative in (*paths, *directories):
+        clean = relative.replace("\\", "/").strip("/")
+        domain.add(clean)
+        parts = clean.split("/")[:-1]
+        for index in range(len(parts)):
+            domain.add("/".join(parts[:index + 1]))
+    return tuple(sorted(domain))
+
+
+def stream_inventory(root: Path, paths: Sequence[str],
+                     directories: Sequence[str] = ()
+                     ) -> tuple[StreamInventory, tuple[str, ...]]:
+    """Which named streams exist right now, per owner, and what failed.
+
+    Returns ``(inventory, failures)``. A non-empty ``failures`` is a
+    refusal: a path whose streams cannot be enumerated is a path whose
+    byte content cannot be stated, and the ninth review's rule is that
+    such a thing is never silently ignored.
+
+    Off Windows this is empty and says so through `create_input_lock`,
+    which already refuses to claim a boundary on this platform.
+    """
+    if not _IS_WINDOWS:
+        return {}, ()
+    inventory: StreamInventory = {}
+    failures: list[str] = []
+    for relative in stream_domain(paths, directories):
+        found = named_streams(root / relative if relative else root)
+        if found is None:
+            failures.append(f"{relative or '.'} (named data streams could not be "
+                            "enumerated, so its bytes cannot be stated)")
+            continue
+        if found:
+            inventory[relative] = tuple(sorted(found))
+    return inventory, tuple(failures)
+
+
+def stream_drift(before: StreamInventory, after: StreamInventory) -> tuple[str, ...]:
+    """Named streams that appeared, vanished or changed length.
+
+    The second detector, and it exists because the first one cannot
+    reach: no share mode on Windows prevents a NEW stream being created
+    on a file or a directory, on any handle, including `FILE_SHARE_NONE`.
+    Overwriting or deleting an EXISTING stream is prevented, by holding
+    that stream's own handle, so what is left for this to catch is
+    exactly appearance, disappearance and a change of length.
+    """
+    differences: list[str] = []
+    for owner in sorted(set(before) | set(after)):
+        was = dict(before.get(owner, ()))
+        now = dict(after.get(owner, ()))
+        label = owner or "."
+        for name in sorted(set(was) | set(now)):
+            if name not in was:
+                differences.append(f"appeared: {label}:{name} ({now[name]} bytes)")
+            elif name not in now:
+                differences.append(f"vanished: {label}:{name}")
+            elif was[name] != now[name]:
+                differences.append(
+                    f"resized: {label}:{name} ({was[name]} -> {now[name]} bytes)")
+    return tuple(differences)
 
 
 def create_input_lock(root: Path) -> InputLock:

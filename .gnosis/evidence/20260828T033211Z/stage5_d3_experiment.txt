@@ -1,0 +1,78 @@
+F-17 STAGE 5 — D3 EXPERIMENT: CAN LoadUserProfileW BE REMOVED?
+==============================================================================
+REACHABLE != AUTHORIZED DEPENDENCY. The launcher currently calls
+LogonUserW + LoadUserProfileW, which makes SeBackupPrivilege and
+SeRestorePrivilege a permanent requirement. Measured here, not assumed.
+
+SETUP — disposable infrastructure
+------------------------------------------------------------------------------
+   copying the Python runtime into the probe tool root ...
+   copying the bootstrap's module closure into the probe tool root ...
+   relocating the Claude CLI into the probe tool root ...
+   creating the disposable account GnosisWkrS5Probe ...
+   worker SID: S-1-5-21-1160728320-3593568380-93362170-1020
+   DPAPI-protecting the credential (machine-bound) ...
+   applying probe-only ACLs ...
+
+OPTION A — lpEnvironment = NULL, LOGON_WITH_PROFILE
+------------------------------------------------------------------------------
+   result:
+     exit code                : 0
+     env variables            : 34
+     USERPROFILE              : 'C:\\Users\\GnosisWkrS5Probe'
+     APPDATA                  : 'C:\\Users\\GnosisWkrS5Probe\\AppData\\Roaming'
+     USERNAME                 : 'GnosisWkrS5Probe'
+     DIRECTOR SENTINEL present: False
+     own-token profile dir    : 'C:\\Users\\GnosisWkrS5Probe'
+     own-token env block ok   : True (30 vars)
+     own-token USERPROFILE    : 'C:\\Users\\GnosisWkrS5Probe'
+     own-token sentinel       : False
+     isolated / no-user-site  : True / True
+
+OPTION B — MINIMAL explicit block, no profile call, no Director copy
+------------------------------------------------------------------------------
+   result:
+     exit code                : 0
+     env variables            : 6
+     USERPROFILE              : ''
+     APPDATA                  : ''
+     USERNAME                 : ''
+     DIRECTOR SENTINEL present: False
+     own-token profile dir    : 'C:\\Users\\GnosisWkrS5Probe'
+     own-token env block ok   : True (30 vars)
+     own-token USERPROFILE    : 'C:\\Users\\GnosisWkrS5Probe'
+     own-token sentinel       : False
+     isolated / no-user-site  : True / True
+
+OPTION C — BASELINE: LogonUser + LoadUserProfile + CreateEnvironmentBlock
+------------------------------------------------------------------------------
+   result:
+     exit code                : 0
+     env variables            : 32
+     USERPROFILE              : 'C:\\Users\\GnosisWkrS5Probe'
+     APPDATA                  : 'C:\\Users\\GnosisWkrS5Probe\\AppData\\Roaming'
+     USERNAME                 : 'GnosisWkrS5Probe'
+     DIRECTOR SENTINEL present: False
+     own-token profile dir    : 'C:\\Users\\GnosisWkrS5Probe'
+     own-token env block ok   : True (30 vars)
+     own-token USERPROFILE    : 'C:\\Users\\GnosisWkrS5Probe'
+     own-token sentinel       : False
+     isolated / no-user-site  : True / True
+
+
+ROLLBACK
+------------------------------------------------------------------------------
+   NetUserDel(GnosisWkrS5Probe)                       : status 0 (deleted)
+   Win32 profile removed                          : True
+   probe root removed                             : True
+   account residue (net user rc!=0 means gone)    : rc=2
+   DPAPI blob removed                             : True
+   no service, no scheduled task, no production ACL was ever created
+
+==============================================================================
+VERDICT
+==============================================================================
+   option  starts   USERPROFILE   APPDATA   no sentinel  own-token profile
+   A       True     True          True      True         True
+   B       True     False         False     True         True
+   C       True     True          True      True         True

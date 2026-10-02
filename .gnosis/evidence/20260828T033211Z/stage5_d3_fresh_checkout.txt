@@ -1,0 +1,34 @@
+F-17 STAGE 5 D3 - FRESH-CHECKOUT VERIFICATION
+======================================================================
+Run against a CLEAN extraction of the committed tree, so nothing
+untracked or locally modified can be carrying the result.
+
+commit : b729b92e43c7cabeebeb7fc901adcd4113e79285
+method : git archive HEAD | tar -x -C <clean dir>
+files  : 1067
+
+the launcher resolved from the fresh tree:
+  C:\Users\nicol\AppData\Local\Temp\claude\C--Users-nicol-Desktop-Claude-Code-Proyectos-GnosisAgentAi\0552c474-d289-45e3-94af-68d5ec1d0bdc\scratchpad\fresh5d3\src\gnosis\trust\worker_launcher.py
+
+PRIVILEGE-REQUIRING APIs, scanned through the AST — not the text.
+A raw text scan reports these as present, because the module DOCSTRING
+names them precisely in order to say they are not used. A check that
+cannot tell a prohibition from a use is not a check.
+
+  worker_launcher.py     privilege-requiring calls: NONE
+  worker_launcher.py     loads userenv.dll        : False
+  bootstrap.py           privilege-requiring calls: NONE
+  bootstrap.py           loads userenv.dll        : False
+  launch_spec.py         privilege-requiring calls: NONE
+  launch_spec.py         loads userenv.dll        : False
+
+lpEnvironment is passed as NULL and CREATE_UNICODE_ENVIRONMENT is unset:
+  CREATE_SUSPENDED | CREATE_NO_WINDOW present : True
+  CREATE_UNICODE_ENVIRONMENT present         : False
+
+...............................................................s........ [ 38%]
+........................................................................ [ 77%]
+...........................................  [100%]
+=========================== short test summary info ===========================
+SKIPPED [1] tests\test_worker_launcher.py:816: the refusal is the non-Windows path
+186 passed, 1 skipped, 28 subtests passed in 27.26s

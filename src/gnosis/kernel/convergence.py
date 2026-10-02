@@ -45,18 +45,21 @@ toward stalemate either — a broken verifier is not a stuck repo.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from functools import partial
 from pathlib import Path
 from typing import Any
 
+from ..runner.capture import RecordedAttempt
 from .canonical import hash_canonical
 from .git_evidence import capture_git_evidence
+from .subject import SubjectIdentity
 from .verification import (
     Evidence,
     VerificationVerdict,
     evidence_name,
+    evidence_payload,
     evidence_reason,
     verification_verdict,
 )
@@ -158,6 +161,25 @@ class RoundRecord:
     fix: FixReport | None
     warnings: tuple[str, ...]
     unchanged_streak: int
+    subject: SubjectIdentity | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "index": self.index, "fingerprint": self.fingerprint,
+            "evidence_ok": self.evidence_ok,
+            "verification": evidence_payload(self.verification),
+            "review": ({"verdict": self.review.verdict.value,
+                        "reviewer": self.review.reviewer, "notes": self.review.notes,
+                        "findings": [f.to_dict() for f in self.review.findings]}
+                       if self.review else None),
+            "blocking": [f.to_dict() for f in self.blocking],
+            "gated": [g.to_dict() for g in self.gated],
+            "fix": ({"claims_done": self.fix.claims_done,
+                     "cannot_fix": self.fix.cannot_fix, "notes": self.fix.notes}
+                    if self.fix else None),
+            "warnings": list(self.warnings), "unchanged_streak": self.unchanged_streak,
+            "subject": self.subject.to_dict() if self.subject else None,
+        }
 
 
 @dataclass(frozen=True)
@@ -187,15 +209,18 @@ class ConvergenceResult:
     dissent: tuple[Finding, ...]
     warnings: tuple[str, ...]
     evidence_failures: tuple[EvidenceFailure, ...] = ()
+    rework_attempts: tuple[RecordedAttempt, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "outcome": self.outcome.value,
             "round_count": len(self.rounds),
+            "rounds": [r.to_dict() for r in self.rounds],
             "gate_ledger": [g.to_dict() for g in self.gate_ledger],
             "dissent": [f.to_dict() for f in self.dissent],
             "warnings": list(self.warnings),
             "evidence_failures": [f.to_dict() for f in self.evidence_failures],
+            "rework_attempts": [a.to_dict() for a in self.rework_attempts],
         }
 
 
@@ -277,18 +302,42 @@ class ConvergenceLoop:
         review_fn: Callable[[int], ReviewReport],
         fix_fn: Callable[[FixRequest], FixReport],
         fingerprint_fn: Callable[[], str | None],
+        subject_fn: Callable[[], SubjectIdentity] | None = None,
+        prepare_fn: Callable[[], None] | None = None,
     ):
         self.policy = policy
         self.verify_fn = verify_fn
         self.review_fn = review_fn
         self.fix_fn = fix_fn
         self.fingerprint_fn = fingerprint_fn
+        self.subject_fn = subject_fn
+        self.prepare_fn = prepare_fn
 
-    def run(self) -> ConvergenceResult:
-        rounds: list[RoundRecord] = []
-        ledger: list[GatedFinding] = []
-        loop_warnings: list[str] = []
-        evidence_failures: list[EvidenceFailure] = []
+    def run(self, *, initial: ConvergenceResult | None = None, start_index: int = 1,
+            on_round_started: Callable[[int], None] | None = None,
+            on_progress: Callable[[ConvergenceResult], None] | None = None) -> ConvergenceResult:
+        if type(start_index) is not int or start_index < 1:
+            raise ValueError("convergence start index must be a positive integer")
+        rounds: list[RoundRecord] = list(initial.rounds) if initial else []
+        indexes = [r.index for r in rounds]
+        if (any(type(i) is not int or i < 1 or i > self.policy.max_rounds for i in indexes)
+                or indexes != sorted(set(indexes)) or any(i >= start_index for i in indexes)):
+            raise ValueError("resume cannot overwrite a recorded convergence round")
+        if initial is not None and initial.outcome is ConvergenceOutcome.CONVERGED:
+            last_round = rounds[-1] if rounds else None
+            if (last_round is None or last_round.evidence_ok is not True
+                    or last_round.fingerprint is None
+                    or verification_verdict(last_round.verification) is not VerificationVerdict.PASSED
+                    or last_round.review is None or last_round.review.verdict is not ReviewVerdict.PASS
+                    or last_round.blocking):
+                raise ValueError("resumed convergence has no valid passing round")
+        if initial is not None and initial.outcome in {
+            ConvergenceOutcome.CONVERGED, ConvergenceOutcome.CANNOT_FIX, ConvergenceOutcome.STALEMATE,
+        }:
+            return initial
+        ledger: list[GatedFinding] = list(initial.gate_ledger) if initial else []
+        loop_warnings: list[str] = list(initial.warnings) if initial else []
+        evidence_failures: list[EvidenceFailure] = list(initial.evidence_failures) if initial else []
         prev_fingerprint: str | None = None
         have_prev = False
         unchanged = 0
@@ -298,16 +347,74 @@ class ConvergenceLoop:
         # not a bool: `passed` is the field this loop is not allowed to
         # read, and a `dict[str, bool]` would have re-admitted it.
         verified_by_fp: dict[str, VerificationVerdict] = {}
+        for previous in rounds:
+            prior_verdict = verification_verdict(previous.verification)
+            if previous.fingerprint is not None and prior_verdict in {
+                VerificationVerdict.PASSED, VerificationVerdict.FAILED,
+            }:
+                verified_by_fp[previous.fingerprint] = prior_verdict
+        if rounds and rounds[-1].index + 1 == start_index:
+            last = rounds[-1]
+            last_fix = last.fix
+            if last.evidence_ok:
+                prev_fingerprint, have_prev = last.fingerprint, True
+                unchanged = last.unchanged_streak
 
-        for index in range(1, self.policy.max_rounds + 1):
+        # A review was committed before its fixer, but no fix result was ever
+        # committed. Resume that work under the NEXT round's reservation rather
+        # than accepting an author's partial output as a completed attempt.
+        pending_fix = (rounds[-1] if rounds and rounds[-1].fix is None
+                       and rounds[-1].evidence_ok
+                       and (rounds[-1].blocking or verification_verdict(rounds[-1].verification)
+                            is VerificationVerdict.FAILED) else None)
+
+        for index in range(start_index, self.policy.max_rounds + 1):
+            if on_round_started is not None:
+                on_round_started(index)
+            if pending_fix is not None:
+                resumed_fix = self.fix_fn(FixRequest(index, pending_fix.blocking,
+                                                    pending_fix.verification))
+                rounds[-1] = replace(pending_fix, fix=resumed_fix)
+                last_fix = resumed_fix
+                pending_fix = None
+                resumed_outcome = (ConvergenceOutcome.CANNOT_FIX if resumed_fix.cannot_fix
+                                   else ConvergenceOutcome.ROUNDS_EXHAUSTED)
+                progress = self._result(resumed_outcome, rounds, ledger, (),
+                                        loop_warnings, evidence_failures)
+                if on_progress is not None:
+                    on_progress(progress)
+                if resumed_fix.cannot_fix:
+                    return progress
+            if self.prepare_fn is not None:
+                self.prepare_fn()
             warnings: list[str] = []
 
-            fingerprint = self._collect(
+            fingerprint = (self._collect(
                 self.fingerprint_fn, "fingerprint", warnings, evidence_failures)
+                if self.subject_fn is None else None)
+            subject = (self._collect(self.subject_fn, "subject", warnings, evidence_failures)
+                       if self.subject_fn else None)
+            if self.subject_fn:
+                # Real bytes key the canonical loop; diff-stat alone can remain
+                # identical while a binary or ignored input changes.
+                fingerprint = subject.digest() if subject is not None else None
             verification = self._collect(
                 self.verify_fn, "verification", warnings, evidence_failures)
+            verified_subject = (
+                self._collect(self.subject_fn, "subject", warnings, evidence_failures)
+                if self.subject_fn else None)
             review = self._collect(
                 partial(self.review_fn, index), "review", warnings, evidence_failures)
+            reviewed_subject = (
+                self._collect(self.subject_fn, "subject", warnings, evidence_failures)
+                if self.subject_fn else None)
+            subject_ok = (self.subject_fn is None or (
+                subject is not None and subject == verified_subject == reviewed_subject))
+            if not subject_ok:
+                warnings.append("subject unavailable or changed during verification/review")
+                evidence_failures.append(EvidenceFailure(
+                    stage="subject", error_type="SubjectChanged",
+                    message="verification and review did not observe the same subject bytes"))
 
             # The verdict, read ONCE, by the one function that reads it.
             # Every use below is derived from this value; the loop used to
@@ -343,6 +450,7 @@ class ConvergenceLoop:
                 and verification is not None
                 and verdict is not VerificationVerdict.MALFORMED
                 and review is not None
+                and subject_ok
             )
 
             # Signal ∧ evidence: a prior DONE claim with an unchanged repo
@@ -414,6 +522,16 @@ class ConvergenceLoop:
             if not clean and evidence_ok:
                 needs_fix = bool(blocking) or verdict is VerificationVerdict.FAILED
                 if needs_fix:
+                    # Persist the evidence that requested rework before calling
+                    # the mutating agent. A crash there cannot erase the review.
+                    if on_progress is not None:
+                        pending = RoundRecord(
+                            index, fingerprint, evidence_ok, verification, review,
+                            tuple(blocking), tuple(gated_this_round), None,
+                            tuple(warnings), unchanged, subject if subject_ok else None)
+                        on_progress(self._result(ConvergenceOutcome.ROUNDS_EXHAUSTED,
+                            [*rounds, pending], ledger, (), [*loop_warnings, *warnings],
+                            evidence_failures))
                     fix = self.fix_fn(FixRequest(
                         round_index=index,
                         blocking_findings=tuple(blocking),
@@ -437,24 +555,31 @@ class ConvergenceLoop:
                 verification=verification, review=review,
                 blocking=tuple(blocking), gated=tuple(gated_this_round),
                 fix=fix, warnings=tuple(warnings), unchanged_streak=unchanged,
+                subject=subject if subject_ok else None,
             ))
 
+            finished: ConvergenceResult | None = None
             if clean:
                 dissent = tuple(
                     f for f in (review.findings if review else ())
                     if f not in blocking
                 )
-                return self._result(
+                finished = self._result(
                     ConvergenceOutcome.CONVERGED, rounds, ledger, dissent, loop_warnings, evidence_failures,
                 )
-            if fix is not None and fix.cannot_fix:
-                return self._result(
+            elif fix is not None and fix.cannot_fix:
+                finished = self._result(
                     ConvergenceOutcome.CANNOT_FIX, rounds, ledger, (), loop_warnings, evidence_failures,
                 )
-            if unchanged >= self.policy.max_unchanged_rounds:
-                return self._result(
+            elif unchanged >= self.policy.max_unchanged_rounds:
+                finished = self._result(
                     ConvergenceOutcome.STALEMATE, rounds, ledger, (), loop_warnings, evidence_failures,
                 )
+            if on_progress is not None:
+                on_progress(finished or self._result(ConvergenceOutcome.ROUNDS_EXHAUSTED,
+                    rounds, ledger, (), loop_warnings, evidence_failures))
+            if finished is not None:
+                return finished
 
         return self._result(
             ConvergenceOutcome.ROUNDS_EXHAUSTED, rounds, ledger, (), loop_warnings, evidence_failures,

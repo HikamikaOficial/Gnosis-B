@@ -1,0 +1,75 @@
+{
+  "mode": "os-real",
+  "real_ops_constructed": true,
+  "gates": [
+    "HEAD checked",
+    "preflight PASS; real backend authorized"
+  ],
+  "orchestration": {
+    "stages": [
+      "base_provision",
+      "composed_deployment",
+      "trusted_record",
+      "acls",
+      "service_start"
+    ],
+    "success": false,
+    "operator_exit": null,
+    "anchored": false,
+    "rollback_ok": true,
+    "launch_argv": [],
+    "error": "publisher pipe not ready [READINESS OBSERVATION FAILURE]",
+    "pipe_readiness": {
+      "terminal_reason": "observation-error",
+      "expected_pipe": "\\\\.\\pipe\\gnosis-s2cb-probe",
+      "timeout_s": 15.0,
+      "poll_interval_s": 0.25,
+      "poll_count": 1,
+      "elapsed_s": 0.0,
+      "service_running_observed": true,
+      "pipe_seen": false,
+      "observation_error": true
+    },
+    "service_postmortem": {
+      "scm_state": "RUNNING",
+      "service_running_observed": true,
+      "service_exit_code": null,
+      "effective_command": "\"C:\\Users\\nicol\\AppData\\Local\\Temp\\gnosis-2cb-b1-run-b1-1\\code\\releases\\B1\\runtime\\python.exe\" -I -B \"C:\\Users\\nicol\\AppData\\Local\\Temp\\gnosis-2cb-b1-run-b1-1\\code\\releases\\B1\\publisher\\service_main.py\" \"C:\\Users\\nicol\\AppData\\Local\\Temp\\gnosis-2cb-b1-run-b1-1\\state\\config.json\"",
+      "runtime_exe_exists": true,
+      "service_entry_exists": true,
+      "config_path_exists": true,
+      "deployment_root": "C:\\Users\\nicol\\AppData\\Local\\Temp\\gnosis-2cb-b1-run-b1-1\\code",
+      "access_contract": "UNKNOWN",
+      "access_detail": {
+        "method": "ACL-BASED INFERENCE (leaf objects only)",
+        "intended_principal": "NT SERVICE\\GnosisPubS2CBProbe",
+        "resolved_sid": "S-1-5-80-1811298702-3830346019-653568637-1739605718-893457846",
+        "intended_principal_rendered": true,
+        "leaf_acls_inspected": {
+          "runtime": "intended-principal-present",
+          "service_entry": "intended-principal-present",
+          "config": "intended-principal-present"
+        },
+        "ancestors_tested": false,
+        "grant_semantics_proven": false,
+        "deny_semantics_proven": false,
+        "verdict": "UNKNOWN"
+      }
+    },
+    "publisher_failure_class": "READINESS OBSERVATION FAILURE"
+  },
+  "bindings": {
+    "expected_head": "06b948a89ce73a0ebb76bdae3f6cb8e3dc6f483e",
+    "runtime_src": "C:\\Users\\nicol\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none",
+    "reviewer_executable": "C:\\Users\\nicol\\.local\\bin\\claude.exe",
+    "worker_username": "GnosisWkrS2CB",
+    "service_name": "GnosisPubS2CBProbe",
+    "pipe_name": "\\\\.\\pipe\\gnosis-s2cb-probe",
+    "residue_record_path": "C:\\Users\\nicol\\AppData\\Local\\Temp\\gnosis-2cb-b1-run-b1-1\\GnosisStage2CBRecovery\\run-b1-1.residue.json",
+    "f17_observer": "gnosis.trust.deployment.observe_deployment",
+    "os_backend": "stage2cb_ops.WindowsRealOperations",
+    "live_ledger": "1 used / 4 remaining"
+  },
+  "result": "OS-REAL-RAN",
+  "scaffold_cleanup": "removed"
+}

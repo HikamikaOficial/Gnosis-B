@@ -1,0 +1,130 @@
+MUTATION CHECK — F-17 Stage 5 trusted dedicated-worker launcher
+==========================================================================
+targeted suite: tests/test_worker_launcher.py tests/test_trust_boundary.py tests/test_cli_runner.py
+STRUCTURAL mutants die on source-order/flag assertions; the observed
+behaviour they would break is proved by the OS-real probe separately.
+
+BASELINE (repair in place): exit=0  89 passed, 1 skipped in 9.50s
+
+WM1: an absent launcher silently becomes a same-user launch
+  result: exit=1  1 failed, 38 passed in 2.20s
+  verdict: CAUGHT
+
+WM2: the production profile accepts an explicit test fake
+  result: exit=1  1 failed, 37 passed in 2.29s
+  verdict: CAUGHT
+
+WM3: the runner stops enforcing the trusted-launch requirement
+  result: exit=1  1 failed, 49 passed in 2.48s
+  verdict: CAUGHT
+
+WM4: the bootstrap ignores the launch-spec digest
+  result: exit=1  1 failed, 14 passed in 0.48s
+  verdict: CAUGHT
+
+WM5: a re-serialised (non-canonical) payload is accepted
+  result: exit=1  1 failed, 12 passed in 0.48s
+  verdict: CAUGHT
+
+WM6: a launch_id may climb out of the trusted launch root
+  result: exit=1  1 failed, 9 passed in 0.40s
+  verdict: CAUGHT
+
+WM7: a relative or UNC executable/cwd is accepted
+  result: exit=1  1 failed, 2 passed in 0.37s
+  verdict: CAUGHT
+
+WM8: a NUL in an argument is accepted and silently truncated by the OS
+  result: exit=1  1 failed in 0.36s
+  verdict: CAUGHT
+
+WM9: the child's TokenUser SID is not checked
+  result: exit=1  1 failed, 43 passed in 2.58s
+  verdict: CAUGHT
+
+WM10: an integrity mismatch is ignored
+  result: exit=1  1 failed, 45 passed in 2.47s
+  verdict: CAUGHT
+
+WM11: an administrator worker token is accepted
+  result: exit=1  1 failed, 46 passed in 2.54s
+  verdict: CAUGHT
+
+WM12: a dangerous privilege in the worker token is accepted
+  result: exit=1  1 failed, 47 passed in 2.44s
+  verdict: CAUGHT
+
+WM13 [STRUCTURAL]: worker code is resumed BEFORE job containment is established
+  result: exit=1  1 failed, 52 passed in 2.48s
+  verdict: CAUGHT
+
+WM14 [STRUCTURAL]: a child that is not in the job is resumed anyway
+  result: exit=1  1 failed, 52 passed in 2.53s
+  verdict: CAUGHT
+
+WM15 [STRUCTURAL]: KILL_ON_JOB_CLOSE is removed, so the tree outlives the run
+  result: exit=1  1 failed, 59 passed in 2.62s
+  verdict: CAUGHT
+
+WM16 [STRUCTURAL]: breakaway is permitted, so a child can leave the job
+  result: exit=1  1 failed, 59 passed in 2.56s
+  verdict: CAUGHT
+
+WM17 [STRUCTURAL]: timeout kills only the root PID, not the job
+  result: exit=1  1 failed, 56 passed in 2.55s
+  verdict: CAUGHT
+
+WM18: the Director's environment becomes the worker's base
+  result: exit=1  1 failed, 26 passed in 2.35s
+  verdict: CAUGHT
+
+WM19: the transport budget is not enforced
+  result: exit=1  1 failed, 61 passed in 2.60s
+  verdict: CAUGHT
+
+WM20: the bootstrap interpreter stops being isolated (-I dropped)
+  result: exit=1  1 failed, 19 passed in 0.56s
+  verdict: CAUGHT
+
+WM21: the bootstrap PATH-searches argv[0] instead of the sealed image
+  result: exit=1  1 failed, 41 passed in 2.30s
+  verdict: CAUGHT
+
+WM22: the bootstrap runs the logical command through a shell
+  result: exit=1  1 failed, 20 passed in 0.94s
+  verdict: CAUGHT
+
+WM23: the bootstrap inherits the Director's stdin instead of DEVNULL
+  result: exit=1  1 failed, 24 passed in 2.24s
+  verdict: CAUGHT
+
+WM24: launch_spec_digest is not surfaced for Stage 6 binding
+  result: exit=1  1 failed, 60 passed in 2.57s
+  verdict: CAUGHT
+
+WM26: the launcher reintroduces the LoadUserProfileW profile path
+  result: exit=1  1 failed, 32 passed in 2.18s
+  verdict: CAUGHT
+
+WM27: the launcher reintroduces LogonUserW
+  result: exit=1  1 failed, 32 passed in 2.32s
+  verdict: CAUGHT
+
+WM28: the launcher passes an explicit environment block again
+  result: exit=1  1 failed, 33 passed in 2.22s
+  verdict: CAUGHT
+
+WM29: the sealed overlay is applied AFTER the seal, so it is unsigned
+  result: exit=1  1 failed, 34 passed in 2.31s
+  verdict: CAUGHT
+
+WM30: a credential-shaped name may ride in the Worker-readable spec
+  result: exit=1  1 failed, 31 passed in 2.25s
+  verdict: CAUGHT
+
+WM31 [STRUCTURAL]: LOGON_NETCREDENTIALS_ONLY replaces LOGON_WITH_PROFILE
+  result: exit=1  1 failed, 53 passed in 2.53s
+  verdict: CAUGHT
+
+RESTORED: exit=0  89 passed, 1 skipped in 9.68s
+mutants: 30  survived/aborted: 0

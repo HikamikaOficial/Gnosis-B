@@ -1,0 +1,42 @@
+F-17 STAGE 6 — TCB METRICS
+======================================================================
+Measured from the COMMIT (git show), not the working tree, so a
+concurrent mutation run cannot perturb them.
+
+REPORTED SEPARATELY AND NEVER SUMMED. These are different KINDS of
+quantity: lines of project source we wrote and can review, versus
+megabytes of interpreter we did not.
+
+1. project-source Trust Plane           6174 LOC across 20 files
+2. publisher service source closure     3297 LOC across 15 files
+4. bootstrap source closure             1131 LOC across  8 files
+
+3. publisher IMPORT closure (measured, in a fresh process)
+   15 modules
+      gnosis
+      gnosis.kernel
+      gnosis.kernel.atomic_io
+      gnosis.kernel.canonical
+      gnosis.kernel.file_lock
+      gnosis.trust
+      gnosis.trust.anchor
+      gnosis.trust.bundle_verify
+      gnosis.trust.launch
+      gnosis.trust.pipe_server
+      gnosis.trust.publication
+      gnosis.trust.publisher
+      gnosis.trust.publisher_service
+      gnosis.trust.run_identity
+      gnosis.trust.service_host
+
+5. trusted Python runtime (the tree the deployment digest binds)
+   3434 files, ~62 MB   <- measured OS-real by the Stage 6 probe
+   ("runtime tree files: 3434", stage6_osreal_probe6.txt)
+
+6. other runtime binaries in the TCB
+   NONE. The service host is pure ctypes against advapi32/kernel32,
+   which ship with Windows; pywin32 was deliberately not adopted.
+
+THE PAIR REMAINS FROZEN AND UNQUOTABLE APART:
+   project-source Trust Plane   ~6174 LOC
+   trusted Python runtime       ~62 MB / 3434 files

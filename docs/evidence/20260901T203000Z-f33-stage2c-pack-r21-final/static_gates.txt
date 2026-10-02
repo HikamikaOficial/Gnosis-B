@@ -1,0 +1,4 @@
+=== mypy --strict src (production byte-identical to R2; run for standard coverage) ===
+Success: no issues found in 88 source files
+=== ruff (changed test) ===
+All checks passed!

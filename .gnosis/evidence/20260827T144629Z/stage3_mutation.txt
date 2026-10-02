@@ -1,0 +1,76 @@
+MUTATION CHECK — F-17 Stage 3 trusted RunIdentity + publish authorization
+==========================================================================
+targeted suite: tests/test_run_identity_authorization.py tests/test_authority_boundary.py tests/test_trust_boundary.py
+
+BASELINE (repair in place): exit=0  85 passed in 5.56s
+
+RM1: the PUBLISHABLE gate is removed, so any known run may be anchored
+  result: exit=1  1 failed, 27 passed in 0.57s
+  verdict: CAUGHT
+
+RM2: the owner_worker_sid check is dropped, so another worker's run publishes
+  result: exit=1  1 failed, 25 passed in 0.56s
+  verdict: CAUGHT
+
+RM3: the deployment check is dropped, so evidence from another trust plane publishes
+  result: exit=1  1 failed, 29 passed in 0.66s
+  verdict: CAUGHT
+
+RM4: the epoch check is dropped, so an older generation's artifact publishes
+  result: exit=1  1 failed, 30 passed in 0.67s
+  verdict: CAUGHT
+
+RM5: the head/tree binding is dropped from the authorization comparison
+  result: exit=1  1 failed, 31 passed in 0.62s
+  verdict: CAUGHT
+
+RM6: publication state may regress (ANCHORED back to PUBLISHABLE)
+  result: exit=1  1 failed, 22 passed in 0.49s
+  verdict: CAUGHT
+
+RM7: a transition stops requiring the expected identity, so a stale/ABA update lands
+  result: exit=1  1 failed, 16 passed in 0.41s
+  verdict: CAUGHT
+
+RM8: a run_id may be rebound to a different identity (delete-and-recreate)
+  result: exit=1  1 failed, 23 passed in 0.49s
+  verdict: CAUGHT
+
+RM9: ANCHORED no longer requires a confirmed AnchorRecord digest
+  result: exit=1  1 failed, 17 passed in 0.43s
+  verdict: CAUGHT
+
+RM10: an unsafe run_id is accepted as a trusted-store record name
+  result: exit=1  1 failed, 15 passed in 0.38s
+  verdict: CAUGHT
+
+RM11: a V2 anchor is accepted without a deployment binding
+  result: exit=1  1 failed, 7 passed in 0.36s
+  verdict: CAUGHT
+
+RM12: a V1 record may carry V2 fields, so an unbound anchor masquerades as bound
+  result: exit=1  1 failed, 8 passed in 0.36s
+  verdict: CAUGHT
+
+RM13: a V1 record satisfies a deployment-bound verification
+  result: exit=1  1 failed, 65 passed in 2.99s
+  verdict: CAUGHT
+
+RM14: the anchor stops binding the deployment recorded in the run identity
+  result: exit=1  1 failed, 61 passed in 2.82s
+  verdict: CAUGHT
+
+RM15: publish adopts the bundle's tree identity again instead of the Director's
+  result: exit=1  1 failed, 66 passed in 3.00s
+  verdict: CAUGHT
+
+RM16: owner_worker_sid accepts a username instead of a canonical SID
+  result: exit=1  1 failed, 5 passed in 0.34s
+  verdict: CAUGHT
+
+RM17: an unreadable anchor ledger line is skipped instead of failing closed
+  result: exit=1  1 failed, 62 passed in 2.75s
+  verdict: CAUGHT
+
+RESTORED: exit=0  85 passed in 5.55s
+mutants: 17  survived/aborted: 0

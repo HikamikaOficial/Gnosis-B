@@ -1,0 +1,11 @@
+E-M1: SURVIVED  (remove provision-time final verify)
+E-M2: SURVIVED  (return composed result even after final-verify failure)
+E-M3: CAUGHT  (canonical launch skips application re-measurement)
+E-M4: SURVIVED  (canonical launch skips trusted composed-digest comparison)
+E-M5: CAUGHT  (canonical launch reuses record F-17 digest (no re-observation))
+E-M6: CAUGHT  (startup entry skips trusted-record comparison)
+E-M7: CAUGHT  (startup entry imports cli.main before verification (verify removed))
+E-M9: CAUGHT  (startup entry ignores per-file byte tamper)
+E-M10: CAUGHT  (canonical launch without -I isolation)
+
+6/9 applied mutants CAUGHT

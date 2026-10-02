@@ -1,0 +1,68 @@
+name: V1 component and survival tests
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v1-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-tests:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up the qualified Python series
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+      - name: Install declared development dependencies
+        run: python -m pip install '.[dev]'
+      - name: Prepare a short canonical Windows temporary directory
+        # Profile TEMP may be an 8.3 alias and its expanded form makes nested
+        # task worktrees exceed Git's internal GIT_DIR limit. Use the runner's
+        # scratch directory; retain all path checks and test assertions.
+        run: |
+          $taskTemp = Join-Path $env:RUNNER_TEMP 'gnosis-tests'
+          New-Item -ItemType Directory -Force -Path $taskTemp | Out-Null
+          $taskTemp = (Resolve-Path -LiteralPath $taskTemp).Path
+          "TEMP=$taskTemp" >> $env:GITHUB_ENV
+          "TMP=$taskTemp" >> $env:GITHUB_ENV
+      - name: Record runtime and configure disposable test Git identity
+        run: |
+          python --version
+          git --version
+          git config --global user.name 'GNOSIS component tests'
+          git config --global user.email 'gnosis-tests@example.invalid'
+          git config --global init.defaultBranch master
+          git config --global core.autocrlf false
+      - name: Check source types
+        run: python -m mypy src/gnosis --strict
+      - name: Run the complete component and survival suite
+        # Scripted agents only: no provider credentials or provisioning scripts.
+        # A Windows runner is necessary for the real lock/pipe/capture tests.
+        run: python -m pytest -q --tb=short --junitxml=test-results/v1.xml
+      - name: Retain the test report even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: v1-windows-test-results
+          path: test-results/v1.xml
+          if-no-files-found: warn
+          retention-days: 14

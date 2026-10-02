@@ -1,0 +1,97 @@
+PRE-EXISTING WORK-QUEUE FLAKE - ATTRIBUTION MEASUREMENT
+======================================================================
+
+test: tests/test_work_queue.py::TestRepairsFromTheIndependentReview::test_a_brief_is_not_re_offered_forever
+
+The Stage-5 environment-hardening full suite run 1 failed here. The
+question is not whether the suite went red - it did - but whether THIS
+CHANGE made it red. That is measured on both trees, not argued.
+
+TREE A: 328930c (this stage, environment hardening)
+  run 1: pass
+  run 2: pass
+  run 3: pass
+  run 4: pass
+  run 5: pass
+  run 6: FAIL
+  run 7: FAIL
+  run 8: FAIL
+  run 9: pass
+  run 10: pass
+  run 11: FAIL
+  run 12: pass
+  run 13: pass
+  run 14: pass
+  run 15: pass
+  run 16: pass
+  run 17: pass
+  run 18: pass
+  run 19: pass
+  run 20: pass
+  --> 4 failures in 20
+
+TREE B: 466fb3d (BEFORE this change - the D3 evidence commit)
+  run 1: pass
+  run 2: FAIL
+  run 3: pass
+  run 4: pass
+  run 5: pass
+  run 6: pass
+  run 7: pass
+  run 8: pass
+  run 9: pass
+  run 10: FAIL
+  run 11: pass
+  run 12: FAIL
+  run 13: pass
+  run 14: pass
+  run 15: pass
+  run 16: FAIL
+  run 17: pass
+  run 18: pass
+  run 19: pass
+  run 20: pass
+  --> 4 failures in 20
+
+VERDICT
+======================================================================
+    tree A (328930c, this change) : 4 failures in 20
+    tree B (466fb3d, before it)   : 4 failures in 20
+
+The rate is the same on both sides of the change, so the change is not
+the cause. Three independent lines of evidence agree:
+
+ 1. ALREADY ON THE RECORD. docs/NEXT_ACTIONS.md has referred to "the
+    pre-existing work-queue flake" since 2026-08-26, and the ADR-0026
+    baseline is stated as "874 tests and 60 subtests WHEN THE FLAKY
+    WORK-QUEUE TEST COOPERATES". Stage 5 did not introduce it.
+
+ 2. REPRODUCED ON BOTH TREES at the same rate, above.
+
+ 3. ROOT CAUSE IS IN THE TEST'S OWN FIXTURE, not the product.
+    TestRepairsFromTheIndependentReview._short_lived() builds the
+    WorkAuthority with default_ttl_s=0.05. The test then performs three
+    claim/release cycles, each writing JSON to disk, and every one of
+    them must finish inside 50 ms of wall clock or the lease expires and
+    release() raises StaleLeaseError - which is exactly the observed
+    failure. The test is about ATTEMPT EXHAUSTION, not lease expiry, so
+    it never needed a short TTL at all; its neighbour
+    test_a_brief_whose_worker_died_becomes_claimable_again does need one
+    and deliberately sleeps 0.15 s.
+
+SCOPE DISCIPLINE. The repair is one line - give this test a normal-TTL
+queue - but tests/test_work_queue.py is outside the scope this stage was
+authorised to touch, and editing a test during a closure gate is exactly
+the move a reviewer should be able to reject. IT WAS NOT MODIFIED. The
+repair is recorded in NEXT_ACTIONS 0-XXIII for separate authorisation,
+with its own before/after measurement.
+
+FULL SUITE OUTCOME AS MEASURED, NOT AS PREFERRED
+======================================================================
+    run 1   1364 passed, 1 FAILED, 1 skipped, 98 subtests   (the flake)
+    run 2   killed by the harness at 73% - NO VERDICT, discarded
+    run 3   1365 passed, 1 skipped, 98 subtests, SUITE_EXIT=0   GREEN
+
+Run 3 was launched detached precisely because run 2 proved that a
+suite this long does not survive the tool-task lifetime, and a
+half-finished suite is not evidence.

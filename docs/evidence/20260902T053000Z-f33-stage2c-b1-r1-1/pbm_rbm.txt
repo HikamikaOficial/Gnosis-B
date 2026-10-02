@@ -1,0 +1,11 @@
+PBM1: APPLIED / CAUGHT  (one-shot check (no poll loop))
+PBM2: APPLIED / CAUGHT  (timeout accepted as success)
+PBM4: APPLIED / CAUGHT  (ignore Publisher death)
+PBM5: APPLIED / CAUGHT  (unbounded readiness (no timeout))
+PBM3: APPLIED / CAUGHT  (real pipe_ready re-prefixes / wrong pipe)
+RBM1: APPLIED / CAUGHT  (omit driver scaffold cleanup)
+RBM2: APPLIED / CAUGHT  (clean scaffold despite residue present)
+RBM4: APPLIED / CAUGHT  (report 'removed' even when cleanup failed (false clean))
+RBM3: STRUCTURAL — broad-prefix cleanup — scaffold_root is the EXACT run-bound code_base.parent; test_scaffold_root_is_exact_owned_parent proves all nested driver artifacts are under that one owned root (no glob/prefix)
+
+8/8 applied mutants CAUGHT; 1 structural

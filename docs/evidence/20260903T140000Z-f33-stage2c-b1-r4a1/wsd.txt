@@ -1,0 +1,12 @@
+WSD1: APPLIED / CAUGHT  (broad forwarding: forward the whole problems list into the field)
+WSD2: APPLIED / CAUGHT  (activate for ANY pipeline_error:* (not just the worker-launch class))
+WSD3: APPLIED / CAUGHT  (substring activation: match on 'WorkerLaunchFailed' in any problem text)
+WSD4: APPLIED / CAUGHT  (concatenate all problems after finding a worker failure)
+WSD5: APPLIED / CAUGHT  (drop the native winerr from the selected launcher line)
+WSD6: APPLIED / CAUGHT  (drop/replace the failing API (stage) in the launcher line)
+WSD7: APPLIED / CAUGHT  (let the diagnostic path claim success (break governed BLOCKED))
+WSD8: APPLIED / CAUGHT  (expose reviewer finding.description (first problem, reason ignored))
+WSD9: APPLIED / CAUGHT  (expose evidence-failure message (first problem, reason ignored))
+WSD10: STRUCTURAL — modify historical F-17 launcher to obtain attribution — caught by the F-17 freeze: worker_launcher.py diff = NONE (F-17 unchanged); attribution is surfaced downstream from the already-preserved exception message
+
+9/9 applied behavioral worker-diagnostic mutants CAUGHT; 1 structural (documented)

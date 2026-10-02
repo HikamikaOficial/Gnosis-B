@@ -1,0 +1,35 @@
+F-33 B1 OS-REAL QUALIFICATION (R3D baseline) — post-run verification
+===================================================================
+Baseline HEAD : b2602caebbec71bd493f5514f2dcc21493352f5f
+Command       : PYTHONUTF8=1 .venv/Scripts/python.exe scripts/run_f33_stage2c_b1_osreal.py \
+                --execute-os-real --confirm EXECUTE-F33-2CB1-OS-REAL \
+                --expected-head b2602caebbec71bd493f5514f2dcc21493352f5f
+
+STAGES REACHED: base_provision, composed_deployment, trusted_record, acls,
+                service_start, pipe_ready, route_selected, operator_launch, anchored_check
+R3D RECONCILIATION VALIDATED OS-REAL: canonical_launch PASSED (fresh effective identity
+                + composed binding + application + startup self-verify) -> the operator
+                process LAUNCHED (operator_launch reached). The historical F-17 digest
+                mismatch is RESOLVED.
+NEW BLOCKER   : operator process exit=1. Traceback:
+                operator_entry.py -> cli.py:200 main -> cli.py:152 build_operator_composition
+                -> observe_deployment(...) -> _assert_executable_inside_runtime_root
+                -> observed_directory_path(runtime_root)
+                -> CreateFileW(...\code\releases\current\runtime) failed (winerr 3 = PATH_NOT_FOUND)
+                ROOT: cli.py build_operator_composition rebuilds DeploymentLayout WITHOUT
+                release_id (defaults "current"); the code is staged under releases\B1\.
+                A release_id-plumbing gap in the F-33 director's deployment self-observation.
+                NOT R3D (composed identity passed), NOT F-17 (observers unchanged).
+L2 CONSUMED   : NO (failed at operator startup, before Worker/verifier/L2). Ledger 1 used / 4 remaining.
+
+Rollback verification:
+  service GnosisPubS2CBProbe : sc query -> ERROR 1060 -> ABSENT
+  worker  GnosisWkrS2CB      : net user -> not found -> ABSENT
+  deployment/scaffold root   : gnosis-2cb-b1-run-b1-1 -> ABSENT
+  RESIDUAL OS STATE          : NONE
+  AUTOMATED ROLLBACK         : PASS (rollback_ok=true, scaffold_cleanup=removed)
+  MANUAL CLEANUP REQUIRED    : NO
+
+Source freeze (post-run): HEAD unchanged; src/gnosis diff unchanged (R3D baseline);
+  hashes pre==post: run_f33=7105304 gnosis_deployment=57751f2 operator_stack=5ebe1de
+  trust/deployment.py=36a632e. No implementation change during the run.

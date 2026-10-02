@@ -1,0 +1,7 @@
+== mypy --strict src ==
+Success: no issues found in 88 source files
+== ruff changed ==
+
+Found 3 errors.
+[*] 3 fixable with the `--fix` option.
+Success: no issues found in 88 source files

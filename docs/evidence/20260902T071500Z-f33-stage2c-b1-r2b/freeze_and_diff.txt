@@ -1,0 +1,14 @@
+== production/F-17 freeze (609c25f..working) ==
+src/gnosis:
+0
+trust:
+0
+historical provisioner/layout/winapi:
+0
+stage probes:
+0
+== changed vs R2A HEAD (b81e4ca) ==
+ scripts/stage2cb.py           | 34 +++++++++++++++++---
+ scripts/stage2cb_ops.py       | 75 +++++++++++++++++++++++++++++++++++--------
+ tests/test_stage2cb_b1_r2a.py | 12 +++++--
+ 3 files changed, 100 insertions(+), 21 deletions(-)

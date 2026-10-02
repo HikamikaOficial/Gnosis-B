@@ -1,0 +1,52 @@
+MUTATION CHECK — F-17 Stage 2 trust-plane deployment identity
+==============================================================
+targeted suite: tests/test_deployment_identity.py tests/test_trust_boundary.py
+
+BASELINE (repair in place): exit=0  74 passed in 3.76s
+
+DM1: the manifest omits a deployed file, so that file can change unmeasured
+  result: exit=1  1 failed, 17 passed in 0.38s
+  verdict: CAUGHT
+
+DM2: the expected manifest no longer refuses a deployment whose bytes differ
+  result: exit=1  1 failed, 14 passed in 0.33s
+  verdict: CAUGHT
+
+DM3: the service ImagePath is dropped from the identity
+  result: exit=1  1 failed, 40 passed in 1.31s
+  verdict: CAUGHT
+
+DM4: the service SID is dropped from the identity
+  result: exit=1  1 failed, 42 passed in 1.32s
+  verdict: CAUGHT
+
+DM5: the service SID TYPE is dropped, so RESTRICTED and UNRESTRICTED look alike
+  result: exit=1  1 failed, 43 passed in 1.26s
+  verdict: CAUGHT
+
+DM6: a path's DACL is dropped, so re-ACLing the AnchorStore is invisible
+  result: exit=1  1 failed, 36 passed in 1.36s
+  verdict: CAUGHT
+
+DM7: the canonicalizer drops deny ACEs as 'redundant'
+  result: exit=1  1 failed, 4 passed in 0.29s
+  verdict: CAUGHT
+
+DM8: a missing declaration field becomes a default instead of failing closed
+  result: exit=1  1 failed, 12 passed in 0.29s
+  verdict: CAUGHT
+
+DM9: the deployment digest stops covering the trusted runtime
+  result: exit=1  1 failed, 39 passed in 1.32s
+  verdict: CAUGHT
+
+DM10: observed state is replaced by the desired config (intention becomes identity)
+  result: exit=1  1 failed, 54 passed in 1.62s
+  verdict: CAUGHT
+
+DM11: dynamic code loading enters the Trust Plane (the frozen Stage-2 rule)
+  result: exit=1  1 failed, 64 passed in 3.55s
+  verdict: CAUGHT
+
+RESTORED: exit=0  74 passed in 3.83s
+mutants: 11  survived/aborted: 0

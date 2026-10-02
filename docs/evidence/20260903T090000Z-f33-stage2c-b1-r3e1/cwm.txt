@@ -1,0 +1,12 @@
+CWM1: APPLIED / CAUGHT  (canonical writer omits release_id)
+CWM2: APPLIED / CAUGHT  (canonical writer hardcodes "B1")
+CWM3: APPLIED / CAUGHT  (canonical writer substitutes "current")
+CWM6: APPLIED / CAUGHT  (canonical writer reads release_id from environment)
+CWM7: APPLIED / CAUGHT  (writer/reader field-name drift (release_id key renamed))
+CWM4: APPLIED / CAUGHT  (harness bypasses the canonical writer (local schema))
+CWM10: APPLIED / CAUGHT  (reader restores implicit "current" on missing field)
+CWM5: STRUCTURAL — writer takes release_id from brief/work input — build_operator_config accepts only OperatorConfigInputs(layout=...); there is no brief/work param
+CWM8: STRUCTURAL — writer emits wrong release while other roots stay B1 — release_id and all release-dependent paths derive from the ONE layout; a wrong value is the CWM2/CWM3 case and is caught by the writer->reader roundtrip
+CWM9: STRUCTURAL — a second independent config writer remains active — the driver DELEGATES (test_driver_delegates asserts import+call, no local schema); no other writer of the operator config exists in src/ or scripts/
+
+7/7 applied behavioral config-writer mutants CAUGHT; 3 structural (documented)

@@ -1,0 +1,8 @@
+DM1: APPLIED / CAUGHT  (collapse a distinct failure into a generic class)
+DM2: APPLIED / CAUGHT  (report service RUNNING when it is not)
+DM3: APPLIED / CAUGHT  (omit service exit-code post-mortem influence)
+DM4: APPLIED / CAUGHT  (report access PASS without checking (ignore FAIL))
+DM5: APPLIED / CAUGHT  (classify temp topology as root cause from path string)
+DM6: APPLIED / CAUGHT  (hide observation error and report generic)
+
+6/6 applied diagnostic mutants CAUGHT

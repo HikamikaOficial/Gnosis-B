@@ -1,0 +1,17 @@
+F-17 Stage 8 closure-gate flake adjudication (raw)
+Harness: pytest <T1> <T2> -q, 30 samples/cohort; load = 30 concurrent processes.
+T1 = tests/test_work_queue.py::TestOwnershipIsTheClaimsPlane::test_concurrent_workers_never_run_a_brief_twice
+T2 = tests/test_work_queue.py::TestACrashedWorkerLosesNothing::test_recovery_never_takes_a_brief_from_a_live_worker
+Baseline cohort ran from an isolated git worktree at ad32bba, PYTHONPATH=<worktree>/src.
+
+CONTROL  (isolated, sequential, no load, HEAD dae26a0): fail 5/30   StaleLeaseError 1
+LOAD     (30 concurrent, HEAD dae26a0):                 fail 26/30  StaleLeaseError 16
+LOAD     (30 concurrent, baseline ad32bba):             fail 28/30  StaleLeaseError 23
+
+Byte-identity (git hash-object, HEAD vs ad32bba): IDENTICAL for
+  tests/test_work_queue.py, src/gnosis/kernel/lease.py,
+  src/gnosis/director/work_queue.py, src/gnosis/kernel/claims.py.
+
+Conclusion: pre-existing load/timing flake (real time.time clock, 50ms TTL);
+baseline fails >= HEAD under identical load; code byte-identical. Stage 8 did
+not alter the behaviour. Closure gate PASS via adjudication.

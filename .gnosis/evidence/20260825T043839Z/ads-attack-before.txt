@@ -1,0 +1,70 @@
+F-14 round 10 — the ninth review's finding, reproduced against the
+code it was reported on (de74053), before any repair.
+
+The script is scratchpad/ads_repro.py, run with PYTHONPATH pointing
+at `git archive de74053` rather than at the working tree, so
+this is the OLD code and not the new one.
+
+exit: 0
+
+--- output --------------------------------------------------------------
+code under test: C:\Users\nicol\AppData\Local\Temp\tmpf7j4rvyr\before\src
+F-14 ROUND 10 — PHASE 1: NTFS named data streams, before any repair
+==========================================================================
+python: 3.12.14
+
+fixture: probe.txt::$DATA     = 'BASE'
+         probe.txt:gnosis-f14 = 'ALLOW'
+         streams on disk      = [':$DATA', 'gnosis-f14']
+         git sees             = ['probe.txt']
+
+--- RUN 1, named stream = ALLOW ---------------------------------------
+  check read                  : 'ALLOW'
+  inputs locked / byte-bound  : 1 / 1
+  fully_bound                 : True
+  identity_digest             : e3fdb57a82a181c98564e811bf4878706427aa8d5e3aa0282d01ae6b6f7b4ae5
+  content_digest              : b0dd893914da23a02172a6705ab52d455d8634e7ce53c0f6f37bd7f1f4704f92
+  manifest digest of probe.txt: 4c5352d41f3cb438326fed5ebe29aacf9d32b6cbb5e7835552ef722707354ad0
+  manifest keys naming a stream: NONE
+  boundary                    : CLEAN  []
+  evidence_valid / exit       : True / 0
+
+main stream unchanged by the edit: True
+named stream now                 : 'DENY'
+
+--- RUN 2, named stream = DENY ----------------------------------------
+  check read                  : 'DENY'
+  inputs locked / byte-bound  : 1 / 1
+  fully_bound                 : True
+  identity_digest             : e3fdb57a82a181c98564e811bf4878706427aa8d5e3aa0282d01ae6b6f7b4ae5
+  content_digest              : b0dd893914da23a02172a6705ab52d455d8634e7ce53c0f6f37bd7f1f4704f92
+  manifest digest of probe.txt: 4c5352d41f3cb438326fed5ebe29aacf9d32b6cbb5e7835552ef722707354ad0
+  manifest keys naming a stream: NONE
+  boundary                    : CLEAN  []
+  evidence_valid / exit       : True / 0
+
+==========================================================================
+ANSWERS TO THE FIVE QUESTIONS
+  1. identity_digest changes            : False
+  2. content_digest changes             : False
+  3. named stream in the manifest       : False
+  4. the check reads different bytes    : True   ('ALLOW' -> 'DENY')
+  5. both runs claim to be evidence     : True
+
+VERDICT: BYPASS CONFIRMED
+
+==========================================================================
+SECOND QUESTION: does the share-mode lock cover named streams?
+  lock enforced             : True, 1 handle(s)
+  write the MAIN stream     : REFUSED PermissionError [None]
+  write the NAMED stream    : SUCCEEDED
+  it now reads              : 'TAMPERED'
+  create a NEW named stream : SUCCEEDED
+
+  the lock leaves named streams writable: True
+
+==========================================================================
+THIRD QUESTION: can a DIRECTORY carry a named stream?
+  wrote subdir:dir-stream   : SUCCEEDED, reads 'DIRECTORY BYTES'
+  streams on the directory  : []
+  git sees the directory    : False

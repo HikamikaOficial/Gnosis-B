@@ -1,0 +1,76 @@
+{
+  "starting_head": "c48c319547e2e6b5e710e89db70937a89afcab10",
+  "elevated": true,
+  "worker_sid": "S-1-5-21-1160728320-3593568380-93362170-1038",
+  "director_sid": "S-1-5-21-1160728320-3593568380-93362170-1000",
+  "engine_cli_runner_is_trusted_runner": true,
+  "integrated_path": "TaskEngine.cli_runner(TrustedExecutionRunner).run -> TrustedExecutionPort.execute(DETERMINISTIC) -> TrustedWindowsWorkerLauncher.launch -> Worker",
+  "run1_succeeded": true,
+  "run1_observed_sid": "S-1-5-21-1160728320-3593568380-93362170-1038",
+  "run1_is_admin": false,
+  "run1_contained": true,
+  "run1_result_schema": "gnosis.director.deterministic_result.v1",
+  "run1_provider_calls": 0,
+  "run2_task_state": "TaskState.COMPLETED",
+  "run2_run_ids": 1,
+  "run3_succeeded": false,
+  "run3_launch_is_none": true,
+  "default_cassette_is_closed": true,
+  "checks": [
+    {
+      "name": "engine.cli_runner IS the trusted runner (integrated seam)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "integrated runner run succeeded",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "observed SID == disposable worker SID",
+      "pass": true,
+      "detail": "S-1-5-21-1160728320-3593568380-93362170-1038"
+    },
+    {
+      "name": "worker SID != director SID",
+      "pass": true,
+      "detail": "dir=S-1-5-21-1160728320-3593568380-93362170-1000"
+    },
+    {
+      "name": "worker non-admin",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "worker contained in job",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "provider calls == 0",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "governed execute_task reached COMPLETED via trusted seam",
+      "pass": true,
+      "detail": "TaskState.COMPLETED"
+    },
+    {
+      "name": "real worker failure -> integrated runner FAILED (fail closed)",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "pipeline_composition": "PASS",
+  "f17_impl_diff": "NONE",
+  "rollback": {
+    "netuserdel_status": 0,
+    "profile_removed": true,
+    "probe_root_removed": true,
+    "account_absent": true,
+    "dpapi_blob_absent": true,
+    "rollback": "PASS"
+  }
+}

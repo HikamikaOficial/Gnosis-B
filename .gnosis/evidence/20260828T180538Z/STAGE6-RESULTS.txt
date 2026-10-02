@@ -1,0 +1,400 @@
+F-17 IMPLEMENTATION — STAGE 6: PRODUCTION PUBLISHER + TRUSTED PIPELINE WIRING
+======================================================================================
+Authorized state at start: 7022fdd280a665745df8ce6b473152cd72703cf4
+HEAD at end               : 27a3a3c3404c6dd630586bd30bb0febdd04643a4
+
+37-39. COMMITS / HEAD / EVIDENCE
+    970fe0a  bind the runtime tree and the sealed launch intent
+    578a2df  extract the minimal bundle verifier, shrink the publisher TCB
+    ea1f3b7  the restricted-service publisher, promoted to production
+    7bd79cc  the trusted seam that freezes a run's identity
+    9159e7a  repair what mutation testing proved the suite was not checking
+    b8359a2  the store must not rewrite what the identity measures
+    27a3a3c  make the fresh-checkout check prove which tree it measured
+    evidence .gnosis/evidence/20260828T180538Z/
+
+READ stage6_findings.txt FIRST. Almost nothing in this stage was found
+by reading the code; it was found by the verification, and four of the
+defects were in the verification itself.
+F-14 CLOSED. F-17 OPEN. Stage 7 NOT started.
+
+
+1. FINAL STAGE 6 ARCHITECTURE
+--------------------------------------------------------------------------------------
+One executable security path, composed from the independently qualified parts:
+
+    Trusted Director
+      -> observe deployment            trust.deployment      (V2: runtime as a TREE)
+      -> seal LaunchSpec               trust.launch_spec     (Stage 5, frozen)
+      -> launch dedicated Worker       trust.worker_launcher (Stage 5, frozen)
+      -> observe the ACTUAL token SID  LaunchedWorkerIdentity.observed_sid
+      -> freeze RunIdentity            trust.orchestration.create_trusted_run
+      -> Worker runs
+      -> trusted completion gate       trust.orchestration.authorize_publishable
+      -> NOT_PUBLISHABLE -> PUBLISHABLE
+    Worker
+      -> "PUBLISH <run_id>"            the entire request surface
+    Restricted Service-SID Publisher
+      -> load trusted RunIdentity      trust.run_identity
+      -> authorize                     authorize_publication (Stage 3)
+      -> verify the bundle             trust.bundle_verify   (minimal)
+      -> durable publish               trust.publication     (Stage 4)
+      -> Anchor v2 committed           trust.anchor
+
+The Worker never receives Publisher authority and cannot manufacture it: the
+verbs that would grant it do not exist in the grammar, and the code that could
+grant it is not in the service's import closure.
+
+
+2. TRUSTED ORCHESTRATION PATH
+--------------------------------------------------------------------------------------
+`gnosis.trust.orchestration` is the whole Director-side seam - deliberately
+narrow. The engine keeps its scheduling and retries; only the decisions whose
+corruption would let an unauthorized run be anchored moved into the trust plane.
+
+THE ORDER IS ENFORCED BY TYPES. `create_trusted_run` requires a
+`LaunchedWorkerIdentity`, which is only ever constructed after
+`verify_worker_token` accepted the child's token. No code path invents an
+owner SID in advance because none produces that argument in advance. `RunPlan`
+has no field for owner SID, deployment digest or launch digest at all.
+
+
+3-8. THE SERVICE, ITS IDENTITY, AND ITS ENDPOINT
+--------------------------------------------------------------------------------------
+    service host        gnosis.trust.service_host - a REAL SCM contract in pure
+                        ctypes: ServiceMain, RegisterServiceCtrlHandlerEx,
+                        status transitions, clean stop. No pywin32.
+    dispatcher failure  RAISES. Without the SCM there is no service SID, and the
+                        service SID is the entire boundary, so a fallback to a
+                        foreground loop is refused.
+    SID type            SERVICE_SID_TYPE_RESTRICTED, verified OS-real. No silent
+                        fall back to UNRESTRICTED.
+    pipe schema         PUBLISH <run_id>   and nothing else
+    pipe security       explicit SDDL, D:P (protected, nothing inherited),
+                        worker mask 0x00120083, PIPE_REJECT_REMOTE_CLIENTS,
+                        FILE_FLAG_FIRST_PIPE_INSTANCE, nMaxInstances=1,
+                        512-byte bound, malformed input fails closed,
+                        no impersonation, client PID forensic only.
+    squatting           the server's FIRST-instance creation fails and is
+                        propagated: never attach, never retry, never fall back.
+
+
+9-12. WHAT IS BOUND, AND FROM WHERE
+--------------------------------------------------------------------------------------
+    owner_worker_sid    the OS-observed TokenUser SID. Never a config username.
+    launch_spec_digest  the launcher's own seal over the LaunchSpec it executed.
+                        RunIdentity V2; bound into the anchor transitively
+                        through `run_identity_digest`, so an anchor is traceable
+                        to the exact sealed logical launch intent.
+    deployment_digest   an observation, V2, including the runtime TREE.
+    PUBLISHABLE         only `authorize_publishable`, and it fails closed on a
+                        timeout, a cancellation, a non-zero exit, a bundle that
+                        is not where the identity says, or one that does not
+                        verify.
+
+The environment policy version rides inside `launch_spec_digest` (Stage 5), so
+binding the launch binds the environment policy. It is NOT duplicated into the
+anchor: one binding, not two copies to keep in agreement.
+
+
+13-14. DEPLOYMENT DIGEST AND THE RUNTIME MANIFEST
+--------------------------------------------------------------------------------------
+THE BLOCKING DEBT, CLOSED. A V1 deployment identity measured the interpreter as
+ONE FILE. `observe_runtime_tree` now measures the runtime ROOT closed-world:
+every file, real bytes read through the handle whose resolved path was taken,
+deterministic code-point ordering, nothing excluded, and any artifact resolving
+outside the root REFUSED rather than followed.
+
+The runtime root is DECLARED (`DesiredDeploymentConfig.runtime_root`), never
+inferred from `runtime_executable.parent`, and `observe_deployment` refuses an
+executable that does not resolve inside it - otherwise the two halves of the
+binding would describe different installations while reading like a binding.
+
+Covered by `deployment_digest` V2: the trust package (which now includes the
+publisher service code, the bundle verifier, the pipe server, the service host,
+the launch/bootstrap artifacts and the environment policy, because
+`observe_trust_package` excludes nothing under the trust root), the runtime
+executable's bytes, AND the runtime tree.
+
+
+15. PACKAGE CLAIMS VS PROVENANCE
+--------------------------------------------------------------------------------------
+Unchanged from Stage 2 and not blurred here. `package_version`,
+`source_commit` and `source_tree` are read FROM the deployed PACKAGE.json and
+are CLAIMS. `deployment_digest` binds observed BYTES. A claim is never treated
+as proof of source provenance; the final composition that compares deployed
+artifacts against a source manifest remains future work.
+
+
+16-17. EVIDENCE PATH AND THE MINIMAL VERIFIER
+--------------------------------------------------------------------------------------
+The bundle path is read from the trusted record, never from IPC, and then still
+required to resolve INSIDE the configured evidence root, compared
+component-wise so a sibling prefix cannot pass.
+
+`gnosis.trust.bundle_verify` holds the verification primitives. They were MOVED,
+not copied: `kernel.evidence_capture` imports them and re-exports the names its
+callers always used, so there is exactly one implementation.
+
+
+18. PUBLISHER IMPORT CLOSURE — MEASURED, NOT ASSERTED
+--------------------------------------------------------------------------------------
+Measured AFTER A REAL PUBLICATION, because the dependency was a LAZY import
+inside `publish_anchor` that a static graph reports as absent while the running
+service pulls it in.
+
+    before (970fe0a)   14 modules   evidence_capture, git_evidence, input_lock,
+                                    write_observer all PRESENT
+    after              11 modules   all four ABSENT
+
+    publisher_service load closure  15 modules
+    required absent, all confirmed  evidence_capture, git_evidence, input_lock,
+                                    write_observer, engine, orchestrator,
+                                    claude runner, worker_launcher,
+                                    trust.deployment, trust.orchestration,
+                                    trust.launch_spec
+
+`DEFERRED_TCB_EXPANSION` is now EMPTY, and the closed-world test that recorded
+this extraction as Stage-6 work is green.
+
+
+19-22. DURABLE PUBLICATION, ANCHOR V2, RETRY, RESTART
+--------------------------------------------------------------------------------------
+The publisher calls Stage 4's `durable_publish` - never the old direct path.
+The watermark is the authority, the ANCHORED transition is its reconcilable
+consequence, retries are idempotent, and recovery runs BEFORE the endpoint
+exists so no request is answered over unsettled state.
+
+Production writes V2 only. V1 remains readable as historical evidence and
+cannot satisfy the Stage 6 guarantee.
+
+
+23-27, 35, 40. OS-REAL COMPOSITION — 49/49, ROLLBACK VERIFIED
+--------------------------------------------------------------------------------------
+Disposable throughout: a probe-only worker account, a probe-only service, roots
+under `C:\ProgramData\Gnosis\TrustProbe{,6}`, a probe-only pipe. No production
+account, path, service or ACL. No provider call.
+
+SERVICE IDENTITY
+    SID type RESTRICTED · service SID S-1-5-80-... · DEMAND start
+    account NT SERVICE\GnosisPubS6Probe · required privileges ()
+
+HAPPY PATH, IN THE MANDATED ORDER
+    fixture worker exit 0; observed SID matched the expected worker SID
+    launch_spec_digest 848742744ae33f26... sealed by the launcher
+    deployment digest STABLE across two observations
+    run identity owner  = the OBSERVED token SID
+    run identity binds  = the launcher's own seal
+    run identity state  = NOT_PUBLISHABLE at creation
+    publish BEFORE publishable  -> REJECTED
+    trusted gate -> PUBLISHABLE
+    publish -> ANCHORED:cdb1296b72b6:seq=0
+    anchor schema gnosis.anchor.v2
+    anchor binds the deployment digest AND the run identity digest
+    watermark confirms the commit
+    run identity reconciled to ANCHORED
+    retry -> ALREADY_ANCHORED; exactly ONE anchor record
+
+23. CROSS-RUN AND IPC ATTACKS — every case with an explicit verdict
+    unknown run                REJECTED:unknown-run
+    path traversal             REJECTED:bad-request
+    absolute path              REJECTED:bad-request
+    another verb               REJECTED:bad-request
+    no verb                    REJECTED:bad-request
+    extra argument             REJECTED:bad-request
+    fault-point selection      REJECTED:unknown-run   (see 27)
+    oversized                  REJECTED:oversized
+
+25. WORKER AGAINST TRUSTED STATE — ALL DENIED
+    anchor ledger · watermark · run identity · publisher config ·
+    deployed service entry point · deployed publisher module · trusted runtime
+
+26. WORKER AGAINST THE ENDPOINT AND THE SERVICE
+    create an instance of the trusted pipe   DENIED
+    stop the service                         DENIED
+    reconfigure the image path               DENIED
+    change the SID type                      DENIED
+    delete the service                       DENIED
+    service still installed and RUNNING afterwards
+
+22. RESTART
+    service stopped and restarted; anchor count unchanged; chain still verifies;
+    a retry after restart is still ALREADY_ANCHORED
+
+27. FAULT-SEAM ACCESSIBILITY
+    `PUBLISH F5` is refused — but as `unknown-run`, because "F5" IS a
+    syntactically valid run id. The honest property is asserted directly in the
+    unit tests instead: no request of ANY shape installs a fault hook,
+    `_FAULT_HOOK` is assigned only by the module that owns it (AST-checked), and
+    the publication module reads no environment at all.
+
+40. ROLLBACK — verified by post-check, not asserted
+    sc stop 0 · sc delete 0 · query rc 1060 (gone) · state root removed ·
+    NetUserDel status 0 · Win32 profile removed · probe root removed ·
+    net user rc=2 (gone) · DPAPI blob removed · no scheduled task ·
+    no production ACL was ever created
+
+24. DEPLOYMENT MISMATCH — AND WHAT KIND OF GUARANTEE IT IS
+--------------------------------------------------------------------------------------
+Stated precisely, as required: the guarantee is BOTH, at different granularities.
+
+    PREVENTION BY TRUSTED ACL   the Worker cannot alter the trust package, the
+                                runtime, the service configuration or the trust
+                                state; all seven write attempts were DENIED
+                                OS-real.
+    DETECTION AT SERVICE START  the publisher holds `expected_deployment_digest`
+                                from its provisioned configuration and refuses a
+                                run whose identity names a different deployment.
+
+It is NOT re-observation per request: the 1052-line deployment observer is
+deliberately absent from the publisher's closure, so a drift introduced by an
+ADMIN between service start and a request would not be detected until restart.
+Under T2 that is out of scope; under T4 it is already out of scope. Recorded
+rather than claimed away.
+
+
+28. TCB METRICS — REPORTED SEPARATELY, NEVER SUMMED
+--------------------------------------------------------------------------------------
+Measured from the COMMIT (git show), not the working tree, so a
+concurrent mutation run cannot perturb them.
+
+REPORTED SEPARATELY AND NEVER SUMMED. These are different KINDS of
+quantity: lines of project source we wrote and can review, versus
+megabytes of interpreter we did not.
+
+1. project-source Trust Plane           6174 LOC across 20 files
+2. publisher service source closure     3297 LOC across 15 files
+4. bootstrap source closure             1131 LOC across  8 files
+
+3. publisher IMPORT closure (measured, in a fresh process)
+   15 modules
+      gnosis
+      gnosis.kernel
+      gnosis.kernel.atomic_io
+      gnosis.kernel.canonical
+      gnosis.kernel.file_lock
+      gnosis.trust
+      gnosis.trust.anchor
+      gnosis.trust.bundle_verify
+      gnosis.trust.launch
+      gnosis.trust.pipe_server
+      gnosis.trust.publication
+      gnosis.trust.publisher
+      gnosis.trust.publisher_service
+      gnosis.trust.run_identity
+      gnosis.trust.service_host
+
+5. trusted Python runtime (the tree the deployment digest binds)
+   3434 files, ~62 MB   <- measured OS-real by the Stage 6 probe
+   ("runtime tree files: 3434", stage6_osreal_probe6.txt)
+
+6. other runtime binaries in the TCB
+   NONE. The service host is pure ctypes against advapi32/kernel32,
+   which ship with Windows; pywin32 was deliberately not adopted.
+
+THE PAIR REMAINS FROZEN AND UNQUOTABLE APART:
+   project-source Trust Plane   ~6174 LOC
+   trusted Python runtime       ~62 MB / 3434 files
+
+
+29. TRUST_ALLOWLIST DELTA
+--------------------------------------------------------------------------------------
+    + gnosis.trust.bundle_verify      (SHRINKS the TCB: it exists so the
+                                       publisher can verify without the
+                                       machinery that produced the bundle)
+    + gnosis.trust.publisher
+    + gnosis.trust.pipe_server
+    + gnosis.trust.service_host
+    + gnosis.trust.publisher_service
+    + gnosis.trust.orchestration      (writer's seam; deliberately NOT in the
+                                       publisher's closure)
+    - DEFERRED_TCB_EXPANSION entry for kernel.evidence_capture (now empty)
+
+
+30-34. VALIDATION
+--------------------------------------------------------------------------------------
+    directed (mutation baseline)  287 passed, 84 subtests
+    OS-real composition           49 checks, ALL PASSED, rollback verified
+    mutation                      34 mutants, 34 CAUGHT, 0 survived
+    FULL SUITE                    1438 passed, 1 skipped, 156 subtests, exit 0
+    fresh checkout of 27a3a3c     362 passed, 1 skipped, 84 subtests, exit 0
+                                  with the import PROVED to resolve inside the
+                                  extraction before anything ran
+    mypy --strict                 Success, 74 source files
+    ruff                          clean on every file this stage touched; the
+                                  repo-wide count is unchanged at its 19-finding
+                                  baseline, in files this stage never touched
+    secret scan                   clean over the diff and over the bundle
+
+31. MUTATION — 34 / 34 CAUGHT
+--------------------------------------------------------------------------------------
+Three rounds before the attributable one, and the history matters:
+
+    round 1   12 SURVIVED of 34.  Every survivor was a real gap; see the
+                                  findings artifact, sections B1-B5.
+    round 2   BASELINE RED.       The harness REFUSED to score, which is what it
+                                  is for. One of my own tests was over-specified.
+    round 3   33 caught, 1 NOT APPLIED.  S6M29's anchor had moved when the pipe
+                                  was repaired; retargeted to the new decision
+                                  point and confirmed CAUGHT.
+    round 4   34 / 34 CAUGHT, but a test file had been edited mid-flight, so its
+                                  verdicts were not attributable and it was
+                                  re-run rather than reported.
+    FINAL     34 / 34 CAUGHT on a stable tree. 0 survived, 0 aborted.
+
+The mutants cover every class the review named: worker-supplied deployment
+digest and owner SID, an unbound launch digest, a removed PUBLISHABLE check, a
+path derived from untrusted input, an arbitrary evidence path, an external
+anchor no longer compared, a non-durable publish path, a restored V1 writer,
+pipe first-instance protection removed, a broadened pipe DACL, a dropped
+cross-run owner check, a dropped deployment check, a dropped generation check,
+the big evidence machinery back in the closure, a same-user fallback, a
+Worker-controllable fault seam, and a mutable immutable field.
+
+
+41. RESIDUAL RISKS
+--------------------------------------------------------------------------------------
+    R1  THE RUN IDENTITY IS CREATED JUST AFTER THE WORKER STARTS, not strictly
+        before its first instruction: Stage 5's launcher resumes the child
+        inside `launch()`, and restructuring that would reopen a frozen
+        interface. The window is closed by CONSEQUENCE - a publish request for
+        a run with no identity is `unknown-run`, and one before the gate is
+        refused - not by sequencing. Stated, not hidden.
+    R2  THE PUBLISHER'S RUN-SCOPED EXPECTATIONS COME FROM THE TRUSTED STORE.
+        Only the owner SID and the deployment digest are INDEPENDENT (they come
+        from provisioning); repository, head, tree, epoch and launch digest are
+        read from the record the request selects. That is inherent to a service
+        whose only independent knowledge is its own configuration, and it is
+        sound because the Worker cannot write the store - but it is not the
+        same guarantee as an independent second source, and it is not claimed
+        to be.
+    R3  DEPLOYMENT DRIFT is answered by PREVENTION plus DETECTION AT SERVICE
+        START, not by re-observation per request. See section 24.
+    R4  PRODUCTION PROVISIONING IS STILL STAGE 8: real ACLs, the real service
+        account, `python._pth` hardening, and the real trust root.
+    R5  Everything Stage 5 already carried, plus: the pipe DACL is only as good
+        as the SIDs provisioning puts in it.
+
+
+42. DECISIONS REQUIRING INDEPENDENT REVIEW
+--------------------------------------------------------------------------------------
+    D1  The RunIdentity creation window in R1 - accept the fail-closed
+        consequence, or require the launcher to hand back a suspended process
+        (which reopens frozen Stage 5 work).
+    D2  R2: whether the publisher must obtain an independent second source for
+        the run-scoped expectations, or whether "the Worker cannot write the
+        trusted store" is the intended guarantee.
+    D3  The publisher's early refusals duplicate checks that
+        `authorize_publication` also performs. They are kept because they give
+        the operator a specific reason, and they are mutation-detectable only
+        because the tests assert the exact reason string. Confirm that is the
+        wanted trade, or collapse them to one decision point.
+    D4  `kernel.authority` still re-exports two private `_bundle_*` helpers.
+        Zero production importers remain; the facade is used only by tests.
+        Recorded as cleanup debt.
+
+
+======================================================================================
+STAGE 6 RESULT: PASS
+RECOMMENDATION: DO NOT CLOSE F-17
+======================================================================================

@@ -1,0 +1,5 @@
+HEAD=06cdf00ffb2eee4cd176b7d86b0c84beb764e45c (confirmed at launch; tracked worktree clean after)
+RESULT: GREEN (genuine exit-0 complete run)
+﻿........................................................................ [  4%]
+..                                                                       [100%]
+1510 passed, 1 skipped, 291 subtests passed in 995.87s (0:16:35)

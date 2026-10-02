@@ -1,0 +1,23 @@
+F-17 STAGE 2 - FULL-SUITE REGRESSION
+======================================================================
+Stage 2 is isolated (nothing in production imports gnosis.trust.deployment),
+so a full suite was not required. It was run anyway, twice, because the
+Stage-1 evidence had to record a run that was NOT green and that debt is
+still open.
+
+run 1  tree e648784 (implementation)
+       1167 passed, 73 subtests passed in 827.72s (0:13:47)   exit 0
+
+run 2  tree 27e181d (final HEAD, adds the MULTI_SZ coverage test)
+       1168 passed, 74 subtests passed in 855.86s (0:14:15)   exit 0
+
+BOTH GREEN. Zero failures, zero errors.
+
+Bearing on the Stage-1 debt: the Stage-1 evidence recorded 229 passed /
+1 failed and REFUSED to call it green, classifying the failure as an
+environmental/pre-existing candidate (a git subprocess exit 128 under
+concurrent load in test_evidence_binding, which passed in isolation).
+Two consecutive full runs at 1167/1168 tests with that same module green
+CORROBORATE that classification. They do not PROVE the flaky is gone -
+an intermittent failure is not disproved by two clean runs - so the
+adjudication stays open, now with positive evidence rather than none.

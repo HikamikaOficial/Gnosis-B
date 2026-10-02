@@ -1,0 +1,66 @@
+........................................................................ [  7%]
+........................................................................ [ 14%]
+........................................................................ [ 21%]
+......................................................................................................................................... [ 35%]
+........................................................................ [ 42%]
+........................................................................ [ 50%]
+............................................. [ 54%]
+............................................................ [ 60%]
+........................................................................ [ 68%]
+........................................................................ [ 75%]
+........................................................................ [ 82%]
+............................................................ [ 88%]
+.....................................................F......... [ 94%]
+..................................................                       [100%]
+================================== FAILURES ===================================
+_ TestACrashedWorkerLosesNothing.test_recovery_never_takes_a_brief_from_a_live_worker _
+
+self = <tests.test_work_queue.TestACrashedWorkerLosesNothing testMethod=test_recovery_never_takes_a_brief_from_a_live_worker>
+
+    def test_recovery_never_takes_a_brief_from_a_live_worker(self):
+        queue = self._short_lived()
+        queue.enqueue(_brief("BRIEF-1"))
+        live = queue.claim("worker-a")
+    
+        self.assertEqual(queue.recover(), [])
+        self.assertEqual(queue.running_ids(), ["BRIEF-1"])
+        # ...and the live worker can still finish.
+>       queue.complete(live, outcome="COMPLETED")
+
+tests\test_work_queue.py:177: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\gnosis\director\work_queue.py:343: in complete
+    self.authority.resolve(work.grant, outcome=outcome)
+src\gnosis\kernel\claims.py:388: in resolve
+    self.assert_current(grant)
+src\gnosis\kernel\claims.py:373: in assert_current
+    self.leases.assert_current(task_resource(grant.task_id), grant.lease.lease_id)
+src\gnosis\kernel\lease.py:195: in assert_current
+    return self._current_locked(state, resource, lease_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <gnosis.kernel.lease.LeaseStore object at 0x000001F6EF8FB320>
+state = {'last_tokens': {'task/BRIEF-1': 1}, 'leases': {'task/BRIEF-1': {'expires_at': 1787599906.3499265, 'fencing_token': 1, 'holder': 'worker-a', 'issued_at': 1787599906.2999265, ...}}, 'schema_version': 1}
+resource = 'task/BRIEF-1', lease_id = 'LEASE-07124b5eafb9'
+
+    def _current_locked(self, state: dict[str, Any], resource: str, lease_id: str) -> Lease:
+        raw = state["leases"].get(resource)
+        if raw is None:
+            raise StaleLeaseError(f"No live lease for resource '{resource}'")
+        lease = Lease.from_dict(raw)
+        if lease.lease_id != lease_id:
+            raise StaleLeaseError(
+                f"Lease {lease_id} for resource '{resource}' was superseded "
+                f"(current: {lease.lease_id}, token {lease.fencing_token})"
+            )
+        if lease.expires_at <= float(self._clock()):
+>           raise StaleLeaseError(
+                f"Lease {lease_id} for resource '{resource}' has expired"
+            )
+E           gnosis.kernel.lease.StaleLeaseError: Lease LEASE-07124b5eafb9 for resource 'task/BRIEF-1' has expired
+
+src\gnosis\kernel\lease.py:222: StaleLeaseError
+=========================== short test summary info ===========================
+FAILED tests/test_work_queue.py::TestACrashedWorkerLosesNothing::test_recovery_never_takes_a_brief_from_a_live_worker
+1 failed, 990 passed, 67 subtests passed in 942.14s (0:15:42)

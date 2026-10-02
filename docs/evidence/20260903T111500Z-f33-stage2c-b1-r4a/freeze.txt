@@ -1,0 +1,8 @@
+F-17 core: 0
+worker_launcher.py (F-17, MUST be 0): 0
+R3D: 0
+Publisher/pipe: 0
+pipeline.py: 0
+R4A change this slice (5c3fcc4..working src/gnosis): src/gnosis/director/cli.py src/gnosis/director/composition.py 
+composition.py additive (removed lines): 2
+cli.py release_id reader touched? (diff lines): 0

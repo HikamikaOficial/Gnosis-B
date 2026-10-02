@@ -1,0 +1,255 @@
+F-17 third review, BLOCKER A — OS-real audit of git resolution surfaces
+==========================================================================
+git 2.55.0.windows.4. No production code modified; every mutation happens in
+throwaway temp repos, never the Gnosis repo. It shows that surfaces which
+were COUNTED-not-judged can redirect object/ref/ancestry resolution and thus
+corrupt the tree-identity binding (content_fingerprint reads git diff HEAD /
+git status), and that the repair refuses (git_resolution_faithful ->
+MACHINERY_REDIRECTED, exit 11) or judges (_is_git_resolution_redirect ->
+MACHINERY_MUTATED, exit 9) each of them.
+
+--- output ------------------------------------------------------------
+F-17 BLOCKER A — git resolution surfaces, OS-real
+git version 2.55.0.windows.4
+Real Gnosis repo resolution state (read-only): replace=[] shallow=false
+
+======================================================================
+1. refs/replace substitutes an object without changing its bytes
+======================================================================
+HEAD detached at c1; working file = REAL; git diff HEAD before replace:
+  [''] status=[]
+after `git replace c1 c2` (loose ref refs/replace/5efdf5f6):
+  cat-file HEAD:file.txt = FAKE  (c1's object bytes on disk unchanged)
+  rev-parse HEAD = 5efdf5f649ae263de744519fe5c80b9c5625e2fb (ref value, NOT substituted)
+  git diff HEAD now non-empty; git status = 'M  file.txt'
+  content_fingerprint: head_sha unchanged=True  patch CHANGED=True  status CHANGED=True
+  GIT_NO_REPLACE_OBJECTS=1 reverses it: cat-file = REAL
+  => the binding reads git diff HEAD; a replace ref fools it. FIX:
+     git_resolution_faithful(repo) = (False, 'a replace ref is active (refs/replace/5efdf5f649ae263de744519fe5c80b9c5625e2fb): git substitutes one object for another during resolution, so the tree-identity binding cannot be trusted')
+
+======================================================================
+2. packed-refs is NOT inert: it carries the replace ref
+======================================================================
+after pack-refs --all, loose refs/replace gone; packed-refs carries it:
+  cat-file HEAD:file.txt = FAKE
+  git_resolution_faithful = (False, 'a replace ref is active (refs/replace/441ed8e755348a4bbb8ae16113a11bd641c2353f): git substitutes one object for another during resolution, so the tree-identity binding cannot be trusted')
+RAW append to .git/packed-refs (no `git replace` command):
+  for-each-ref sees it: warning: ignoring ref with broken name refs/replace/46ff9b7619d0d290d15910ed288dff44349e8588?
+  cat-file HEAD:file.txt = fatal: path 'file.txt' exists on disk, but not in 'HEAD'  (object resolution redirected by a raw file edit)
+  git_resolution_faithful = (False, 'a replace ref is active (warning: ignoring ref with broken name refs/replace/46ff9b7619d0d290d15910ed288dff44349e8588?): git substitutes one object for another during resolution, so the tree-identity binding cannot be trusted')
+
+======================================================================
+3. alternates / grafts / shallow
+======================================================================
+alternates -> external object store: git_resolution_faithful = (False, 'objects/info/alternates redirects object lookup to an external object store; a faithful capture requires unredirected resolution')
+grafts (honoured by git 2.55.0.windows.4): rev-list count=1 ; git_resolution_faithful = (False, 'info/grafts rewrites commit ancestry (deprecated but still honoured by this git); a faithful capture requires unredirected resolution')
+shallow: is-shallow=true ; git_resolution_faithful = (False, 'the repository is shallow: its ancestry is truncated, so it is not a faithful full repository to capture')
+clean again: git_resolution_faithful = (True, None)
+
+======================================================================
+4. config.worktree is an execution surface when extensions.worktreeConfig is on
+======================================================================
+without extensions.worktreeConfig: git config gnosisprobe.k = ''
+with it on: git config core.fsmonitor = '/tmp/evil'  (an executable git would run)
+
+======================================================================
+5. the interval classifier judges every redirect surface
+======================================================================
+  _is_git_resolution_redirect(.git/refs/replace/x               ) = True
+  _is_git_resolution_redirect(.git/packed-refs                  ) = True
+  _is_git_resolution_redirect(.git/objects/info/alternates      ) = True
+  _is_git_resolution_redirect(.git/objects/info/http-alternates ) = True
+  _is_git_resolution_redirect(.git/info/grafts                  ) = True
+  _is_git_resolution_redirect(.git/shallow                      ) = True
+  _is_git_resolution_redirect(.git/config.worktree              ) = True
+  _is_git_resolution_redirect(.git/commondir                    ) = True
+  _is_git_resolution_redirect(.git/index                        ) = False  (counted, ordinary bookkeeping)
+  _is_git_resolution_redirect(.git/HEAD                         ) = False  (counted, ordinary bookkeeping)
+  _is_git_resolution_redirect(.git/refs/heads/main              ) = False  (counted, ordinary bookkeeping)
+  _is_git_resolution_redirect(.git/objects/ab/cd                ) = False  (counted, ordinary bookkeeping)
+
+======================================================================
+6. end-to-end: a pre-existing replace ref fails closed; ABA is judged; clean stays CLEAN
+======================================================================
+  pre-existing replace: verdict=MACHINERY_REDIRECTED exit=11 (want 11) checks_ran=0
+  ABA replace in interval: verdict=MACHINERY_MUTATED exit=9 (want 9) violations=['added: .git/refs/replace/ae6e954da8358c752801673bb2d78608c01ee9d1.lock']
+  clean repo: verdict=CLEAN evidence_valid=True (no false positive)
+
+DONE
+
+--- source ------------------------------------------------------------
+
+"""F-17 third review, BLOCKER A — OS-real audit of the git resolution surfaces.
+
+No production code modified. Read-only against the product (imports it);
+every mutation happens in throwaway temp repos, never the Gnosis repo.
+
+It demonstrates, on the real git, that surfaces which were COUNTED-not-judged
+can redirect object/ref/ancestry resolution and thereby corrupt the
+tree-identity binding, and that the repair (git_resolution_faithful +
+_is_git_resolution_redirect) refuses / judges each of them.
+"""
+from __future__ import annotations
+
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+REPO = Path(r"C:\Users\nicol\Desktop\Claude Code Proyectos\GnosisAgentAi")
+sys.path.insert(0, str(REPO / "src"))
+
+from gnosis.kernel.evidence_capture import (  # noqa: E402
+    EXIT_MACHINERY_MUTATED,
+    EXIT_MACHINERY_REDIRECTED,
+    ObservationVerdict,
+    _is_git_resolution_redirect,
+    run_capture,
+)
+from gnosis.kernel.git_evidence import (  # noqa: E402
+    content_fingerprint,
+    git_resolution_faithful,
+)
+
+
+def g(cwd: Path, *a: str) -> str:
+    r = subprocess.run(["git", *a], cwd=str(cwd), capture_output=True, text=True)
+    return (r.stdout or r.stderr).strip()
+
+
+def mkrepo(root: Path, name: str = "repo") -> Path:
+    r = root / name
+    r.mkdir(parents=True)
+    g(r, "init", "-q"); g(r, "config", "user.email", "a@b.c"); g(r, "config", "user.name", "t")
+    g(r, "config", "core.autocrlf", "false"); g(r, "config", "commit.gpgsign", "false")
+    (r / "file.txt").write_text("REAL\n"); g(r, "add", "file.txt"); g(r, "commit", "-qm", "c1")
+    (r / "file.txt").write_text("FAKE\n"); g(r, "add", "file.txt"); g(r, "commit", "-qm", "c2")
+    return r
+
+
+def h(title: str) -> None:
+    print("\n" + "=" * 70 + f"\n{title}\n" + "=" * 70)
+
+
+print("F-17 BLOCKER A — git resolution surfaces, OS-real")
+print(g(REPO, "--version") if False else subprocess.run(
+    ["git", "--version"], capture_output=True, text=True).stdout.strip())
+print("Real Gnosis repo resolution state (read-only): replace=[%s] shallow=%s" % (
+    g(REPO, "for-each-ref", "refs/replace"),
+    subprocess.run(["git", "rev-parse", "--is-shallow-repository"],
+                   cwd=str(REPO), capture_output=True, text=True).stdout.strip()))
+
+base = Path(tempfile.mkdtemp(prefix="f17A_audit_"))
+try:
+    h("1. refs/replace substitutes an object without changing its bytes")
+    r = mkrepo(base, "r1")
+    c1 = g(r, "rev-parse", "HEAD~1"); c2 = g(r, "rev-parse", "HEAD")
+    g(r, "checkout", "-q", c1)
+    print("HEAD detached at c1; working file = REAL; git diff HEAD before replace:")
+    print("  [%r] status=[%s]" % (g(r, "diff", "HEAD"), g(r, "status", "--porcelain")))
+    fp0 = content_fingerprint(r)
+    g(r, "replace", c1, c2)
+    fp1 = content_fingerprint(r)
+    print("after `git replace c1 c2` (loose ref refs/replace/%s):" % c1[:8])
+    print("  cat-file HEAD:file.txt = %s  (c1's object bytes on disk unchanged)"
+          % g(r, "cat-file", "-p", "HEAD:file.txt"))
+    print("  rev-parse HEAD = %s (ref value, NOT substituted)" % g(r, "rev-parse", "HEAD"))
+    print("  git diff HEAD now non-empty; git status = %r" % g(r, "status", "--porcelain"))
+    print("  content_fingerprint: head_sha unchanged=%s  patch CHANGED=%s  status CHANGED=%s"
+          % (fp0["head_sha"] == fp1["head_sha"],
+             fp0["patch_sha256"] != fp1["patch_sha256"],
+             fp0["status_sha256"] != fp1["status_sha256"]))
+    print("  GIT_NO_REPLACE_OBJECTS=1 reverses it: cat-file = %s"
+          % subprocess.run(["git", "cat-file", "-p", "HEAD:file.txt"], cwd=str(r),
+                           capture_output=True, text=True,
+                           env={"GIT_NO_REPLACE_OBJECTS": "1", "PATH": __import__("os").environ["PATH"]}).stdout.strip())
+    print("  => the binding reads git diff HEAD; a replace ref fools it. FIX:")
+    print("     git_resolution_faithful(repo) = %r" % (git_resolution_faithful(r),))
+
+    h("2. packed-refs is NOT inert: it carries the replace ref")
+    r = mkrepo(base, "r2")
+    c1 = g(r, "rev-parse", "HEAD~1"); c2 = g(r, "rev-parse", "HEAD")
+    g(r, "checkout", "-q", c1); g(r, "replace", c1, c2); g(r, "pack-refs", "--all")
+    print("after pack-refs --all, loose refs/replace gone; packed-refs carries it:")
+    print("  cat-file HEAD:file.txt = %s" % g(r, "cat-file", "-p", "HEAD:file.txt"))
+    print("  git_resolution_faithful = %r" % (git_resolution_faithful(r),))
+    # raw packed-refs edit, no `git replace`
+    r = mkrepo(base, "r2b")
+    c1 = g(r, "rev-parse", "HEAD~1"); c2 = g(r, "rev-parse", "HEAD"); g(r, "checkout", "-q", c1)
+    (r / ".git" / "packed-refs").write_text(
+        "# pack-refs with: peeled fully-peeled sorted \n%s refs/replace/%s\n" % (c2, c1))
+    print("RAW append to .git/packed-refs (no `git replace` command):")
+    print("  for-each-ref sees it: %s" % g(r, "for-each-ref", "refs/replace"))
+    print("  cat-file HEAD:file.txt = %s  (object resolution redirected by a raw file edit)"
+          % g(r, "cat-file", "-p", "HEAD:file.txt"))
+    print("  git_resolution_faithful = %r" % (git_resolution_faithful(r),))
+
+    h("3. alternates / grafts / shallow")
+    donor = mkrepo(base, "donor")
+    (donor / "d.txt").write_text("DONOR\n"); g(donor, "add", "d.txt"); g(donor, "commit", "-qm", "d")
+    r = mkrepo(base, "r3")
+    (r / ".git" / "objects" / "info").mkdir(parents=True, exist_ok=True)
+    (r / ".git" / "objects" / "info" / "alternates").write_text(str(donor / ".git" / "objects") + "\n")
+    print("alternates -> external object store: git_resolution_faithful = %r"
+          % (git_resolution_faithful(r),))
+    (r / ".git" / "objects" / "info" / "alternates").unlink()
+    c2 = g(r, "rev-parse", "HEAD")
+    (r / ".git" / "info").mkdir(parents=True, exist_ok=True)
+    (r / ".git" / "info" / "grafts").write_text(c2 + "\n")
+    print("grafts (honoured by git %s): rev-list count=%s ; git_resolution_faithful = %r"
+          % (subprocess.run(["git", "--version"], capture_output=True, text=True).stdout.strip().split()[-1],
+             g(r, "rev-list", "--count", "HEAD"), git_resolution_faithful(r)))
+    (r / ".git" / "info" / "grafts").unlink()
+    (r / ".git" / "shallow").write_text(c2 + "\n")
+    print("shallow: is-shallow=%s ; git_resolution_faithful = %r"
+          % (g(r, "rev-parse", "--is-shallow-repository"), git_resolution_faithful(r)))
+    (r / ".git" / "shallow").unlink()
+    print("clean again: git_resolution_faithful = %r" % (git_resolution_faithful(r),))
+
+    h("4. config.worktree is an execution surface when extensions.worktreeConfig is on")
+    r = mkrepo(base, "r4")
+    (r / ".git" / "config.worktree").write_text("[gnosisprobe]\n\tk = one\n")
+    print("without extensions.worktreeConfig: git config gnosisprobe.k = %r"
+          % g(r, "config", "gnosisprobe.k"))
+    g(r, "config", "extensions.worktreeConfig", "true")
+    (r / ".git" / "config.worktree").write_text("[core]\n\tfsmonitor = /tmp/evil\n")
+    print("with it on: git config core.fsmonitor = %r  (an executable git would run)"
+          % g(r, "config", "core.fsmonitor"))
+
+    h("5. the interval classifier judges every redirect surface")
+    for p in (".git/refs/replace/x", ".git/packed-refs", ".git/objects/info/alternates",
+              ".git/objects/info/http-alternates", ".git/info/grafts", ".git/shallow",
+              ".git/config.worktree", ".git/commondir"):
+        print("  _is_git_resolution_redirect(%-34s) = %s" % (p, _is_git_resolution_redirect(p)))
+    for p in (".git/index", ".git/HEAD", ".git/refs/heads/main", ".git/objects/ab/cd"):
+        print("  _is_git_resolution_redirect(%-34s) = %s  (counted, ordinary bookkeeping)"
+              % (p, _is_git_resolution_redirect(p)))
+
+    if sys.platform == "win32":
+        h("6. end-to-end: a pre-existing replace ref fails closed; ABA is judged; clean stays CLEAN")
+        r = mkrepo(base, "e1")
+        c1 = g(r, "rev-parse", "HEAD~1"); c2 = g(r, "rev-parse", "HEAD")
+        g(r, "checkout", "-q", c1); g(r, "replace", c1, c2)
+        cap = run_capture(r, [__import__("gnosis.kernel.evidence_capture", fromlist=["CheckCommand"]).CheckCommand("noop", (sys.executable, "-c", "pass"))], base / "s1")
+        print("  pre-existing replace: verdict=%s exit=%d (want %d) checks_ran=%d"
+              % (cap.boundary.verdict.value, cap.exit_code, EXIT_MACHINERY_REDIRECTED, len(cap.checks)))
+        r = mkrepo(base, "e2")
+        c1 = g(r, "rev-parse", "HEAD~1"); c2 = g(r, "rev-parse", "HEAD")
+        CC = __import__("gnosis.kernel.evidence_capture", fromlist=["CheckCommand"]).CheckCommand
+        aba = CC("aba", (sys.executable, "-c",
+                 "import subprocess;"
+                 f"subprocess.run(['git','replace','{c1}','{c2}'],check=True);"
+                 f"subprocess.run(['git','replace','-d','{c1}'],check=True)"))
+        cap = run_capture(r, [aba], base / "s2")
+        print("  ABA replace in interval: verdict=%s exit=%d (want %d) violations=%s"
+              % (cap.boundary.verdict.value, cap.exit_code, EXIT_MACHINERY_MUTATED,
+                 [v for v in cap.boundary.violations if "replace" in v][:1]))
+        r = mkrepo(base, "e3")
+        cap = run_capture(r, [CC("noop", (sys.executable, "-c", "pass"))], base / "s3")
+        print("  clean repo: verdict=%s evidence_valid=%s (no false positive)"
+              % (cap.boundary.verdict.value, cap.evidence_valid))
+finally:
+    import shutil
+    shutil.rmtree(base, ignore_errors=True)
+
+print("\nDONE")

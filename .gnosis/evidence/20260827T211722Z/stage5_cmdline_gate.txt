@@ -1,0 +1,55 @@
+F-17 STAGE 5 — GATE 1: COMMAND-LINE COMPATIBILITY
+==============================================================================
+CreateProcessWithLogonW documented lpCommandLine limit: 1024 characters (lpCommandLine, MSDN).
+Measured against the REAL argv that ClaudeCodeCLIRunner.build_argv produces,
+rendered with the same Windows quoting Popen uses (subprocess.list2cmdline).
+
+WHAT TRAVELS WHERE, read off src/gnosis/runner/claude_cli_runner.py:
+  executable   argv[0], the `binary` field (default the bare name 'claude')
+  PROMPT       argv[2], immediately after `-p`   <-- THE WHOLE PROMPT
+  flags        --output-format / --session-id / --permission-mode / --model
+  mcp          --mcp-config <path>... [--strict-mcp-config]
+  extra_args   appended verbatim
+  stdin        NOT SET. Inherited from the Director process.
+  stdout       a FILE handle opened by the runner ('wb'), not a pipe
+  stderr       a FILE handle opened by the runner ('wb'), not a pipe
+  env          an explicit dict when a credential is bound, else INHERITED
+  cwd          explicit (the worktree / exec_root)
+  timeout      cooperative poll loop in the parent; terminate then kill
+  cancel       CancellationToken polled in the same loop
+
+FLOOR — the smallest command line the runner can ever emit:
+  empty prompt (argv scaffolding only)               prompt=      0  cmdline=     56  OK
+  one-word prompt                                    prompt=      2  cmdline=     56  OK
+
+REAL PROMPTS BUILT BY PRODUCTION CODE:
+  (REVIEW_SCHEMA_INSTRUCTIONS alone is 734 chars)
+  build_review_prompt, minimal objective             prompt=   1023  cmdline=   1127  EXCEEDS by 103
+  build_review_prompt, focus + verification          prompt=   1135  cmdline=   1239  EXCEEDS by 215
+
+ENGINE effective_prompt = code-intelligence context + task prompt
+  (engine.py: max_context_chars DEFAULT = 12000, and the context block is
+   PREPENDED to the caller's prompt, which is itself unbounded)
+  default 12000-char context + a one-line task       prompt=  12072  cmdline=  12128  EXCEEDS by 11104
+  no context, a modest 2 kB task brief               prompt=   2000  cmdline=   2054  EXCEEDS by 1030
+
+WITH MCP CONFIG (the M2.0 path):
+  review prompt + --mcp-config + --strict            prompt=   1023  cmdline=   1231  EXCEEDS by 207
+
+BOUNDARY PROBE — the largest prompt that would still fit in 1024:
+  a prompt of at most 970 characters fits; 971 does not.
+  the runner's own scaffolding already costs 56 characters.
+
+==============================================================================
+VERDICT
+==============================================================================
+  worst measured command line : 12128 characters
+  CreateProcessWithLogonW cap : 1024 characters
+
+  CASE B. The full prompt travels in argv, not on a separate channel.
+  CreateProcessWithLogonW 1024-char constraint vs the REAL
+  ClaudeCliRunner protocol:  INCOMPATIBLE.
+
+  Not marginally: the smallest REAL prompt production builds
+  (1006 chars) already exceeds the whole limit, and the engine's
+  default path is an order of magnitude over it. No tuning closes this.

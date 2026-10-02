@@ -1,0 +1,58 @@
+F-17 OS AUTHORITY BOUNDARY — OS-real (git 2.55, Windows 11, elevated)
+==========================================================================
+Windows MIC: Director/publisher HIGH, AnchorStore HIGH NO_WRITE_UP, worker
+MEDIUM (token IL lowered + CreateProcessWithTokenW). Productionised in
+src/gnosis/kernel/authority.py; 18 directed tests; 8 mutants (AM1..AM8) 0
+survived.
+
+--- (1) authority attack matrix (worker Medium vs anchor High) ------------
+PARENT (publisher/Director) integrity: High
+label AnchorStore High: OK
+launching worker at MEDIUM integrity...
+worker exit code: 0
+
+=== WORKER (Medium) authority attack matrix ===
+child_integrity: Medium
+OK worker_write_worktree: ALLOWED  [expect ALLOWED]
+OK worker_write_anchor: DENIED (PermissionError: [Errno 13] Permission denied: 'C:\\Users\\nicol\\AppData\\Local\\Temp\)  [expect DENIED]
+OK worker_create_anchor: DENIED (PermissionError: [Errno 13] Permission denied: 'C:\\Users\\nicol\\AppData\\Local\\Temp\)  [expect DENIED]
+OK worker_delete_anchor: DENIED (PermissionError: [WinError 5] Acceso denegado: 'C:\\Users\\nicol\\AppData\\Local\\Temp\)  [expect DENIED]
+OK worker_rename_anchor: DENIED (PermissionError: [WinError 5] Acceso denegado: 'C:\\Users\\nicol\\AppData\\Local\\Temp\)  [expect DENIED]
+OK worker_change_dacl: DENIED (PermissionError: C:\Users\nicol\AppData\Local\Temp\claude\C--Users-nicol-Desktop-Claude)  [expect DENIED]
+OK worker_lower_label: DENIED (PermissionError: C:\Users\nicol\AppData\Local\Temp\claude\C--Users-nicol-Desktop-Claude)  [expect DENIED]
+OK worker_take_ownership: DENIED (PermissionError: C:\Users\nicol\AppData\Local\Temp\claude\C--Users-nicol-Desktop-Claude)  [expect DENIED]
+OK worker_shell_child_write_anchor: DENIED (PermissionError: cmd redirect to anchor produced no file (denied))  [expect DENIED]
+OK worker_python_child_write_anchor: DENIED (PermissionError: python grandchild denied: DENIED PermissionError)  [expect DENIED]
+OK worker_raise_own_integrity: DENIED (OSError: SetTokenInformation(IL) (winerr 1314))  [expect DENIED]
+
+=== PUBLISHER (High) writes the anchor -> expect ALLOWED ===
+OK  publisher_write_anchor: ALLOWED
+
+anchor contents after the run: ['published_by_director.txt', 'seed.txt']
+(expected: seed.txt + published_by_director.txt only; no worker files)
+
+--- (2) BLOCKER A privileged-handle inheritance + BLOCKER B code integrity -
+A: a High parent opened the anchor WRITE with an INHERITABLE handle; the
+Medium worker launched via CreateProcessWithTokenW did NOT receive it
+(WriteFile err=6 INVALID_HANDLE; held.txt stayed empty) -> no handle
+inheritance. B: High-labelled trusted code is READ/imported by the Medium
+worker but NOT writable (overwrite DENIED). FINDING: the product's own
+src/gnosis/kernel/authority.py is CURRENTLY Medium-writable by a worker, so
+the closure wiring MUST label the trusted-code root High before the boundary
+is complete.
+
+PARENT integrity: High
+parent opened held.txt WRITE, inheritable handle = 644
+worker (Medium) exit: 0
+
+=== worker results ===
+A_write_via_inherited_handle=FAILED err=6
+B_read_trusted=ALLOWED
+B_overwrite_trusted=DENIED:PermissionError
+B_import_marker=ORIGINAL
+
+held.txt content after worker (must be empty — worker could not write): ''
+trusted_mod.py after worker (must still be ORIGINAL): 'MARKER="ORIGINAL"'
+
+=== BLOCKER B — is the ACTUAL src/ trusted code worker-writable now? ===
+Medium worker vs the REAL src/gnosis/kernel/authority.py: WRITABLE

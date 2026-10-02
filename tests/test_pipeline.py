@@ -228,15 +228,17 @@ class TestTheWholePath(_PipelineTestCase):
         def fix(cwd):
             (cwd / "code.py").write_text("x = 2  # fixed\n", encoding="utf-8")
 
-        agent = _Agent(review_answers=(_FAIL_REVIEW, _PASS_REVIEW), on_fix=fix)
-        outcome = self._pipeline(agent).run_brief(self._brief())
-        self.assertEqual(agent.fixes, 1)
+        agent = _Agent(review_answers=(_FAIL_REVIEW, _PASS_REVIEW))
+        implementer = _Agent(on_fix=fix)
+        outcome = self._pipeline(agent, implementer=implementer).run_brief(self._brief())
+        self.assertEqual(agent.fixes, 0)
+        self.assertEqual(implementer.fixes, 1)
         self.assertEqual(outcome.status, ReportStatus.COMPLETED)
 
     def test_a_cannot_fix_escalates_and_lands_in_escalations(self):
-        agent = _Agent(review_answers=(_FAIL_REVIEW,),
-                       fix_answer='{"cannot_fix": true, "notes": "needs a human"}')
-        pipeline = self._pipeline(agent)
+        agent = _Agent(review_answers=(_FAIL_REVIEW,))
+        implementer = _Agent(fix_answer='{"cannot_fix": true, "notes": "needs a human"}')
+        pipeline = self._pipeline(agent, implementer=implementer)
         outcome = pipeline.run_brief(self._brief())
         self.assertEqual(outcome.status, ReportStatus.ESCALATION_REQUIRED)
         self.assertTrue(
@@ -570,12 +572,16 @@ class TestFailuresNeverStrandABrief(_PipelineTestCase):
                     raise RuntimeError("the fixer fell over")
                 return super().run(prompt, cwd, stdout_path, stderr_path, timeout_s, **kw)
 
-        pipeline = self._pipeline(_ExplodingFixer(review_answers=(_FAIL_REVIEW,)))
+        pipeline = self._pipeline(_Agent(review_answers=(_FAIL_REVIEW,)),
+                                  implementer=_ExplodingFixer())
         outcome = pipeline.run_brief(self._brief())
 
         self.assertEqual(outcome.status, ReportStatus.BLOCKED)
         record = pipeline.records.get("BRIEF-1")
         self.assertNotEqual(record.state, BriefRecordState.IN_PROGRESS.value)
+        self.assertEqual(len(record.run_ids), 2)  # original + interrupted correction
+        failed = self.run_store.paths_for(record.run_ids[-1]).root / "attempt.json"
+        self.assertEqual(json.loads(failed.read_text())["error_type"], "RuntimeError")
         self.assertTrue(
             (pipeline.inbox.layout.outbox / f"{outcome.task_id}.json").exists())
         self.assertTrue(any("the fixer fell over" in p
