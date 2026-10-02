@@ -27,6 +27,35 @@ def _pass() -> VerificationResult:
     return VerificationResult("check", True, 0, 0.1, "", "")
 
 
+def test_mixed_ownership_subject_and_copy_keep_config_isolation(tmp_path: Path, monkeypatch) -> None:
+    from gnosis.kernel import subject
+
+    repo = tf.git_repo(tmp_path / "repo")
+    original = subprocess.run
+    forced = dict(os.environ, GIT_TEST_ASSUME_DIFFERENT_OWNER="1",
+                  GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    baseline = original(["git", "rev-parse", "HEAD"], cwd=repo, env=forced,
+                        capture_output=True, text=True)
+    assert baseline.returncode != 0 and "dubious ownership" in baseline.stderr
+    calls = []
+
+    def different_owner(argv, **kwargs):
+        env = kwargs["env"]
+        assert env["GIT_CONFIG_GLOBAL"] == os.devnull
+        assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+        assert "GIT_DIR" not in env
+        assert "safe.directory=*" not in argv
+        calls.append(argv)
+        return original(argv, **{**kwargs, "env": {**env, "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1"}})
+
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "wrong"))
+    monkeypatch.setattr(subject.subprocess, "run", different_owner)
+    expected = observe_subject(repo)
+    copied = copy_subject(repo, tmp_path / "copy", expected)
+    assert observe_subject(copied) == expected
+    assert calls
+
+
 def test_subject_binds_binary_ignored_and_untracked_bytes(tmp_path: Path) -> None:
     repo = tf.git_repo(tmp_path / "repo")
     (repo / "binary.bin").write_bytes(b"\x00one")

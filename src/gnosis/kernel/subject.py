@@ -45,14 +45,23 @@ class SubjectIdentity:
         return hash_canonical(self.to_dict())
 
 
-def _git(root: Path, *args: str) -> str:
+def _git(root: Path, *args: str, trusted_repository: Path | None = None) -> str:
     # No inherited GIT_DIR/worktree/config/transport override may select another
     # repository. Local repository config remains observable by F-17 later.
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
     env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
                GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
+    # Subject roots cross the Director/Worker ownership boundary deliberately.
+    # Keep global/system configuration excluded; authorize only this operation's
+    # explicit repository, never an inherited safe.directory or wildcard.
+    assigned = (trusted_repository if trusted_repository is not None else root).absolute()
+    for parent in (assigned, *assigned.parents):
+        if not stat.S_ISDIR(_plain(parent).st_mode):
+            raise SubjectUnavailable("Git subject root is not a plain directory")
+    command = ["git", "-c", "safe.directory=", "-c",
+               "safe.directory=" + assigned.as_posix(), *args]
     try:
-        result = subprocess.run(["git", *args], cwd=root, env=env,
+        result = subprocess.run(command, cwd=root, env=env,
                                 capture_output=True, text=True, encoding="utf-8",
                                 errors="strict", timeout=120, check=False)
     except (OSError, subprocess.TimeoutExpired, UnicodeError) as exc:
@@ -157,7 +166,7 @@ def copy_subject(source: Path, destination: Path, expected: SubjectIdentity) -> 
         raise SubjectUnavailable("reviewed subject changed before proof copy")
     destination.parent.mkdir(parents=True, exist_ok=True)
     _git(destination.parent, "clone", "--no-checkout", "--no-local", "--no-hardlinks",
-         "--template=", "--", str(source), str(destination))
+         "--template=", "--", str(source), str(destination), trusted_repository=source)
     _git(destination, "update-ref", "HEAD", expected.head_sha)
     _git(destination, "read-tree", expected.head_sha)
     try:
